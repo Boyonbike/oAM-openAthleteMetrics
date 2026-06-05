@@ -1,10 +1,12 @@
 package com.athletedata.app.data.repository
 
+import androidx.work.WorkManager
 import com.athletedata.app.data.db.SleepSessionDao
 import com.athletedata.app.data.db.toEntity
 import com.athletedata.app.data.db.toModel
 import com.athletedata.app.data.model.DataSource
 import com.athletedata.app.data.model.SleepSession
+import com.athletedata.app.worker.enqueueSummaryWorker
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import java.time.LocalDate
@@ -14,15 +16,18 @@ import javax.inject.Singleton
 @Singleton
 class RoomSleepRepository @Inject constructor(
     private val dao: SleepSessionDao,
+    private val workManager: WorkManager,
 ) : SleepRepository {
 
     /**
      * Inserts or replaces the session. Source must be set by the caller.
      * Called by the device driver (source=DEVICE) and the seeder (source=SEEDER).
-     * TODO: trigger DailySummaryWorker for session.date after the worker is created.
+     * Triggers DailySummaryWorker for the session's date so sleep minutes are
+     * reflected in the daily summary immediately.
      */
     override suspend fun insert(session: SleepSession) {
         dao.insert(session.toEntity())
+        enqueueSummaryWorker(session.date, workManager)
     }
 
     /**
@@ -49,6 +54,7 @@ class RoomSleepRepository @Inject constructor(
     /**
      * Deletes all sessions with the given [source].
      * Called by the debug seeder cleanup with source=SEEDER.
+     * Does not trigger the worker — seeder cleanup handles summary deletion separately.
      */
     override suspend fun deleteBySource(source: DataSource) {
         dao.deleteBySource(source)

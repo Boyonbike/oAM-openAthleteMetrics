@@ -1,11 +1,13 @@
 package com.athletedata.app.data.repository
 
+import androidx.work.WorkManager
 import com.athletedata.app.data.db.MetricReadingDao
 import com.athletedata.app.data.db.toEntity
 import com.athletedata.app.data.db.toModel
 import com.athletedata.app.data.model.DataSource
 import com.athletedata.app.data.model.MetricReading
 import com.athletedata.app.data.model.MetricType
+import com.athletedata.app.worker.enqueueSummaryWorker
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import java.time.Instant
@@ -17,36 +19,43 @@ import javax.inject.Singleton
 @Singleton
 class RoomMetricRepository @Inject constructor(
     private val dao: MetricReadingDao,
+    private val workManager: WorkManager,
 ) : MetricRepository {
 
     /**
      * Inserts a single reading as-is. Source is the caller's responsibility.
      * Called by the device driver (source=DEVICE) and the seeder (source=SEEDER).
-     * TODO: trigger DailySummaryWorker for reading.recordedAt.date after the worker is created.
+     * Triggers DailySummaryWorker for the reading's date.
      */
     override suspend fun insert(reading: MetricReading) {
         dao.insert(reading.toEntity())
+        enqueueSummaryWorker(reading.recordedAt.toLocalDate(), workManager)
     }
 
     /**
      * Batch insert — preferred for device sync or seeder writes to avoid N transactions.
-     * TODO: trigger DailySummaryWorker for each distinct date in [readings] after the worker is created.
+     * Triggers DailySummaryWorker for each distinct date present in [readings].
      */
     override suspend fun insertAll(readings: List<MetricReading>) {
         dao.insertAll(readings.map { it.toEntity() })
+        readings
+            .map { it.recordedAt.toLocalDate() }
+            .distinct()
+            .forEach { date -> enqueueSummaryWorker(date, workManager) }
     }
 
     /**
      * Inserts a reading entered by the user, forcing source=MANUAL and createdAt=now.
      * Called by manual-entry screens that don't set these fields themselves.
+     * Triggers DailySummaryWorker for the reading's date.
      */
     override suspend fun insertManual(reading: MetricReading) {
-        dao.insert(
-            reading.copy(
-                source = DataSource.MANUAL,
-                createdAt = Instant.now(),
-            ).toEntity()
-        )
+        val entity = reading.copy(
+            source = DataSource.MANUAL,
+            createdAt = Instant.now(),
+        ).toEntity()
+        dao.insert(entity)
+        enqueueSummaryWorker(reading.recordedAt.toLocalDate(), workManager)
     }
 
     /**
@@ -85,12 +94,17 @@ class RoomMetricRepository @Inject constructor(
     /**
      * Deletes all readings with the given [source].
      * Called by the debug seeder cleanup with source=SEEDER.
+     * Does not trigger the worker — seeder cleanup handles summary deletion separately.
      */
     override suspend fun deleteBySource(source: DataSource) {
         dao.deleteBySource(source)
     }
 }
 
-/** Converts a [LocalDate] to the UTC epoch-ms value at the start of that day. */
+/** UTC epoch-ms at the start of this [LocalDate]. */
 private fun LocalDate.toUtcStartMs(): Long =
     atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+
+/** Converts an [Instant] to the [LocalDate] it falls on in UTC. */
+private fun Instant.toLocalDate(): LocalDate =
+    atZone(ZoneOffset.UTC).toLocalDate()

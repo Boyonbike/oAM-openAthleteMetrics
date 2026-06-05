@@ -25,7 +25,8 @@ room                    = "2.7.1"
 
 # ── Hilt (dependency injection) ──────────────────────────────────────────────
 hilt                    = "2.59.2"
-hiltNavigationCompose   = "1.2.0"
+# hiltAndroidX covers all androidx.hilt:* artifacts (navigation-compose, work, hilt-compiler)
+hiltAndroidX            = "1.2.0"
 
 # ── Coroutines ───────────────────────────────────────────────────────────────
 coroutines              = "1.10.1"
@@ -77,9 +78,14 @@ androidx-room-compiler = { group = "androidx.room", name = "room-compiler", vers
 
 # ── Hilt ─────────────────────────────────────────────────────────────────────
 hilt-android                    = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
-# Annotation processor — referenced with ksp() in app/build.gradle.kts
+# Dagger annotation processor — generates @HiltAndroidApp / @AndroidEntryPoint / @HiltViewModel code
 hilt-compiler                   = { group = "com.google.dagger", name = "hilt-android-compiler", version.ref = "hilt" }
-androidx-hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version.ref = "hiltNavigationCompose" }
+# AndroidX Hilt extensions
+androidx-hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version.ref = "hiltAndroidX" }
+# Runtime support for @HiltWorker — needed alongside work-runtime-ktx
+androidx-hilt-work               = { group = "androidx.hilt", name = "hilt-work", version.ref = "hiltAndroidX" }
+# AndroidX Hilt annotation processor — generates code for @HiltWorker (separate from Dagger's hilt-compiler)
+androidx-hilt-compiler           = { group = "androidx.hilt", name = "hilt-compiler", version.ref = "hiltAndroidX" }
 
 # ── Coroutines ───────────────────────────────────────────────────────────────
 # -android includes the Android main-thread dispatcher; -core is a transitive dep.

@@ -81,9 +81,13 @@ dependencies {
     // hilt-android:              @HiltAndroidApp, @AndroidEntryPoint, @HiltViewModel
     // hilt-compiler:             generates injection code at build time (KSP)
     // hilt-navigation-compose:   hiltViewModel() composable integration
+    // hilt-work:                 @HiltWorker runtime + HiltWorkerFactory
+    // androidx.hilt-compiler:    generates @HiltWorker injection code (separate from hilt-compiler)
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
     implementation(libs.androidx.hilt.navigation.compose)
+    implementation(libs.androidx.hilt.work)
+    ksp(libs.androidx.hilt.compiler)
 
     // ── Coroutines ─────────────────────────────────────────────────────────
     // Async primitives used throughout: Flow, suspend, Dispatchers.IO

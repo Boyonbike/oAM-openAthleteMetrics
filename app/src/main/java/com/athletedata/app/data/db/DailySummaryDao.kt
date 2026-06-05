@@ -43,4 +43,8 @@ interface DailySummaryDao {
     /** One-shot read used by DailySummaryWorker before writing a new summary. */
     @Query("SELECT * FROM daily_summary WHERE date = :date LIMIT 1")
     suspend fun getSummaryForDateOnce(date: LocalDate): DailySummaryEntity?
+
+    /** Deletes all rows; called after seeder data is cleared. */
+    @Query("DELETE FROM daily_summary")
+    suspend fun deleteAll()
 }

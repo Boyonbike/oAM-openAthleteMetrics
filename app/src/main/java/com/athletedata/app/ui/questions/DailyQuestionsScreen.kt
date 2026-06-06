@@ -13,11 +13,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -41,6 +45,7 @@ import java.time.format.DateTimeFormatter
 @Composable
 fun DailyQuestionsScreen(
     modifier: Modifier = Modifier,
+    onNavigateToSettings: () -> Unit = {},
     viewModel: DailyQuestionsViewModel = hiltViewModel(),
 ) {
     val questionsState by viewModel.questionsState.collectAsStateWithLifecycle()
@@ -57,6 +62,11 @@ fun DailyQuestionsScreen(
                             DateTimeFormatter.ofPattern("EEEE, d MMMM")
                         ),
                     )
+                },
+                actions = {
+                    IconButton(onClick = onNavigateToSettings) {
+                        Icon(Icons.Filled.Settings, contentDescription = "Settings")
+                    }
                 },
             )
         },

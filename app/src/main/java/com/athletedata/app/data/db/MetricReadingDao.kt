@@ -82,4 +82,18 @@ interface MetricReadingDao {
         startMs: Long,
         endMs: Long,
     ): List<MetricReadingEntity>
+
+    /** Row count for a given [source] in a time window; used for the seeder banner. */
+    @Query(
+        "SELECT COUNT(*) FROM metric_readings " +
+        "WHERE source = :source AND recorded_at >= :startMs AND recorded_at < :endMs"
+    )
+    fun countSourceDataInRange(source: DataSource, startMs: Long, endMs: Long): Flow<Int>
+
+    /** One-shot row count; used by the seeder to check for existing data before re-seeding. */
+    @Query(
+        "SELECT COUNT(*) FROM metric_readings " +
+        "WHERE source = :source AND recorded_at >= :startMs AND recorded_at < :endMs"
+    )
+    suspend fun countSourceDataInRangeOnce(source: DataSource, startMs: Long, endMs: Long): Int
 }

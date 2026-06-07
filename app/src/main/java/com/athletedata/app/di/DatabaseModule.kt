@@ -73,7 +73,7 @@ abstract class DatabaseModule {
             context,
             AppDatabase::class.java,
             AppDatabase.DATABASE_NAME,
-        ).build()
+        ).fallbackToDestructiveMigration().build()
 
         /**
          * Provides [MetricReadingDao] extracted from the singleton [AppDatabase].

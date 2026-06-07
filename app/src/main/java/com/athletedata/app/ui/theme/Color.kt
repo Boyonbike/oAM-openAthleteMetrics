@@ -2,10 +2,20 @@ package com.athletedata.app.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val Purple80 = Color(0xFFD0BCFF)
-val PurpleGrey80 = Color(0xFFCCC2DC)
-val Pink80 = Color(0xFFEFB8C8)
+// Light palette
+val LightBackground    = Color(0xFFF7F7F5)
+val LightSurface       = Color(0xFFFFFFFF)
+val LightSurfaceHigh   = Color(0xFFFFFFFF)
+val LightAccent        = Color(0xFF1A5FB4)
+val LightTextPrimary   = Color(0xFF111111)
+val LightTextSecondary = Color(0xFF6B6B6B)
+val LightTextTertiary  = Color(0xFFA0A0A0)
 
-val Purple40 = Color(0xFF6650a4)
-val PurpleGrey40 = Color(0xFF625b71)
-val Pink40 = Color(0xFF7D5260)
+// Dark palette
+val DarkBackground    = Color(0xFF0F0F0F)
+val DarkSurface       = Color(0xFF1A1A1A)
+val DarkSurfaceHigh   = Color(0xFF242424)
+val DarkAccent        = Color(0xFF5B9BD5)
+val DarkTextPrimary   = Color(0xFFF0F0F0)
+val DarkTextSecondary = Color(0xFF9A9A9A)
+val DarkTextTertiary  = Color(0xFF606060)

@@ -13,23 +13,25 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SelectableDates
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,39 +41,59 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.athletedata.app.ui.components.LoadingState
+import com.athletedata.app.ui.components.SectionHeader
+import com.athletedata.app.ui.nav.AppTopBar
+import com.athletedata.app.ui.nav.Page
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DailyQuestionsScreen(
+    onNavigate: (Page) -> Unit,
+    onSettingsClick: () -> Unit,
+    onDevicesClick: () -> Unit,
+    onNavigateToDate: (LocalDate) -> Unit,
     modifier: Modifier = Modifier,
-    onNavigateToSettings: () -> Unit = {},
     viewModel: DailyQuestionsViewModel = hiltViewModel(),
 ) {
     val questionsState by viewModel.questionsState.collectAsStateWithLifecycle()
     val weightState by viewModel.weightState.collectAsStateWithLifecycle()
     var showWeightSheet by remember { mutableStateOf(false) }
+    var showDatePicker by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val today = remember { LocalDate.now() }
+
+    LaunchedEffect(Unit) {
+        viewModel.errors.collect { message ->
+            snackbarHostState.showSnackbar(message)
+        }
+    }
 
     Scaffold(
         modifier = modifier,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = questionsState.date.format(
-                            DateTimeFormatter.ofPattern("EEEE, d MMMM")
-                        ),
-                    )
-                },
-                actions = {
-                    IconButton(onClick = onNavigateToSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = "Settings")
-                    }
-                },
+            AppTopBar(
+                currentPage = Page.QUESTIONS,
+                subtitle = questionsState.date.format(DateTimeFormatter.ofPattern("EEE, d MMM")),
+                onSubtitleClick = { showDatePicker = true },
+                onSettingsClick = onSettingsClick,
+                onDevicesClick = onDevicesClick,
+                onNavigate = onNavigate,
             )
         },
     ) { innerPadding ->
-        Column(
+        if (questionsState.isLoading) {
+            LoadingState(
+                modifier = Modifier
+                    .padding(innerPadding)
+                    .fillMaxSize(),
+            )
+        } else Column(
             modifier = Modifier
                 .padding(innerPadding)
                 .fillMaxSize()
@@ -160,6 +182,40 @@ fun DailyQuestionsScreen(
         }
     }
 
+    if (showDatePicker) {
+        val datePickerState = rememberDatePickerState(
+            initialSelectedDateMillis = questionsState.date
+                .atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(),
+            selectableDates = object : SelectableDates {
+                override fun isSelectableDate(utcTimeMillis: Long): Boolean {
+                    val picked = Instant.ofEpochMilli(utcTimeMillis)
+                        .atZone(ZoneOffset.UTC).toLocalDate()
+                    return !picked.isAfter(today)
+                }
+            },
+        )
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        datePickerState.selectedDateMillis?.let { ms ->
+                            val picked = Instant.ofEpochMilli(ms)
+                                .atZone(ZoneOffset.UTC).toLocalDate()
+                            onNavigateToDate(picked)
+                        }
+                        showDatePicker = false
+                    },
+                ) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePicker = false }) { Text("Cancel") }
+            },
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
+
     if (showWeightSheet) {
         WeightEntrySheet(
             viewModel = viewModel,
@@ -175,11 +231,7 @@ private fun QuestionRow(
     onSelect: (Int?) -> Unit,
 ) {
     Column(modifier = Modifier.padding(vertical = 8.dp)) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        SectionHeader(label)
         Spacer(modifier = Modifier.height(6.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for (n in 1..5) {
@@ -233,11 +285,7 @@ private fun HabitsSection(
     onHabitToggle: (String) -> Unit,
 ) {
     Column {
-        Text(
-            text = "Habits",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        SectionHeader("Habits")
         Spacer(modifier = Modifier.height(8.dp))
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),

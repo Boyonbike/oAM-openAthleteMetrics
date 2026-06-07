@@ -34,4 +34,10 @@ interface MetricRepository {
 
     /** Deletes all readings whose source matches [source]. Used by the seeder cleanup flow. */
     suspend fun deleteBySource(source: DataSource)
+
+    /** Live boolean — true if any [DataSource.SEEDER] readings exist for [date]. */
+    fun hasSeederDataForDate(date: LocalDate): Flow<Boolean>
+
+    /** One-shot version; used by the seeder to guard against re-seeding a date. */
+    suspend fun hasSeederReadingsForDateOnce(date: LocalDate): Boolean
 }

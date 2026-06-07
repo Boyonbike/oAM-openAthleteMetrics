@@ -18,7 +18,7 @@ import java.time.Instant
  */
 @Entity(
     tableName = "metric_readings",
-    indices = [Index(value = ["metric_type", "recorded_at"])],
+    indices = [Index(value = ["metric_type", "recorded_at"], orders = [Index.Order.ASC, Index.Order.DESC])],
 )
 data class MetricReadingEntity(
     @PrimaryKey(autoGenerate = true)

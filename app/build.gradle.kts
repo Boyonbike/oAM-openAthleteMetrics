@@ -53,6 +53,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.core)
+    implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.androidx.activity.compose)
 
     // ── AndroidX core ──────────────────────────────────────────────────────
@@ -101,6 +102,9 @@ dependencies {
     // ── WorkManager ────────────────────────────────────────────────────────
     // Deferred, constraint-aware background work. Used for DailySummaryWorker.
     implementation(libs.androidx.work.runtime.ktx)
+
+    // ── Timber ─────────────────────────────────────────────────────────────
+    implementation(libs.timber)
 
     // ── Vico charts ────────────────────────────────────────────────────────
     // Compose-native charting library.

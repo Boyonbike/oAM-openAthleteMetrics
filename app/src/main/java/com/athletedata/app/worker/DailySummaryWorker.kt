@@ -16,6 +16,7 @@ import com.athletedata.app.data.model.MetricType
 import com.athletedata.app.data.repository.DailySummaryRepository
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import timber.log.Timber
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -123,7 +124,8 @@ class DailySummaryWorker @AssistedInject constructor(
 
             Result.success()
         } catch (e: Exception) {
-            Result.failure()
+            Timber.e(e, "DailySummaryWorker failed for date $dateStr")
+            Result.retry()
         }
     }
 

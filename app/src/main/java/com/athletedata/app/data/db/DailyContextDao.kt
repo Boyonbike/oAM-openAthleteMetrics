@@ -39,6 +39,10 @@ interface DailyContextDao {
     @Query("SELECT * FROM daily_context WHERE date = :date LIMIT 1")
     fun getContextForDate(date: LocalDate): Flow<DailyContextEntity?>
 
+    /** One-shot read; used by the seeder to check for existing data before re-seeding. */
+    @Query("SELECT * FROM daily_context WHERE date = :date LIMIT 1")
+    suspend fun getContextForDateOnce(date: LocalDate): DailyContextEntity?
+
     /** Live contexts in the inclusive date range [from, to], oldest first. */
     @Query(
         """

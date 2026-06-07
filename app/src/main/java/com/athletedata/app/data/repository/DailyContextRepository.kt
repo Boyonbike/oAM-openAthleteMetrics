@@ -25,6 +25,9 @@ interface DailyContextRepository {
     /** Live stream of contexts in the inclusive date range [[from], [to]], oldest first. */
     fun getForRange(from: LocalDate, to: LocalDate): Flow<List<DailyContext>>
 
+    /** One-shot read; used by the seeder to check for existing data before re-seeding. */
+    suspend fun getForDateOnce(date: LocalDate): DailyContext?
+
     /**
      * Removes context rows for the given [source].
      *

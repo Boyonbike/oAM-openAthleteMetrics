@@ -48,19 +48,26 @@ class SeederService @Inject constructor(
         val sessions = mutableListOf<SleepSession>()
         val contexts = mutableListOf<DailyContext>()
 
-        dates.forEachIndexed { idx, date ->
-            readings += generateHr(date, date in workoutDays, rng)
-            readings += generateHrv(date, rng)
-            readings += generateSpo2(date, date in dipNights, rng)
-            readings += generateSteps(date, date in workoutDays, rng)
-            sessions += generateSleepSession(date, sleepMins.getValue(date), rng)
-            contexts += generateDailyContext(
-                date, date in illnessDays, weights.getValue(date), sleepMins.getValue(date), rng
-            )
+        for ((idx, date) in dates.withIndex()) {
+            // Skip dates that have already been seeded in any table.
+            val alreadySeeded = metricRepository.hasSeederReadingsForDateOnce(date)
+                || sleepRepository.getSessionForDateOnce(date) != null
+                || dailyContextRepository.getForDateOnce(date) != null
+
+            if (!alreadySeeded) {
+                readings += generateHr(date, date in workoutDays, rng)
+                readings += generateHrv(date, rng)
+                readings += generateSpo2(date, date in dipNights, rng)
+                readings += generateSteps(date, date in workoutDays, rng)
+                sessions += generateSleepSession(date, sleepMins.getValue(date), rng)
+                contexts += generateDailyContext(
+                    date, date in illnessDays, weights.getValue(date), sleepMins.getValue(date), rng
+                )
+            }
             onProgress(idx.toFloat() / dates.size * 0.70f)
         }
 
-        metricRepository.insertAll(readings)
+        if (readings.isNotEmpty()) metricRepository.insertAll(readings)
         onProgress(0.80f)
 
         for (session in sessions) sleepRepository.insert(session)
@@ -69,9 +76,11 @@ class SeederService @Inject constructor(
         for (ctx in contexts) dailyContextRepository.upsert(ctx)
         onProgress(0.95f)
 
-        // Final worker enqueue after all data is inserted — REPLACE strategy
-        // ensures these replace any workers triggered mid-insert by the repositories.
-        dates.forEach { enqueueSummaryWorker(it, workManager) }
+        // Enqueue summary workers only for dates that were actually seeded.
+        val seededDates = (readings.map {
+            it.recordedAt.atZone(ZoneOffset.UTC).toLocalDate()
+        } + sessions.map { it.date }).distinct()
+        seededDates.forEach { enqueueSummaryWorker(it, workManager) }
         onProgress(1.00f)
     }
 

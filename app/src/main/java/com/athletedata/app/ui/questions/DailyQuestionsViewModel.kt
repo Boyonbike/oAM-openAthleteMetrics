@@ -1,17 +1,22 @@
 package com.athletedata.app.ui.questions
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.athletedata.app.data.model.DailyContext
 import com.athletedata.app.data.repository.DailyContextRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import timber.log.Timber
 import java.time.Instant
 import java.time.LocalDate
 import javax.inject.Inject
@@ -26,6 +31,7 @@ data class QuestionsUiState(
     val isIll: Boolean = false,
     val illnessNotes: String = "",
     val habits: Map<String, Boolean> = DailyQuestionsViewModel.DEFAULT_HABITS,
+    val isLoading: Boolean = true,
     val isSaving: Boolean = false,
 )
 
@@ -38,6 +44,7 @@ data class WeightUiState(
 
 @HiltViewModel
 class DailyQuestionsViewModel @Inject constructor(
+    savedStateHandle: SavedStateHandle,
     private val repo: DailyContextRepository,
 ) : ViewModel() {
 
@@ -52,18 +59,29 @@ class DailyQuestionsViewModel @Inject constructor(
         val DEFAULT_HABITS: Map<String, Boolean> = HABIT_KEYS.associateWith { false }
     }
 
-    private val today: LocalDate = LocalDate.now()
+    private val today: LocalDate = savedStateHandle.get<String>("date")
+        ?.let { LocalDate.parse(it) } ?: LocalDate.now()
 
-    private val _questionsState = MutableStateFlow(QuestionsUiState())
+    private val _questionsState = MutableStateFlow(QuestionsUiState(date = today))
     val questionsState: StateFlow<QuestionsUiState> = _questionsState.asStateFlow()
 
     private val _weightState = MutableStateFlow(WeightUiState())
     val weightState: StateFlow<WeightUiState> = _weightState.asStateFlow()
 
+    private val _errors = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val errors: SharedFlow<String> = _errors.asSharedFlow()
+
     init {
         viewModelScope.launch {
-            val existing = repo.getForDate(today).first()
-            if (existing != null) populateFrom(existing)
+            try {
+                val existing = repo.getForDate(today).first()
+                if (existing != null) populateFrom(existing)
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to load daily context")
+                _errors.tryEmit("Failed to load data")
+            } finally {
+                _questionsState.update { it.copy(isLoading = false) }
+            }
         }
     }
 
@@ -86,8 +104,14 @@ class DailyQuestionsViewModel @Inject constructor(
     fun saveQuestions() {
         viewModelScope.launch {
             _questionsState.update { it.copy(isSaving = true) }
-            repo.upsert(buildContext())
-            _questionsState.update { it.copy(isSaving = false) }
+            try {
+                repo.upsert(buildContext())
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to save questions")
+                _errors.tryEmit("Failed to save")
+            } finally {
+                _questionsState.update { it.copy(isSaving = false) }
+            }
         }
     }
 
@@ -100,8 +124,14 @@ class DailyQuestionsViewModel @Inject constructor(
     fun saveWeight() {
         viewModelScope.launch {
             _weightState.update { it.copy(isSaving = true) }
-            repo.upsert(buildContext())
-            _weightState.update { it.copy(isSaving = false) }
+            try {
+                repo.upsert(buildContext())
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to save weight")
+                _errors.tryEmit("Failed to save weight")
+            } finally {
+                _weightState.update { it.copy(isSaving = false) }
+            }
         }
     }
 

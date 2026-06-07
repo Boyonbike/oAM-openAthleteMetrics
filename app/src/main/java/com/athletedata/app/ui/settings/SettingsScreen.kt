@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.athletedata.app.BuildConfig
+import com.athletedata.app.ui.components.SectionHeader
 import com.athletedata.app.data.model.ThemePreference
 import com.athletedata.app.seeder.SeederState
 import com.athletedata.app.seeder.SeederViewModel
@@ -42,10 +43,8 @@ import com.athletedata.app.seeder.SeederViewModel
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
     settingsViewModel: SettingsViewModel = hiltViewModel(),
-    seederViewModel: SeederViewModel = hiltViewModel(),
 ) {
     val theme by settingsViewModel.themePreference.collectAsStateWithLifecycle()
-    val seederState by seederViewModel.state.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {
@@ -69,23 +68,17 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
-            Text(
-                text = "Theme",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            SectionHeader("Theme")
             Spacer(modifier = Modifier.height(8.dp))
             ThemeSelector(current = theme, onSelect = settingsViewModel::setTheme)
 
             if (BuildConfig.DEBUG) {
+                val seederViewModel: SeederViewModel = hiltViewModel()
+                val seederState by seederViewModel.state.collectAsStateWithLifecycle()
                 Spacer(modifier = Modifier.height(24.dp))
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = "Debug",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
+                SectionHeader("Debug", color = MaterialTheme.colorScheme.error)
                 Spacer(modifier = Modifier.height(8.dp))
                 SeederSection(
                     state = seederState,

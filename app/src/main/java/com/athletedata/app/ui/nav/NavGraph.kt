@@ -34,8 +34,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.athletedata.app.ui.history.HistoryScreen
-import com.athletedata.app.ui.overview.DailyOverviewScreen
-import com.athletedata.app.ui.questions.DailyQuestionsScreen
+import com.athletedata.app.ui.overview.DashboardScreen
+import com.athletedata.app.ui.questions.QuestionsScreen
 import com.athletedata.app.ui.settings.SettingsScreen
 import com.athletedata.app.ui.theme.TypographyMeta
 import java.time.LocalDate
@@ -115,7 +115,7 @@ fun AppTopBar(
                     )
                 }
             }
-            // Row 2 — date selector (tappable) or static subtitle
+            // Row 2 — optional subtitle / date selector
             if (subtitle != null) {
                 if (onSubtitleClick != null) {
                     TextButton(
@@ -163,6 +163,7 @@ fun AppNavGraph(modifier: Modifier = Modifier) {
         { navController.navigate("settings") }
     }
 
+    // Used by Questions and History screens to navigate back to dashboard or between pages
     val navigateTo: (Page) -> Unit = remember(navController, today) {
         { page ->
             val route = when (page) {
@@ -183,8 +184,7 @@ fun AppNavGraph(modifier: Modifier = Modifier) {
         modifier = modifier,
     ) {
         composable("dashboard") {
-            DailyOverviewScreen(
-                onNavigate = navigateTo,
+            DashboardScreen(
                 onSettingsClick = onSettingsClick,
                 onDevicesClick = onDevicesClick,
                 onNavigateToQuestions = { date ->
@@ -193,7 +193,12 @@ fun AppNavGraph(modifier: Modifier = Modifier) {
                         launchSingleTop = true
                     }
                 },
-                onNavigateToMetricDetail = {},
+                onNavigateToHistory = { metricKey, dateStr ->
+                    navController.navigate("history/$metricKey/$dateStr") {
+                        popUpTo("dashboard") { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
             )
         }
         composable(
@@ -204,16 +209,10 @@ fun AppNavGraph(modifier: Modifier = Modifier) {
                 defaultValue = null
             }),
         ) {
-            DailyQuestionsScreen(
+            QuestionsScreen(
                 onNavigate = navigateTo,
                 onSettingsClick = onSettingsClick,
                 onDevicesClick = onDevicesClick,
-                onNavigateToDate = { date ->
-                    navController.navigate("questions?date=$date") {
-                        popUpTo("dashboard") { inclusive = true }
-                        launchSingleTop = true
-                    }
-                },
             )
         }
         composable(

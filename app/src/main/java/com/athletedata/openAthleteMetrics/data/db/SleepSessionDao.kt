@@ -24,6 +24,9 @@ interface SleepSessionDao {
     @Query("DELETE FROM sleep_sessions WHERE source = :source")
     suspend fun deleteBySource(source: DataSource)
 
+    @Query("DELETE FROM sleep_sessions")
+    suspend fun deleteAll()
+
     // ── Reads ─────────────────────────────────────────────────────────────────
 
     /** The session for a given night (keyed by morning date), or null. */

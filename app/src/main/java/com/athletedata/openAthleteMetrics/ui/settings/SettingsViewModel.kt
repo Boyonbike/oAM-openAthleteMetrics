@@ -138,7 +138,17 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(resetStep = ResetStep.None, resetTypedText = "", isBusy = true) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                appDatabase.clearAllTables()
+                // Delete in FK-safe order (child tables first).
+                // question_definitions is intentionally excluded — those are built-in app data.
+                appDatabase.rawDeviceDataDao().deleteAll()
+                appDatabase.syncSessionDao().deleteAll()
+                appDatabase.deviceDao().deleteAll()
+                appDatabase.questionResponseDao().deleteAll()
+                appDatabase.metricReadingDao().deleteAll()
+                appDatabase.sleepSessionDao().deleteAll()
+                appDatabase.dailySummaryDao().deleteAll()
+                appDatabase.dailyContextDao().deleteAll()
+                appDatabase.activityDao().deleteAll()
                 settingsRepository.clearAllPreferences()
                 _effects.send(SettingsEffect.ShowSnackbar("All data deleted"))
                 _effects.send(SettingsEffect.NavigateToDashboard)

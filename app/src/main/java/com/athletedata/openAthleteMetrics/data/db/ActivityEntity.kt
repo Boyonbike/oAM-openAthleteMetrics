@@ -49,6 +49,7 @@ data class ActivityEntity(
 // ── Mappers ──────────────────────────────────────────────────────────────────
 
 fun ActivityEntity.toModel() = Activity(
+    id = id,
     startTime = startTime,
     endTime = endTime,
     durationMinutes = durationMinutes,
@@ -68,6 +69,7 @@ fun ActivityEntity.toModel() = Activity(
 )
 
 fun Activity.toEntity() = ActivityEntity(
+    id = id,
     startTime = startTime,
     endTime = endTime,
     durationMinutes = durationMinutes,

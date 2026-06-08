@@ -3,10 +3,13 @@ package com.athletedata.openAthleteMetrics.ui.overview
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.athletedata.openAthleteMetrics.GlobalAppState
+import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.DailyContext
+import com.athletedata.openAthleteMetrics.data.model.UserCategory
 import com.athletedata.openAthleteMetrics.data.model.DailySummary
 import com.athletedata.openAthleteMetrics.data.model.QuestionDefinition
 import com.athletedata.openAthleteMetrics.data.model.QuestionType
+import com.athletedata.openAthleteMetrics.data.repository.ActivityRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailyContextRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailySummaryRepository
 import com.athletedata.openAthleteMetrics.data.repository.MetricRepository
@@ -79,6 +82,7 @@ class OverviewViewModel @Inject constructor(
     private val contextRepo: DailyContextRepository,
     private val metricRepo: MetricRepository,
     private val questionRepo: QuestionRepository,
+    private val activityRepo: ActivityRepository,
 ) : ViewModel() {
 
     private val _errors = MutableSharedFlow<String>(extraBufferCapacity = 1)
@@ -147,6 +151,14 @@ class OverviewViewModel @Inject constructor(
             initialValue = OverviewUiState(),
         )
 
+    val activities: StateFlow<List<Activity>> = globalAppState.selectedDate
+        .flatMapLatest { date -> activityRepo.getActivitiesForDate(date) }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = emptyList(),
+        )
+
     val showCheckinBanner: StateFlow<Boolean> = combine(
         uiState,
         _dismissedForSession,
@@ -166,6 +178,17 @@ class OverviewViewModel @Inject constructor(
 
     fun dismissCheckinBanner() {
         _dismissedForSession.value = true
+    }
+
+    fun setActivityCategory(activityId: Long, category: UserCategory) {
+        viewModelScope.launch {
+            try {
+                activityRepo.updateCategory(activityId, category)
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to update activity category")
+                _errors.tryEmit("Failed to save activity category")
+            }
+        }
     }
 
     fun saveWeight(weightKg: Double?, bodyFatPct: Double?, notes: String?) {

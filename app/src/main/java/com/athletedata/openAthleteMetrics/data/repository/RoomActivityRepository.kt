@@ -5,6 +5,7 @@ import com.athletedata.openAthleteMetrics.data.db.toEntity
 import com.athletedata.openAthleteMetrics.data.db.toModel
 import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.DataSource
+import com.athletedata.openAthleteMetrics.data.model.UserCategory
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import java.time.LocalDate
@@ -23,6 +24,12 @@ class RoomActivityRepository @Inject constructor(
         dao.insertAll(activities.map { it.toEntity() })
 
     override suspend fun deleteBySource(source: DataSource) = dao.deleteBySource(source)
+
+    override suspend fun updateCategory(id: Long, category: UserCategory) =
+        dao.updateCategory(id, category)
+
+    override suspend fun updateCategoryAndNotes(id: Long, category: UserCategory?, notes: String?) =
+        dao.updateCategoryAndNotes(id, category, notes)
 
     override fun getActivitiesForDate(date: LocalDate): Flow<List<Activity>> =
         dao.getActivitiesInRange(

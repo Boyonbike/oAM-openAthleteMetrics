@@ -46,6 +46,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
+import com.athletedata.openAthleteMetrics.ui.dailydetail.DailyDetailScreen
 import com.athletedata.openAthleteMetrics.ui.history.HistoryScreen
 import com.athletedata.openAthleteMetrics.ui.overview.DashboardScreen
 import com.athletedata.openAthleteMetrics.ui.questions.QuestionsScreen
@@ -219,6 +220,7 @@ fun AppNavGraph(modifier: Modifier = Modifier) {
     val context = LocalContext.current
 
     var showSettings by remember { mutableStateOf(false) }
+    var showDailyDetail by remember { mutableStateOf(false) }
     var pendingQuestionsDate by remember { mutableStateOf<String?>(null) }
     var pendingQuestionsTab by remember { mutableStateOf<String?>(null) }
     var pendingHistoryMetricKey by remember { mutableStateOf<String?>(null) }
@@ -265,6 +267,7 @@ fun AppNavGraph(modifier: Modifier = Modifier) {
                         onNavigateToHistoryDirect = {
                             coroutineScope.launch { pagerState.animateScrollToPage(Page.HISTORY.ordinal) }
                         },
+                        onNavigateToDailyDetail = { showDailyDetail = true },
                     )
                     1 -> QuestionsScreen(
                         initialDate = pendingQuestionsDate,
@@ -292,6 +295,10 @@ fun AppNavGraph(modifier: Modifier = Modifier) {
                     coroutineScope.launch { pagerState.animateScrollToPage(Page.DASHBOARD.ordinal) }
                 },
             )
+        }
+
+        if (showDailyDetail) {
+            DailyDetailScreen(onBack = { showDailyDetail = false })
         }
     }
 }

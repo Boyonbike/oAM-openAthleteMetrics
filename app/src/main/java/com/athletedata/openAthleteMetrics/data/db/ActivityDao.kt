@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import com.athletedata.openAthleteMetrics.data.model.DataSource
+import com.athletedata.openAthleteMetrics.data.model.UserCategory
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -23,6 +24,12 @@ interface ActivityDao {
 
     @Query("DELETE FROM activities")
     suspend fun deleteAll()
+
+    @Query("UPDATE activities SET user_category = :category WHERE id = :id")
+    suspend fun updateCategory(id: Long, category: UserCategory)
+
+    @Query("UPDATE activities SET user_category = :category, notes = :notes WHERE id = :id")
+    suspend fun updateCategoryAndNotes(id: Long, category: UserCategory?, notes: String?)
 
     // ── Reads ─────────────────────────────────────────────────────────────────
 

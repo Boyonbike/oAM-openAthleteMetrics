@@ -29,6 +29,7 @@ import java.time.Instant
  *                            null if device did not provide it.
  */
 data class Activity(
+    val id: Long = 0,
     val startTime: Instant,
     val endTime: Instant,
     val durationMinutes: Int,

@@ -5,12 +5,14 @@ import com.athletedata.openAthleteMetrics.data.db.QuestionDefinitionDao
 import com.athletedata.openAthleteMetrics.data.db.QuestionDefinitionEntity
 import com.athletedata.openAthleteMetrics.data.db.QuestionResponseDao
 import com.athletedata.openAthleteMetrics.data.db.QuestionResponseEntity
+import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.DailyContext
 import com.athletedata.openAthleteMetrics.data.model.DataSource
 import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.data.model.SleepSession
 import com.athletedata.openAthleteMetrics.data.model.SleepStage
+import com.athletedata.openAthleteMetrics.data.repository.ActivityRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailyContextRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailySummaryRepository
 import com.athletedata.openAthleteMetrics.data.repository.MetricRepository
@@ -32,6 +34,7 @@ class SeederService @Inject constructor(
     private val sleepRepository: SleepRepository,
     private val dailyContextRepository: DailyContextRepository,
     private val dailySummaryRepository: DailySummaryRepository,
+    private val activityRepository: ActivityRepository,
     private val questionDefinitionDao: QuestionDefinitionDao,
     private val questionResponseDao: QuestionResponseDao,
     private val workManager: WorkManager,
@@ -52,10 +55,11 @@ class SeederService @Inject constructor(
 
         val lifestyleDefinitions = questionDefinitionDao.getLifestyleOnce()
 
-        val readings  = mutableListOf<MetricReading>()
-        val sessions  = mutableListOf<SleepSession>()
-        val contexts  = mutableListOf<DailyContext>()
-        val responses = mutableListOf<QuestionResponseEntity>()
+        val readings   = mutableListOf<MetricReading>()
+        val sessions   = mutableListOf<SleepSession>()
+        val contexts   = mutableListOf<DailyContext>()
+        val responses  = mutableListOf<QuestionResponseEntity>()
+        val activities = mutableListOf<Activity>()
 
         for ((idx, date) in dates.withIndex()) {
             val alreadySeeded = metricRepository.hasSeederReadingsForDateOnce(date)
@@ -81,6 +85,7 @@ class SeederService @Inject constructor(
                         date, morningHrv, sleepMins.getValue(date), rng, lifestyleDefinitions
                     )
                 }
+                activities += generateActivity(date, date in workoutDays, rng)
             }
             onProgress(idx.toFloat() / dates.size * 0.70f)
         }
@@ -95,6 +100,9 @@ class SeederService @Inject constructor(
         onProgress(0.90f)
 
         if (responses.isNotEmpty()) questionResponseDao.upsertAll(responses)
+        onProgress(0.93f)
+
+        if (activities.isNotEmpty()) activityRepository.insertAll(activities)
         onProgress(0.95f)
 
         val seededDates = (readings.map {
@@ -106,9 +114,11 @@ class SeederService @Inject constructor(
 
     suspend fun clearSeederData(onProgress: (Float) -> Unit) {
         metricRepository.deleteBySource(DataSource.SEEDER)
-        onProgress(0.33f)
+        onProgress(0.25f)
         sleepRepository.deleteBySource(DataSource.SEEDER)
-        onProgress(0.66f)
+        onProgress(0.50f)
+        activityRepository.deleteBySource(DataSource.SEEDER)
+        onProgress(0.75f)
         dailySummaryRepository.deleteAll()
         onProgress(1.00f)
     }
@@ -391,6 +401,41 @@ class SeederService @Inject constructor(
                 date       = dateStr,
                 value      = value.toString(),
                 recordedAt = now,
+            )
+        }
+    }
+
+    // ── Activity ──────────────────────────────────────────────────────────────
+
+    private fun generateActivity(date: LocalDate, isWorkout: Boolean, rng: Random): Activity {
+        val dayStartMs = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        return if (isWorkout) {
+            val deviceNames = listOf("Outdoor Run", "Cycling", "Strength Training", "Swimming")
+            val deviceName = deviceNames[rng.nextInt(deviceNames.size)]
+            val durationMinutes = rng.nextInt(31) + 30   // 30–60 min
+            val startHour = rng.nextInt(12) + 7           // 7 am – 6 pm
+            val startMs = dayStartMs + startHour * 3_600_000L
+            Activity(
+                startTime = Instant.ofEpochMilli(startMs),
+                endTime = Instant.ofEpochMilli(startMs + durationMinutes * 60_000L),
+                durationMinutes = durationMinutes,
+                deviceName = deviceName,
+                source = DataSource.SEEDER,
+                avgHrBpm = (rng.nextDouble() * 30.0 + 130.0),
+            )
+        } else {
+            val deviceNames = listOf("Walking", "Daily Walk", "Commute Walk")
+            val deviceName = deviceNames[rng.nextInt(deviceNames.size)]
+            val durationMinutes = rng.nextInt(21) + 10   // 10–30 min
+            val startHour = rng.nextInt(8) + 8            // 8 am – 3 pm
+            val startMs = dayStartMs + startHour * 3_600_000L
+            Activity(
+                startTime = Instant.ofEpochMilli(startMs),
+                endTime = Instant.ofEpochMilli(startMs + durationMinutes * 60_000L),
+                durationMinutes = durationMinutes,
+                deviceName = deviceName,
+                source = DataSource.SEEDER,
+                avgHrBpm = (rng.nextDouble() * 20.0 + 75.0),
             )
         }
     }

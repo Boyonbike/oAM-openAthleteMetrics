@@ -6,6 +6,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -57,9 +58,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.DailyContext
 import com.athletedata.openAthleteMetrics.data.model.DailySummary
 import com.athletedata.openAthleteMetrics.data.model.QuestionType
+import com.athletedata.openAthleteMetrics.data.model.UserCategory
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -88,15 +91,18 @@ fun DashboardScreen(
     onNavigateToHabitsTab: (LocalDate) -> Unit,
     onNavigateToHistory: (metricKey: String, dateStr: String) -> Unit,
     onNavigateToHistoryDirect: () -> Unit,
+    onNavigateToDailyDetail: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: OverviewViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val showCheckinBanner by viewModel.showCheckinBanner.collectAsStateWithLifecycle()
+    val activities by viewModel.activities.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val today = remember { LocalDate.now() }
     var showDatePicker by remember { mutableStateOf(false) }
     var showWeightSheet by remember { mutableStateOf(false) }
+    var showCategoryPicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.errors.collect { snackbarHostState.showSnackbar(it) }
@@ -128,6 +134,18 @@ fun DashboardScreen(
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(onClick = onNavigateToDailyDetail) {
+                        Text(
+                            text = "Full day →",
+                            style = TypographyMeta,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
                 MetricCardGrid(
                     summary = uiState.summaryForDate,
                     yesterdaySummary = uiState.yesterdaySummary,
@@ -169,6 +187,18 @@ fun DashboardScreen(
                     onNavigateToHabitsTab = onNavigateToHabitsTab,
                     onNavigateToHistory = onNavigateToHistory,
                 )
+
+                if (activities.isNotEmpty()) {
+                    Spacer(Modifier.height(20.dp))
+                    ActivitiesTile(
+                        activities = activities,
+                        onTap = if (activities.first().userCategory == null) {
+                            { showCategoryPicker = true }
+                        } else {
+                            { onNavigateToDailyDetail() }
+                        },
+                    )
+                }
 
                 Spacer(Modifier.height(24.dp))
             }
@@ -223,6 +253,16 @@ fun DashboardScreen(
             existingContext = uiState.contextForDate,
             onSave = { kg, fat, notes -> viewModel.saveWeight(kg, fat, notes) },
             onDismiss = { showWeightSheet = false },
+        )
+    }
+
+    if (showCategoryPicker && activities.isNotEmpty()) {
+        ActivityCategoryPickerDialog(
+            onSelect = { category ->
+                viewModel.setActivityCategory(activities.first().id, category)
+                showCategoryPicker = false
+            },
+            onDismiss = { showCategoryPicker = false },
         )
     }
 }
@@ -862,10 +902,160 @@ private fun CheckinReminderBanner(
     }
 }
 
+// ── Activities tile ───────────────────────────────────────────────────────────
+
+@Composable
+private fun ActivitiesTile(
+    activities: List<Activity>,
+    onTap: (() -> Unit)?,
+) {
+    val first = activities.first()
+    val displayName = first.userCategory?.toDisplayLabel() ?: first.deviceName
+    val duration = formatDurationMinutes(first.durationMinutes)
+    val cardColors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    val cardShape = MaterialTheme.shapes.medium
+    val cardElevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+
+    val content: @Composable ColumnScope.() -> Unit = {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = "Activities",
+                style = TypographyTitle,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = displayName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = duration,
+                    style = TypographyMeta,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (first.userCategory != null) {
+                    CategoryChip(first.userCategory)
+                }
+            }
+            if (activities.size > 1) {
+                Text(
+                    text = "+${activities.size - 1} more",
+                    style = TypographyMeta,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+
+    if (onTap != null) {
+        Card(
+            onClick = onTap,
+            modifier = Modifier.fillMaxWidth(),
+            shape = cardShape,
+            colors = cardColors,
+            elevation = cardElevation,
+            content = content,
+        )
+    } else {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = cardShape,
+            colors = cardColors,
+            elevation = cardElevation,
+            content = content,
+        )
+    }
+}
+
+@Composable
+private fun ActivityCategoryPickerDialog(
+    onSelect: (UserCategory) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.medium,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        ) {
+            Column(modifier = Modifier.padding(24.dp)) {
+                Text(
+                    text = "Categorise activity",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Spacer(Modifier.height(12.dp))
+                listOf(UserCategory.TRAINING, UserCategory.LIFE, UserCategory.RACE).forEach { category ->
+                    TextButton(
+                        onClick = { onSelect(category) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = category.toDisplayLabel(),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.align(Alignment.End),
+                ) {
+                    Text("Cancel")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CategoryChip(category: UserCategory) {
+    Card(
+        shape = MaterialTheme.shapes.small,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Text(
+            text = category.toDisplayLabel(),
+            style = TypographyMeta,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+    }
+}
+
+private fun UserCategory.toDisplayLabel(): String = when (this) {
+    UserCategory.TRAINING -> "Training"
+    UserCategory.LIFE -> "Life"
+    UserCategory.RACE -> "Race"
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 private fun formatSleepMinutes(minutes: Int): String {
     val h = minutes / 60
     val m = minutes % 60
     return if (m == 0) "${h}h" else "${h}h ${m}m"
+}
+
+private fun formatDurationMinutes(minutes: Int): String {
+    val h = minutes / 60
+    val m = minutes % 60
+    return when {
+        h == 0 -> "${m}m"
+        m == 0 -> "${h}h"
+        else   -> "${h}h ${m}m"
+    }
 }

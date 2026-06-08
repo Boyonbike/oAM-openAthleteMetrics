@@ -1,0 +1,48 @@
+package com.athletedata.openAthleteMetrics.data.db
+
+import androidx.room.TypeConverter
+import com.athletedata.openAthleteMetrics.data.model.DataSource
+import com.athletedata.openAthleteMetrics.data.model.MetricType
+import java.time.Instant
+import java.time.LocalDate
+
+/**
+ * Room TypeConverters for all non-primitive domain types.
+ *
+ * Registered at the [AppDatabase] level so they apply to every entity field,
+ * every @Query parameter, and every query result column automatically.
+ */
+class Converters {
+
+    // ── LocalDate ↔ String (ISO-8601: "YYYY-MM-DD") ──────────────────────────
+
+    @TypeConverter
+    fun fromLocalDate(date: LocalDate): String = date.toString()
+
+    @TypeConverter
+    fun toLocalDate(value: String): LocalDate = LocalDate.parse(value)
+
+    // ── Instant ↔ Long (Unix epoch milliseconds) ─────────────────────────────
+
+    @TypeConverter
+    fun fromInstant(instant: Instant): Long = instant.toEpochMilli()
+
+    @TypeConverter
+    fun toInstant(value: Long): Instant = Instant.ofEpochMilli(value)
+
+    // ── MetricType ↔ String ───────────────────────────────────────────────────
+
+    @TypeConverter
+    fun fromMetricType(type: MetricType): String = type.name
+
+    @TypeConverter
+    fun toMetricType(value: String): MetricType = MetricType.valueOf(value)
+
+    // ── DataSource ↔ String ───────────────────────────────────────────────────
+
+    @TypeConverter
+    fun fromDataSource(source: DataSource): String = source.name
+
+    @TypeConverter
+    fun toDataSource(value: String): DataSource = DataSource.valueOf(value)
+}

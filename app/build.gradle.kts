@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.athletedata.app"
+    namespace = "com.athletedata.openAthleteMetrics"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -14,7 +14,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.athletedata.app"
+        applicationId = "com.athletedata.openAthleteMetrics"
         minSdk = 26
         targetSdk = 36
         versionCode = 1

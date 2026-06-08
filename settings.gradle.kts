@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "AthleteDataApp"
+rootProject.name = "openAthleteMetrics"
 include(":app")

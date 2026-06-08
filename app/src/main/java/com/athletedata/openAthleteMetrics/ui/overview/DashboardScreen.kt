@@ -138,8 +138,6 @@ fun DashboardScreen(
 
                 Spacer(Modifier.height(20.dp))
 
-                SectionHeader("Body")
-                Spacer(Modifier.height(8.dp))
                 WeightTile(
                     weightKg = uiState.contextForDate?.weightKg,
                     bodyFatPct = uiState.contextForDate?.bodyFatPct,

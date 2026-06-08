@@ -1,14 +1,8 @@
 package com.athletedata.openAthleteMetrics.ui.nav
 
-import android.widget.Toast
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,7 +12,6 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.Settings
@@ -36,17 +29,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.util.lerp
+import com.athletedata.openAthleteMetrics.ui.components.PillSelector
 import com.athletedata.openAthleteMetrics.ui.dailydetail.DailyDetailScreen
+import com.athletedata.openAthleteMetrics.ui.devices.DevicesScreen
 import com.athletedata.openAthleteMetrics.ui.history.HistoryScreen
 import com.athletedata.openAthleteMetrics.ui.overview.DashboardScreen
 import com.athletedata.openAthleteMetrics.ui.questions.QuestionsScreen
@@ -99,10 +86,11 @@ fun AppTopBar(
                         tint = MaterialTheme.colorScheme.onBackground,
                     )
                 }
-                AnimatedPillSelector(
-                    currentPage = currentPage,
+                PillSelector(
+                    tabs = Page.entries.map { it.label },
+                    selectedIndex = currentPage.ordinal,
                     continuousIndex = continuousIndex,
-                    onNavigate = onNavigate,
+                    onSelect = { onNavigate(Page.entries[it]) },
                     modifier = Modifier.align(Alignment.Center),
                 )
                 IconButton(
@@ -148,78 +136,15 @@ fun AppTopBar(
     }
 }
 
-// ── Animated pill selector ────────────────────────────────────────────────────
-
-@Composable
-private fun AnimatedPillSelector(
-    currentPage: Page,
-    continuousIndex: Float,
-    onNavigate: (Page) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val pages = Page.entries
-    val tabWidths = remember { Array(pages.size) { mutableStateOf(0f) } }
-    val pillColor = MaterialTheme.colorScheme.primary
-
-    Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(50))
-            .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f))
-            .padding(2.dp)
-            .drawBehind {
-                val anim = continuousIndex.coerceIn(0f, pages.lastIndex.toFloat())
-                val lo = anim.toInt().coerceIn(0, pages.lastIndex)
-                val hi = (lo + 1).coerceAtMost(pages.lastIndex)
-                val frac = (anim - lo).coerceIn(0f, 1f)
-
-                val leftOfLo = (0 until lo).sumOf { tabWidths[it].value.toDouble() }.toFloat()
-                val leftOfHi = (0 until hi).sumOf { tabWidths[it].value.toDouble() }.toFloat()
-                val pillLeft = lerp(leftOfLo, leftOfHi, frac)
-                val pillWidth = lerp(tabWidths[lo].value, tabWidths[hi].value, frac)
-
-                drawRoundRect(
-                    color = pillColor,
-                    topLeft = Offset(pillLeft, 0f),
-                    size = Size(pillWidth, size.height),
-                    cornerRadius = CornerRadius(size.height / 2f),
-                )
-            },
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        pages.forEachIndexed { index, page ->
-            val isSelected = page == currentPage
-            val textColor by animateColorAsState(
-                targetValue = if (isSelected) MaterialTheme.colorScheme.onPrimary
-                              else MaterialTheme.colorScheme.onSurfaceVariant,
-                animationSpec = tween(150),
-                label = "tab_color_$index",
-            )
-            Box(
-                modifier = Modifier
-                    .onSizeChanged { tabWidths[index].value = it.width.toFloat() }
-                    .clickable(enabled = !isSelected) { onNavigate(page) }
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = page.label,
-                    style = TypographyMeta,
-                    color = textColor,
-                )
-            }
-        }
-    }
-}
-
 // ── Nav graph ─────────────────────────────────────────────────────────────────
 
 @Composable
 fun AppNavGraph(modifier: Modifier = Modifier) {
     val pagerState = rememberPagerState(pageCount = { Page.entries.size })
     val coroutineScope = rememberCoroutineScope()
-    val context = LocalContext.current
 
     var showSettings by remember { mutableStateOf(false) }
+    var showDevices by remember { mutableStateOf(false) }
     var showDailyDetail by remember { mutableStateOf(false) }
     var pendingQuestionsDate by remember { mutableStateOf<String?>(null) }
     var pendingQuestionsTab by remember { mutableStateOf<String?>(null) }
@@ -240,9 +165,7 @@ fun AppNavGraph(modifier: Modifier = Modifier) {
                 continuousIndex = continuousIndex,
                 onNavigate = navigateTo,
                 onSettingsClick = { showSettings = true },
-                onDevicesClick = {
-                    Toast.makeText(context, "Device connection coming soon", Toast.LENGTH_SHORT).show()
-                },
+                onDevicesClick = { showDevices = true },
             )
             HorizontalPager(
                 state = pagerState,
@@ -295,6 +218,10 @@ fun AppNavGraph(modifier: Modifier = Modifier) {
                     coroutineScope.launch { pagerState.animateScrollToPage(Page.DASHBOARD.ordinal) }
                 },
             )
+        }
+
+        if (showDevices) {
+            DevicesScreen(onNavigateBack = { showDevices = false })
         }
 
         if (showDailyDetail) {

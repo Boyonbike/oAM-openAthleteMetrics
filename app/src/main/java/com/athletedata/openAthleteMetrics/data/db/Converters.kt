@@ -3,6 +3,8 @@ package com.athletedata.openAthleteMetrics.data.db
 import androidx.room.TypeConverter
 import com.athletedata.openAthleteMetrics.data.model.DataSource
 import com.athletedata.openAthleteMetrics.data.model.MetricType
+import com.athletedata.openAthleteMetrics.data.model.SyncStatus
+import com.athletedata.openAthleteMetrics.data.model.UserCategory
 import java.time.Instant
 import java.time.LocalDate
 
@@ -45,4 +47,20 @@ class Converters {
 
     @TypeConverter
     fun toDataSource(value: String): DataSource = DataSource.valueOf(value)
+
+    // ── UserCategory ↔ String (nullable) ─────────────────────────────────────
+
+    @TypeConverter
+    fun fromUserCategory(category: UserCategory?): String? = category?.name
+
+    @TypeConverter
+    fun toUserCategory(value: String?): UserCategory? = value?.let { UserCategory.valueOf(it) }
+
+    // ── SyncStatus ↔ String ───────────────────────────────────────────────────
+
+    @TypeConverter
+    fun fromSyncStatus(status: SyncStatus): String = status.name
+
+    @TypeConverter
+    fun toSyncStatus(value: String): SyncStatus = SyncStatus.valueOf(value)
 }

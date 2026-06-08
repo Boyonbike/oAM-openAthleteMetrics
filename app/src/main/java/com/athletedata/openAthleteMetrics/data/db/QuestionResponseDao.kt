@@ -30,6 +30,9 @@ interface QuestionResponseDao {
     @Query("DELETE FROM question_responses WHERE question_id = :questionId AND date = :date")
     suspend fun deleteResponse(questionId: Long, date: String)
 
+    @Query("DELETE FROM question_responses")
+    suspend fun deleteAll()
+
     @Query(
         """
         SELECT * FROM question_responses

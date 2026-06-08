@@ -20,12 +20,18 @@ interface MetricReadingDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(entities: List<MetricReadingEntity>)
 
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertAllOrIgnore(entities: List<MetricReadingEntity>)
+
     @Delete
     suspend fun delete(entity: MetricReadingEntity)
 
     /** Deletes all readings from a specific source; used for seeder cleanup. */
     @Query("DELETE FROM metric_readings WHERE source = :source")
     suspend fun deleteBySource(source: DataSource)
+
+    @Query("DELETE FROM metric_readings")
+    suspend fun deleteAll()
 
     // ── Reads ─────────────────────────────────────────────────────────────────
 

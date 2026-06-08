@@ -108,7 +108,6 @@ class SeederService @Inject constructor(
         metricRepository.deleteBySource(DataSource.SEEDER)
         onProgress(0.33f)
         sleepRepository.deleteBySource(DataSource.SEEDER)
-        dailyContextRepository.deleteBySource(DataSource.SEEDER)
         onProgress(0.66f)
         dailySummaryRepository.deleteAll()
         onProgress(1.00f)

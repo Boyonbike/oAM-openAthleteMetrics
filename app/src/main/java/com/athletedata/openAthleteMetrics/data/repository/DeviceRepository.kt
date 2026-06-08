@@ -1,0 +1,19 @@
+package com.athletedata.openAthleteMetrics.data.repository
+
+import com.athletedata.openAthleteMetrics.data.model.Device
+import kotlinx.coroutines.flow.Flow
+
+interface DeviceRepository {
+
+    suspend fun upsert(device: Device)
+
+    suspend fun delete(device: Device)
+
+    fun getAllDevices(): Flow<List<Device>>
+
+    suspend fun getDeviceByAddress(bleAddress: String): Device?
+
+    suspend fun updateLastSeen(bleAddress: String, timestampMs: Long)
+
+    suspend fun updateLastSync(bleAddress: String, timestampMs: Long)
+}

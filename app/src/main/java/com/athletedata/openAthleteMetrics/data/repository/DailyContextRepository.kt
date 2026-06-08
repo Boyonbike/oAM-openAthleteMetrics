@@ -1,7 +1,6 @@
 package com.athletedata.openAthleteMetrics.data.repository
 
 import com.athletedata.openAthleteMetrics.data.model.DailyContext
-import com.athletedata.openAthleteMetrics.data.model.DataSource
 import kotlinx.coroutines.flow.Flow
 import java.time.LocalDate
 
@@ -9,7 +8,7 @@ import java.time.LocalDate
  * Contract for user-entered daily context (scores, habits, weight, illness).
  *
  * The Daily Questions screen and Weight sheet call [upsert]. ViewModels call
- * the query methods. The seeder calls [upsert] then [deleteBySource] for cleanup.
+ * the query methods.
  */
 interface DailyContextRepository {
 
@@ -27,12 +26,4 @@ interface DailyContextRepository {
 
     /** One-shot read; used by the seeder to check for existing data before re-seeding. */
     suspend fun getForDateOnce(date: LocalDate): DailyContext?
-
-    /**
-     * Removes context rows for the given [source].
-     *
-     * Because `daily_context` has no source column, [DataSource.SEEDER] maps
-     * to a delete-all; other values are no-ops in the current schema.
-     */
-    suspend fun deleteBySource(source: DataSource)
 }

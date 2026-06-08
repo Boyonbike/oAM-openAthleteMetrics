@@ -4,7 +4,6 @@ import com.athletedata.openAthleteMetrics.data.db.DailyContextDao
 import com.athletedata.openAthleteMetrics.data.db.toEntity
 import com.athletedata.openAthleteMetrics.data.db.toModel
 import com.athletedata.openAthleteMetrics.data.model.DailyContext
-import com.athletedata.openAthleteMetrics.data.model.DataSource
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import timber.log.Timber
@@ -34,13 +33,4 @@ class RoomDailyContextRepository @Inject constructor(
 
     override suspend fun getForDateOnce(date: LocalDate): DailyContext? =
         dao.getContextForDateOnce(date)?.toModel()
-
-    override suspend fun deleteBySource(source: DataSource) {
-        try {
-            if (source == DataSource.SEEDER) dao.deleteAll()
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to delete daily context by source")
-            throw e
-        }
-    }
 }

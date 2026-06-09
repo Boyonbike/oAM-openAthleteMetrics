@@ -17,6 +17,9 @@ interface SyncSessionDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun update(entity: SyncSessionEntity)
 
+    @Query("DELETE FROM sync_sessions WHERE device_id = :deviceId")
+    suspend fun deleteForDevice(deviceId: Long)
+
     @Query("DELETE FROM sync_sessions")
     suspend fun deleteAll()
 

@@ -1,6 +1,10 @@
 package com.athletedata.openAthleteMetrics.data.repository
 
+import androidx.room.withTransaction
+import com.athletedata.openAthleteMetrics.data.db.AppDatabase
 import com.athletedata.openAthleteMetrics.data.db.DeviceDao
+import com.athletedata.openAthleteMetrics.data.db.RawDeviceDataDao
+import com.athletedata.openAthleteMetrics.data.db.SyncSessionDao
 import com.athletedata.openAthleteMetrics.data.db.toEntity
 import com.athletedata.openAthleteMetrics.data.db.toModel
 import com.athletedata.openAthleteMetrics.data.model.Device
@@ -11,12 +15,21 @@ import javax.inject.Singleton
 
 @Singleton
 class RoomDeviceRepository @Inject constructor(
+    private val database: AppDatabase,
     private val dao: DeviceDao,
+    private val syncSessionDao: SyncSessionDao,
+    private val rawDeviceDataDao: RawDeviceDataDao,
 ) : DeviceRepository {
 
     override suspend fun upsert(device: Device) = dao.upsert(device.toEntity())
 
-    override suspend fun delete(device: Device) = dao.delete(device.toEntity())
+    override suspend fun delete(device: Device) {
+        database.withTransaction {
+            rawDeviceDataDao.deleteForDevice(device.id)
+            syncSessionDao.deleteForDevice(device.id)
+            dao.delete(device.toEntity())
+        }
+    }
 
     override fun getAllDevices(): Flow<List<Device>> =
         dao.getAllDevices().map { entities -> entities.map { it.toModel() } }

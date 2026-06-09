@@ -16,6 +16,9 @@ interface RawDeviceDataDao {
     @Query("DELETE FROM raw_device_data WHERE sync_session_id = :syncSessionId")
     suspend fun deleteForSession(syncSessionId: Long)
 
+    @Query("DELETE FROM raw_device_data WHERE sync_session_id IN (SELECT id FROM sync_sessions WHERE device_id = :deviceId)")
+    suspend fun deleteForDevice(deviceId: Long)
+
     @Query("DELETE FROM raw_device_data WHERE received_at < :thresholdMs")
     suspend fun deleteOlderThan(thresholdMs: Long)
 

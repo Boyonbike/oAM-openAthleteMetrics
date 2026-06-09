@@ -8,16 +8,22 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.getValue
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.athletedata.openAthleteMetrics.ble.BleEngine
 import com.athletedata.openAthleteMetrics.data.model.ThemePreference
 import com.athletedata.openAthleteMetrics.ui.nav.AppNavGraph
 import com.athletedata.openAthleteMetrics.ui.settings.SettingsViewModel
 import com.athletedata.openAthleteMetrics.ui.theme.AthleteDataAppTheme
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    @Inject lateinit var bleEngine: BleEngine
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        bleEngine.autoConnectOnStartup()
         enableEdgeToEdge()
         setContent {
             // Observe theme preference at the root so dark/light/system applies immediately.

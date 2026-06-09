@@ -14,6 +14,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *   4 — added is_starred to question_definitions; first 5 lifestyle questions starred by default
  *   5 — unique index on metric_readings(driver_id, metric_type, recorded_at) for BLE deduplication
  *   6 — added activities, devices, sync_sessions, raw_device_data tables for BLE device sync
+ *   7 — added last_battery_pct to devices; battery is device metadata, not a MetricReading
  */
 @Database(
     entities = [
@@ -28,7 +29,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SyncSessionEntity::class,
         RawDeviceDataEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 @TypeConverters(Converters::class)
@@ -221,6 +222,12 @@ abstract class AppDatabase : RoomDatabase() {
                     "CREATE INDEX IF NOT EXISTS `index_activities_driver_id_start_time` " +
                     "ON `activities` (`driver_id`, `start_time`)"
                 )
+            }
+        }
+
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `devices` ADD COLUMN `last_battery_pct` INTEGER")
             }
         }
     }

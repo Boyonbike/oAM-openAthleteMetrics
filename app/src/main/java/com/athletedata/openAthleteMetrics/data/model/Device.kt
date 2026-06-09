@@ -7,4 +7,5 @@ data class Device(
     val displayName: String,
     val lastSeenMs: Long? = null,
     val lastSyncMs: Long? = null,
+    val lastBatteryPct: Int? = null,
 )

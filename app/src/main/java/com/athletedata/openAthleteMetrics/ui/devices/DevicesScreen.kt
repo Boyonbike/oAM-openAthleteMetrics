@@ -87,7 +87,6 @@ fun DevicesScreen(
     val drivers by viewModel.drivers.collectAsStateWithLifecycle()
     val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
-    val batteryLevel by viewModel.batteryLevel.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -206,7 +205,6 @@ fun DevicesScreen(
                                 DeviceCell(
                                     device = device,
                                     connectionState = connectionState,
-                                    batteryLevel = batteryLevel,
                                     onConnect = { viewModel.onDeviceCellTapped(device) },
                                     onSync = viewModel::onSyncTapped,
                                     onLongPress = { deviceToRemove = device },
@@ -361,7 +359,6 @@ private fun AddCell(label: String, sublabel: String? = null, onClick: () -> Unit
 private fun DeviceCell(
     device: Device,
     connectionState: BleConnectionState,
-    batteryLevel: Int?,
     onConnect: () -> Unit,
     onSync: () -> Unit,
     onLongPress: () -> Unit,
@@ -471,22 +468,24 @@ private fun DeviceCell(
             }
         }
 
-        // State C: Connected/Syncing — battery % top-left + disconnect icon top-right
+        // Battery % top-left — always shown when known
+        if (device.lastBatteryPct != null) {
+            Text(
+                text = "${device.lastBatteryPct}%",
+                style = TypographyMeta,
+                color = if (device.lastBatteryPct <= 20)
+                    MaterialTheme.colorScheme.error
+                else
+                    MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = 6.dp, top = 6.dp),
+                maxLines = 1,
+            )
+        }
+
+        // Disconnect icon top-right — only when connected
         if (isActive) {
-            if (batteryLevel != null) {
-                Text(
-                    text = "$batteryLevel%",
-                    style = TypographyMeta,
-                    color = if (batteryLevel <= 20)
-                        MaterialTheme.colorScheme.error
-                    else
-                        MaterialTheme.colorScheme.primary,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(start = 6.dp, top = 6.dp),
-                    maxLines = 1,
-                )
-            }
             IconButton(
                 onClick = onDisconnect,
                 modifier = Modifier

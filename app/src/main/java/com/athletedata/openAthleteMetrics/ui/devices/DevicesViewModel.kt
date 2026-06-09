@@ -66,13 +66,6 @@ class DevicesViewModel @Inject constructor(
             initialValue = BleConnectionState.Idle,
         )
 
-    val batteryLevel: StateFlow<Int?> = bleEngine.batteryLevel
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = null,
-        )
-
     init {
         // CHANGE 1: default to Device tab if either drivers or devices exist
         viewModelScope.launch {
@@ -83,17 +76,6 @@ class DevicesViewModel @Inject constructor(
             }
         }
 
-        // Auto-sync only on Connecting → Connected, not when returning from SyncComplete dismiss
-        viewModelScope.launch {
-            var prev: BleConnectionState = BleConnectionState.Idle
-            connectionState.collect { state ->
-                if (state is BleConnectionState.Connected &&
-                    prev is BleConnectionState.Connecting) {
-                    bleEngine.triggerSync()
-                }
-                prev = state
-            }
-        }
     }
 
     fun onAddDeviceTapped() {

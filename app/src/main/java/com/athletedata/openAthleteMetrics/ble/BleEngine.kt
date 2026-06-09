@@ -23,7 +23,6 @@ import com.athletedata.openAthleteMetrics.ble.sync.DeviceSyncProcessor
 import com.athletedata.openAthleteMetrics.ble.sync.SyncSummary
 import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.DriverSyncResult
-import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import com.athletedata.openAthleteMetrics.data.model.RawPayload
 import com.athletedata.openAthleteMetrics.data.model.SleepSession
@@ -37,6 +36,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import timber.log.Timber
@@ -83,12 +83,35 @@ class BleEngine @Inject constructor(
     private val _connectionState = MutableStateFlow<BleConnectionState>(BleConnectionState.Idle)
     val connectionState: StateFlow<BleConnectionState> = _connectionState.asStateFlow()
 
-    private val _batteryLevel = MutableStateFlow<Int?>(null)
-    val batteryLevel: StateFlow<Int?> = _batteryLevel.asStateFlow()
+    init {
+        // Auto-sync whenever a fresh Connecting → Connected transition occurs,
+        // regardless of whether the Devices screen is open.
+        scope.launch {
+            var prev: BleConnectionState = BleConnectionState.Idle
+            _connectionState.collect { state ->
+                if (state is BleConnectionState.Connected &&
+                    prev is BleConnectionState.Connecting) {
+                    triggerSync()
+                }
+                prev = state
+            }
+        }
+    }
 
     // -------------------------------------------------------------------------
     // Public API
     // -------------------------------------------------------------------------
+
+    fun autoConnectOnStartup() {
+        scope.launch {
+            if (_connectionState.value !is BleConnectionState.Idle) return@launch
+            val devices = deviceRepository.getAllDevices().first()
+            if (devices.isEmpty()) return@launch
+            val device = devices.maxByOrNull { it.lastSyncMs ?: it.lastSeenMs ?: 0L } ?: return@launch
+            val manifest = driverRegistry.allDrivers().find { it.id == device.driverId } ?: return@launch
+            connectToDevice(device.bleAddress, manifest)
+        }
+    }
 
     @SuppressLint("MissingPermission")
     fun connectToDevice(bleAddress: String, manifest: WasmDriverManifest) {
@@ -222,10 +245,6 @@ class BleEngine @Inject constructor(
             pendingSleep.clear()
             pendingActivities.clear()
             pendingRaw.clear()
-            result.metricReadings
-                .filter { it.metricType == MetricType.BATTERY }
-                .maxByOrNull { it.recordedAt }
-                ?.let { _batteryLevel.value = it.value.toInt() }
             val summary = syncProcessor.process(result)
             _connectionState.value = BleConnectionState.SyncComplete(summary, activeDeviceAddress ?: "")
             summary
@@ -292,7 +311,6 @@ class BleEngine @Inject constructor(
         commandIndex = 0
         inSyncCommandNotify = false
         userDisconnecting = false
-        _batteryLevel.value = null
         _connectionState.value = BleConnectionState.Connecting(device.address)
         activeGatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
     }

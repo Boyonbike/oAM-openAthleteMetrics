@@ -5,6 +5,7 @@ import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.Device
 import com.athletedata.openAthleteMetrics.data.model.DriverSyncResult
 import com.athletedata.openAthleteMetrics.data.model.MetricReading
+import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.data.model.SleepSession
 import com.athletedata.openAthleteMetrics.data.model.SyncSession
 import com.athletedata.openAthleteMetrics.data.model.SyncStatus
@@ -72,6 +73,7 @@ class DeviceSyncProcessor @Inject constructor(
             val acceptedReadings = readingResults
                 .filterIsInstance<ValidationResult.Accepted<MetricReading>>()
                 .map { it.item }
+                .filter { it.metricType != MetricType.BATTERY }
             val acceptedSessions = sessionResults
                 .filterIsInstance<ValidationResult.Accepted<SleepSession>>()
                 .map { it.item }
@@ -85,9 +87,10 @@ class DeviceSyncProcessor @Inject constructor(
             activityRepository.insertAll(acceptedActivities)
             rawDeviceDataRepository.insertAll(result.rawPayloads, syncSessionId)
 
-            // g. Compute final counts and status.
+            // g. Compute final counts and status (battery readings are not counted — they go to device metadata).
             val readingsAccepted = acceptedReadings.size
-            val readingsRejected = result.metricReadings.size - readingsAccepted
+            val healthReadingsTotal = result.metricReadings.count { it.metricType != MetricType.BATTERY }
+            val readingsRejected = healthReadingsTotal - readingsAccepted
             val sessionsAccepted = acceptedSessions.size
             val sessionsRejected = result.sleepSessions.size - sessionsAccepted
             val activitiesAccepted = acceptedActivities.size
@@ -114,8 +117,12 @@ class DeviceSyncProcessor @Inject constructor(
                 )
             )
 
-            // i. Stamp the device with the sync time.
+            // i. Stamp the device with the sync time and last known battery.
             deviceRepository.updateLastSync(result.deviceId, result.syncEndedAt.toEpochMilli())
+            result.metricReadings
+                .filter { it.metricType == MetricType.BATTERY }
+                .maxByOrNull { it.recordedAt }
+                ?.let { deviceRepository.updateLastBatteryPct(result.deviceId, it.value.toInt()) }
 
             val rejectionReasons = buildList {
                 readingResults.filterIsInstance<ValidationResult.Rejected<MetricReading>>()

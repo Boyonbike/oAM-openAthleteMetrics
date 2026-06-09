@@ -23,6 +23,8 @@ data class DeviceEntity(
     val lastSeenMs: Long? = null,
     @ColumnInfo(name = "last_sync_ms")
     val lastSyncMs: Long? = null,
+    @ColumnInfo(name = "last_battery_pct")
+    val lastBatteryPct: Int? = null,
 )
 
 // ── Mappers ──────────────────────────────────────────────────────────────────
@@ -34,6 +36,7 @@ fun DeviceEntity.toModel() = Device(
     displayName = displayName,
     lastSeenMs = lastSeenMs,
     lastSyncMs = lastSyncMs,
+    lastBatteryPct = lastBatteryPct,
 )
 
 fun Device.toEntity() = DeviceEntity(
@@ -43,4 +46,5 @@ fun Device.toEntity() = DeviceEntity(
     displayName = displayName,
     lastSeenMs = lastSeenMs,
     lastSyncMs = lastSyncMs,
+    lastBatteryPct = lastBatteryPct,
 )

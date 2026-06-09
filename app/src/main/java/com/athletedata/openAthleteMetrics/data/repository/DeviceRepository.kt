@@ -16,4 +16,6 @@ interface DeviceRepository {
     suspend fun updateLastSeen(bleAddress: String, timestampMs: Long)
 
     suspend fun updateLastSync(bleAddress: String, timestampMs: Long)
+
+    suspend fun updateLastBatteryPct(bleAddress: String, pct: Int)
 }

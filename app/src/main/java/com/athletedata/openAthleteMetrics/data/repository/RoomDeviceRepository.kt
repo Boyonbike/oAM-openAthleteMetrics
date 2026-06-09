@@ -29,4 +29,7 @@ class RoomDeviceRepository @Inject constructor(
 
     override suspend fun updateLastSync(bleAddress: String, timestampMs: Long) =
         dao.updateLastSync(bleAddress, timestampMs)
+
+    override suspend fun updateLastBatteryPct(bleAddress: String, pct: Int) =
+        dao.updateLastBatteryPct(bleAddress, pct)
 }

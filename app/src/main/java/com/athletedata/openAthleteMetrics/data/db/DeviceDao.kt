@@ -27,6 +27,9 @@ interface DeviceDao {
     @Query("UPDATE devices SET last_sync_ms = :timestampMs WHERE ble_address = :bleAddress")
     suspend fun updateLastSync(bleAddress: String, timestampMs: Long)
 
+    @Query("UPDATE devices SET last_battery_pct = :pct WHERE ble_address = :bleAddress")
+    suspend fun updateLastBatteryPct(bleAddress: String, pct: Int)
+
     // ── Reads ─────────────────────────────────────────────────────────────────
 
     @Query("SELECT * FROM devices ORDER BY display_name ASC")

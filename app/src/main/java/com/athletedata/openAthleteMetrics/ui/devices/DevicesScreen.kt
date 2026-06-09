@@ -27,17 +27,18 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Bluetooth
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -86,6 +87,7 @@ fun DevicesScreen(
     val drivers by viewModel.drivers.collectAsStateWithLifecycle()
     val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
+    val batteryLevel by viewModel.batteryLevel.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -93,6 +95,7 @@ fun DevicesScreen(
 
     var errorMessages by remember { mutableStateOf<List<String>?>(null) }
     var driverToDelete by remember { mutableStateOf<WasmDriverManifest?>(null) }
+    var deviceToRemove by remember { mutableStateOf<Device?>(null) }
 
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -108,6 +111,12 @@ fun DevicesScreen(
                 is DriverEvent.ValidationError -> errorMessages = event.errors
                 is DriverEvent.Error -> errorMessages = listOf(event.message)
             }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.snackbarEvents.collect { message ->
+            snackbarHostState.showSnackbar(message)
         }
     }
 
@@ -143,6 +152,23 @@ fun DevicesScreen(
         )
     }
 
+    deviceToRemove?.let { device ->
+        AlertDialog(
+            onDismissRequest = { deviceToRemove = null },
+            title = { Text("Remove device") },
+            text = { Text("Remove ${device.displayName} from saved devices? This does not affect any synced data.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.onRemoveDeviceTapped(device)
+                    deviceToRemove = null
+                }) { Text("Remove") }
+            },
+            dismissButton = {
+                TextButton(onClick = { deviceToRemove = null }) { Text("Cancel") }
+            },
+        )
+    }
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background,
@@ -155,11 +181,10 @@ fun DevicesScreen(
                     onNavigateBack = onNavigateBack,
                 )
 
-                if (connectionState !is BleConnectionState.Idle) {
+                if (connectionState !is BleConnectionState.Idle &&
+                    connectionState !is BleConnectionState.Connected) {
                     BleBanner(
                         state = connectionState,
-                        onSyncTapped = viewModel::onSyncTapped,
-                        onDisconnectTapped = viewModel::onDisconnectTapped,
                         onSyncAcknowledged = viewModel::onSyncAcknowledged,
                         onAddDeviceTapped = viewModel::onAddDeviceTapped,
                         onDisconnectDismissed = viewModel::onDisconnectDismissed,
@@ -178,10 +203,21 @@ fun DevicesScreen(
                     when (selectedTab) {
                         DevicesTab.DEVICE -> {
                             items(sortedDevices, key = { it.id }) { device ->
-                                DeviceCell(device, connectionState)
+                                DeviceCell(
+                                    device = device,
+                                    connectionState = connectionState,
+                                    batteryLevel = batteryLevel,
+                                    onConnect = { viewModel.onDeviceCellTapped(device) },
+                                    onSync = viewModel::onSyncTapped,
+                                    onLongPress = { deviceToRemove = device },
+                                    onDisconnect = viewModel::onDisconnectTapped,
+                                )
                             }
                             item {
-                                AddCell("Add Device") {
+                                AddCell(
+                                    label = "Add Device",
+                                    sublabel = if (sortedDevices.isNotEmpty()) "Multi-device not yet supported" else null,
+                                ) {
                                     when {
                                         !BlePermissionHelper.allGranted(context) ->
                                             blePermissionState.requestPermissions()
@@ -277,7 +313,7 @@ private fun DevicesHeader(
 }
 
 @Composable
-private fun AddCell(label: String, onClick: () -> Unit = {}) {
+private fun AddCell(label: String, sublabel: String? = null, onClick: () -> Unit = {}) {
     Box(
         modifier = Modifier
             .aspectRatio(1f)
@@ -306,15 +342,46 @@ private fun AddCell(label: String, onClick: () -> Unit = {}) {
                 style = TypographyMeta,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (sublabel != null) {
+                Spacer(modifier = Modifier.height(space4))
+                Text(
+                    text = sublabel,
+                    style = TypographyMeta,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = space8),
+                )
+            }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun DeviceCell(device: Device, connectionState: BleConnectionState) {
+private fun DeviceCell(
+    device: Device,
+    connectionState: BleConnectionState,
+    batteryLevel: Int?,
+    onConnect: () -> Unit,
+    onSync: () -> Unit,
+    onLongPress: () -> Unit,
+    onDisconnect: () -> Unit,
+) {
+    val isConnecting = (connectionState as? BleConnectionState.Connecting)?.deviceAddress == device.bleAddress
+    val isActive = when (connectionState) {
+        is BleConnectionState.Connected     -> connectionState.deviceAddress == device.bleAddress
+        is BleConnectionState.Syncing       -> connectionState.deviceAddress == device.bleAddress
+        is BleConnectionState.SyncComplete  -> connectionState.deviceAddress == device.bleAddress
+        else -> false
+    }
+
     Box(
         modifier = Modifier
             .aspectRatio(1f)
+            .combinedClickable(
+                onClick = { if (!isConnecting) { if (isActive) onSync() else onConnect() } },
+                onLongClick = onLongPress,
+            )
             .border(
                 width = 1.dp,
                 color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
@@ -331,10 +398,10 @@ private fun DeviceCell(device: Device, connectionState: BleConnectionState) {
             Icon(
                 imageVector = Icons.Outlined.Bluetooth,
                 contentDescription = null,
-                modifier = Modifier.size(32.dp),
+                modifier = Modifier.size(24.dp),
                 tint = MaterialTheme.colorScheme.onSurface,
             )
-            Spacer(modifier = Modifier.height(space8))
+            Spacer(modifier = Modifier.height(space4))
             Text(
                 text = device.displayName,
                 style = TypographyTitle,
@@ -346,38 +413,93 @@ private fun DeviceCell(device: Device, connectionState: BleConnectionState) {
             )
             Spacer(modifier = Modifier.height(space4))
             Text(
-                text = device.driverId,
+                text = "MAC: ${device.bleAddress}",
                 style = TypographyMeta,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Spacer(modifier = Modifier.height(space4))
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
-                text = if (device.lastSyncMs != null) "Last sync: ${relativeTime(device.lastSyncMs)}"
-                       else "Never synced",
+                text = "Driver: ${device.driverId}",
                 style = TypographyMeta,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = "Last Sync: ${if (device.lastSyncMs != null) relativeTime(device.lastSyncMs) else "Never"}",
+                style = TypographyMeta,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = when {
+                    isConnecting -> "Connecting..."
+                    isActive     -> "Connected"
+                    else         -> "Disconnected"
+                },
+                style = TypographyMeta,
+                color = when {
+                    isConnecting -> MaterialTheme.colorScheme.primary
+                    isActive     -> MaterialTheme.colorScheme.primary
+                    else         -> MaterialTheme.colorScheme.error
+                },
+                textAlign = TextAlign.Center,
+                maxLines = 1,
             )
         }
 
-        val isActive = when (connectionState) {
-            is BleConnectionState.Connected -> connectionState.deviceAddress == device.bleAddress
-            is BleConnectionState.Syncing   -> connectionState.deviceAddress == device.bleAddress
-            else -> false
-        }
-        if (isActive) {
+        // State B: Connecting — scrim + spinner
+        if (isConnecting) {
             Box(
                 modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+                        RoundedCornerShape(CardRadius),
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(32.dp))
+            }
+        }
+
+        // State C: Connected/Syncing — battery % top-left + disconnect icon top-right
+        if (isActive) {
+            if (batteryLevel != null) {
+                Text(
+                    text = "$batteryLevel%",
+                    style = TypographyMeta,
+                    color = if (batteryLevel <= 20)
+                        MaterialTheme.colorScheme.error
+                    else
+                        MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(start = 6.dp, top = 6.dp),
+                    maxLines = 1,
+                )
+            }
+            IconButton(
+                onClick = onDisconnect,
+                modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(4.dp)
-                    .size(8.dp)
-                    .background(MaterialTheme.colorScheme.primary, CircleShape)
-            )
+                    .size(32.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Disconnect",
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.error,
+                )
+            }
         }
     }
 }
@@ -443,8 +565,6 @@ private fun DriverCell(manifest: WasmDriverManifest, onLongPress: () -> Unit) {
 @Composable
 private fun BleBanner(
     state: BleConnectionState,
-    onSyncTapped: () -> Unit,
-    onDisconnectTapped: () -> Unit,
     onSyncAcknowledged: () -> Unit,
     onAddDeviceTapped: () -> Unit,
     onDisconnectDismissed: () -> Unit,
@@ -468,18 +588,6 @@ private fun BleBanner(
                     Text("Connecting...", style = TypographyTitle)
                     Spacer(Modifier.height(space4))
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                }
-                is BleConnectionState.Connected -> {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "Connected · ${state.driverName}",
-                            style = TypographyTitle,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Button(onClick = onSyncTapped) { Text("Sync") }
-                        Spacer(Modifier.width(space4))
-                        TextButton(onClick = onDisconnectTapped) { Text("Disconnect") }
-                    }
                 }
                 is BleConnectionState.Syncing -> {
                     Text("Syncing...", style = TypographyTitle)
@@ -538,7 +646,8 @@ private fun BleBanner(
                         TextButton(onClick = onAddDeviceTapped) { Text("Retry") }
                     }
                 }
-                is BleConnectionState.Idle -> { /* never shown — caller guards !is Idle */ }
+                is BleConnectionState.Idle,
+                is BleConnectionState.Connected -> { /* never shown — caller guards these */ }
             }
         }
     }

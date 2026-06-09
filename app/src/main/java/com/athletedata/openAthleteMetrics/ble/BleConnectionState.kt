@@ -8,7 +8,7 @@ sealed class BleConnectionState {
     data class Connecting(val deviceAddress: String) : BleConnectionState()
     data class Connected(val deviceAddress: String, val driverName: String) : BleConnectionState()
     data class Syncing(val deviceAddress: String, val progress: Float) : BleConnectionState()
-    data class SyncComplete(val summary: SyncSummary) : BleConnectionState()
+    data class SyncComplete(val summary: SyncSummary, val deviceAddress: String) : BleConnectionState()
     data class Disconnected(val deviceAddress: String, val reason: String?) : BleConnectionState()
     data class Error(val message: String) : BleConnectionState()
 }

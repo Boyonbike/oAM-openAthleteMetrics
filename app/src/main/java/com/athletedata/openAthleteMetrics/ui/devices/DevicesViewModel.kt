@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -55,6 +56,9 @@ class DevicesViewModel @Inject constructor(
     private val _driverEvents = Channel<DriverEvent>(Channel.BUFFERED)
     val driverEvents: Flow<DriverEvent> = _driverEvents.receiveAsFlow()
 
+    private val _snackbarEvents = Channel<String>(Channel.BUFFERED)
+    val snackbarEvents: Flow<String> = _snackbarEvents.receiveAsFlow()
+
     val connectionState: StateFlow<BleConnectionState> = bleEngine.connectionState
         .stateIn(
             scope = viewModelScope,
@@ -62,11 +66,66 @@ class DevicesViewModel @Inject constructor(
             initialValue = BleConnectionState.Idle,
         )
 
+    val batteryLevel: StateFlow<Int?> = bleEngine.batteryLevel
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = null,
+        )
+
+    init {
+        // CHANGE 1: default to Device tab if either drivers or devices exist
+        viewModelScope.launch {
+            val hasDrivers = driverRegistry.allDrivers().isNotEmpty()
+            val hasDevices = deviceRepository.getAllDevices().first().isNotEmpty()
+            if (hasDrivers || hasDevices) {
+                _selectedTab.value = DevicesTab.DEVICE
+            }
+        }
+
+        // Auto-sync only on Connecting → Connected, not when returning from SyncComplete dismiss
+        viewModelScope.launch {
+            var prev: BleConnectionState = BleConnectionState.Idle
+            connectionState.collect { state ->
+                if (state is BleConnectionState.Connected &&
+                    prev is BleConnectionState.Connecting) {
+                    bleEngine.triggerSync()
+                }
+                prev = state
+            }
+        }
+    }
+
     fun onAddDeviceTapped() {
         val current = connectionState.value
         if (current is BleConnectionState.Idle || current is BleConnectionState.Error) {
             bleEngine.startScan()
         }
+    }
+
+    fun onDeviceCellTapped(device: Device) {
+        val current = connectionState.value
+        if (current !is BleConnectionState.Idle && current !is BleConnectionState.Error) return
+        val manifest = driverRegistry.allDrivers().find { it.id == device.driverId }
+        if (manifest == null) {
+            viewModelScope.launch {
+                _snackbarEvents.send("Driver '${device.driverId}' not loaded. Add the driver first.")
+            }
+            return
+        }
+        bleEngine.connectToDevice(device.bleAddress, manifest)
+    }
+
+    fun onRemoveDeviceTapped(device: Device) {
+        val current = connectionState.value
+        val isThisDevice = when (current) {
+            is BleConnectionState.Connected  -> current.deviceAddress == device.bleAddress
+            is BleConnectionState.Syncing    -> current.deviceAddress == device.bleAddress
+            is BleConnectionState.Connecting -> current.deviceAddress == device.bleAddress
+            else -> false
+        }
+        if (isThisDevice) bleEngine.disconnect()
+        viewModelScope.launch { deviceRepository.delete(device) }
     }
 
     fun onSyncTapped() {

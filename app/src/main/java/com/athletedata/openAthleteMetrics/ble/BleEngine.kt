@@ -23,6 +23,7 @@ import com.athletedata.openAthleteMetrics.ble.sync.DeviceSyncProcessor
 import com.athletedata.openAthleteMetrics.ble.sync.SyncSummary
 import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.DriverSyncResult
+import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import com.athletedata.openAthleteMetrics.data.model.RawPayload
 import com.athletedata.openAthleteMetrics.data.model.SleepSession
@@ -82,9 +83,24 @@ class BleEngine @Inject constructor(
     private val _connectionState = MutableStateFlow<BleConnectionState>(BleConnectionState.Idle)
     val connectionState: StateFlow<BleConnectionState> = _connectionState.asStateFlow()
 
+    private val _batteryLevel = MutableStateFlow<Int?>(null)
+    val batteryLevel: StateFlow<Int?> = _batteryLevel.asStateFlow()
+
     // -------------------------------------------------------------------------
     // Public API
     // -------------------------------------------------------------------------
+
+    @SuppressLint("MissingPermission")
+    fun connectToDevice(bleAddress: String, manifest: WasmDriverManifest) {
+        val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        val adapter = manager?.adapter
+        if (adapter == null || !adapter.isEnabled) {
+            _connectionState.value = BleConnectionState.Error("Bluetooth is disabled")
+            return
+        }
+        val device = adapter.getRemoteDevice(bleAddress)
+        connect(device, manifest, resetRetries = true)
+    }
 
     @SuppressLint("MissingPermission")
     fun startScan() {
@@ -206,8 +222,12 @@ class BleEngine @Inject constructor(
             pendingSleep.clear()
             pendingActivities.clear()
             pendingRaw.clear()
+            result.metricReadings
+                .filter { it.metricType == MetricType.BATTERY }
+                .maxByOrNull { it.recordedAt }
+                ?.let { _batteryLevel.value = it.value.toInt() }
             val summary = syncProcessor.process(result)
-            _connectionState.value = BleConnectionState.SyncComplete(summary)
+            _connectionState.value = BleConnectionState.SyncComplete(summary, activeDeviceAddress ?: "")
             summary
         } catch (e: Exception) {
             _connectionState.value = BleConnectionState.Error(e.message ?: "Sync failed")
@@ -272,6 +292,7 @@ class BleEngine @Inject constructor(
         commandIndex = 0
         inSyncCommandNotify = false
         userDisconnecting = false
+        _batteryLevel.value = null
         _connectionState.value = BleConnectionState.Connecting(device.address)
         activeGatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
     }
@@ -396,6 +417,7 @@ class BleEngine @Inject constructor(
                 executeNextSyncCommand()
             }
         }
+
     }
 
     // -------------------------------------------------------------------------

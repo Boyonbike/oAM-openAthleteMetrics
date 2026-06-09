@@ -1,5 +1,6 @@
 package com.athletedata.openAthleteMetrics.ble.sync
 
+import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
 import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.Device
 import com.athletedata.openAthleteMetrics.data.model.DriverSyncResult
@@ -25,21 +26,31 @@ class DeviceSyncProcessor @Inject constructor(
     private val syncSessionRepository: SyncSessionRepository,
     private val rawDeviceDataRepository: RawDeviceDataRepository,
     private val deviceRepository: DeviceRepository,
+    private val driverRegistry: DriverRegistry,
     private val validator: SyncValidator,
 ) {
 
     suspend fun process(result: DriverSyncResult): SyncSummary {
-        val device = deviceRepository.getDeviceByAddress(result.deviceId)
-            ?: run {
-                deviceRepository.upsert(
-                    Device(
-                        bleAddress = result.deviceId,
-                        driverId = result.driverId,
-                        displayName = result.deviceId,
-                    )
-                )
-                deviceRepository.getDeviceByAddress(result.deviceId)!!
+        val driverDisplayName = driverRegistry.allDrivers()
+            .find { it.id == result.driverId }
+            ?.displayName ?: result.driverId
+
+        val existing = deviceRepository.getDeviceByAddress(result.deviceId)
+        val device = if (existing != null) {
+            if (existing.displayName != driverDisplayName) {
+                deviceRepository.upsert(existing.copy(displayName = driverDisplayName))
             }
+            existing
+        } else {
+            deviceRepository.upsert(
+                Device(
+                    bleAddress = result.deviceId,
+                    driverId = result.driverId,
+                    displayName = driverDisplayName,
+                )
+            )
+            deviceRepository.getDeviceByAddress(result.deviceId)!!
+        }
 
         // a. Record sync attempt immediately so a mid-sync crash is still visible.
         val syncSessionId = syncSessionRepository.insert(

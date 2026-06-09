@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)   // code-generator for Room + Hilt (replaces KAPT)
     alias(libs.plugins.hilt)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -105,6 +106,14 @@ dependencies {
 
     // ── Timber ─────────────────────────────────────────────────────────────
     implementation(libs.timber)
+
+    // ── Chicory (pure-Java WASM interpreter) ───────────────────────────────
+    // Used for driver sandboxing. Pure-Java — no native .so required.
+    implementation(libs.chicory.runtime)
+
+    // ── kotlinx.serialization ──────────────────────────────────────────────
+    // Used to deserialise driver manifest JSON files into Kotlin data classes.
+    implementation(libs.kotlinx.serialization.json)
 
     // ── Vico charts ────────────────────────────────────────────────────────
     // Compose-native charting library.

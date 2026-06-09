@@ -43,6 +43,12 @@ vico                    = "2.1.2"
 # ── Timber (logging) ─────────────────────────────────────────────────────────
 timber                  = "5.0.1"
 
+# ── Chicory (pure-Java WASM interpreter) ─────────────────────────────────────
+chicory                 = "1.4.0"
+
+# ── kotlinx.serialization ────────────────────────────────────────────────────
+kotlinx-serialization   = "1.8.0"
+
 # ── Testing ──────────────────────────────────────────────────────────────────
 junit                   = "4.13.2"
 junitVersion            = "1.2.1"
@@ -110,6 +116,12 @@ vico-core       = { group = "com.patrykandpatrick.vico", name = "core", version.
 # ── Timber ───────────────────────────────────────────────────────────────────
 timber = { group = "com.jakewharton.timber", name = "timber", version.ref = "timber" }
 
+# ── Chicory ──────────────────────────────────────────────────────────────────
+chicory-runtime = { group = "com.dylibso.chicory", name = "runtime", version.ref = "chicory" }
+
+# ── kotlinx.serialization ────────────────────────────────────────────────────
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+
 # ── Testing ──────────────────────────────────────────────────────────────────
 junit                   = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit          = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
@@ -122,3 +134,4 @@ kotlin-android      = { id = "org.jetbrains.kotlin.android", version.ref = "kotl
 kotlin-compose      = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 ksp                 = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 hilt                = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

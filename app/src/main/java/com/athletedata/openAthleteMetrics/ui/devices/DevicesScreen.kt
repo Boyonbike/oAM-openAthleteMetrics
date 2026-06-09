@@ -1,8 +1,12 @@
 package com.athletedata.openAthleteMetrics.ui.devices
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +30,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.Bluetooth
 import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -33,10 +38,14 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -47,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.athletedata.openAthleteMetrics.ble.BlePermissionHelper
+import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
 import com.athletedata.openAthleteMetrics.ble.rememberBlePermissionState
 import com.athletedata.openAthleteMetrics.data.model.Device
 import com.athletedata.openAthleteMetrics.ui.components.PillSelector
@@ -64,11 +74,60 @@ fun DevicesScreen(
     viewModel: DevicesViewModel = hiltViewModel(),
 ) {
     val devices by viewModel.devices.collectAsStateWithLifecycle()
+    val drivers by viewModel.drivers.collectAsStateWithLifecycle()
     val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val blePermissionState = rememberBlePermissionState()
+
+    var errorMessages by remember { mutableStateOf<List<String>?>(null) }
+    var driverToDelete by remember { mutableStateOf<WasmDriverManifest?>(null) }
+
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri -> uri?.let { viewModel.onDriverFileSelected(it) } }
+
+    LaunchedEffect(Unit) {
+        viewModel.driverEvents.collect { event ->
+            when (event) {
+                is DriverEvent.ValidationError -> errorMessages = event.errors
+                is DriverEvent.Error -> errorMessages = listOf(event.message)
+            }
+        }
+    }
+
+    errorMessages?.let { errors ->
+        AlertDialog(
+            onDismissRequest = { errorMessages = null },
+            title = { Text("Driver Error") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    errors.forEach { Text(it, style = TypographyMeta) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { errorMessages = null }) { Text("OK") }
+            },
+        )
+    }
+
+    driverToDelete?.let { manifest ->
+        AlertDialog(
+            onDismissRequest = { driverToDelete = null },
+            title = { Text("Remove Driver") },
+            text = { Text("Remove \"${manifest.displayName}\"? This cannot be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteDriver(manifest.id)
+                    driverToDelete = null
+                }) { Text("Remove") }
+            },
+            dismissButton = {
+                TextButton(onClick = { driverToDelete = null }) { Text("Cancel") }
+            },
+        )
+    }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -113,7 +172,15 @@ fun DevicesScreen(
                             }
                         }
                         DevicesTab.DRIVER -> {
-                            item { AddCell("Add Driver") }
+                            items(drivers, key = { it.id }) { driver ->
+                                DriverCell(
+                                    manifest = driver,
+                                    onLongPress = { driverToDelete = driver },
+                                )
+                            }
+                            item {
+                                AddCell("Add Driver") { filePicker.launch("*/*") }
+                            }
                         }
                     }
                 }
@@ -265,12 +332,13 @@ private fun DeviceCell(device: Device) {
     }
 }
 
-@Suppress("unused")
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun DriverCell(displayName: String, id: String, version: String) {
+private fun DriverCell(manifest: WasmDriverManifest, onLongPress: () -> Unit) {
     Box(
         modifier = Modifier
             .aspectRatio(1f)
+            .combinedClickable(onLongClick = onLongPress, onClick = {})
             .border(
                 width = 1.dp,
                 color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
@@ -292,7 +360,7 @@ private fun DriverCell(displayName: String, id: String, version: String) {
             )
             Spacer(modifier = Modifier.height(space8))
             Text(
-                text = displayName,
+                text = manifest.displayName,
                 style = TypographyTitle,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
@@ -302,7 +370,7 @@ private fun DriverCell(displayName: String, id: String, version: String) {
             )
             Spacer(modifier = Modifier.height(space4))
             Text(
-                text = id,
+                text = manifest.id,
                 style = TypographyMeta,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -311,7 +379,7 @@ private fun DriverCell(displayName: String, id: String, version: String) {
             )
             Spacer(modifier = Modifier.height(space4))
             Text(
-                text = version,
+                text = manifest.version,
                 style = TypographyMeta,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,

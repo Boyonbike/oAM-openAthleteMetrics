@@ -1,6 +1,9 @@
 package com.athletedata.openAthleteMetrics.data.model
 
+import kotlinx.serialization.Serializable
+
 /** The physiological or activity metric that a [MetricReading] represents. */
+@Serializable
 enum class MetricType {
     HR,               // heart rate (bpm)
     HRV,              // heart rate variability (ms)

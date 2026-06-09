@@ -3,6 +3,8 @@ package com.athletedata.openAthleteMetrics.ui.devices
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.athletedata.openAthleteMetrics.ble.BleConnectionState
+import com.athletedata.openAthleteMetrics.ble.BleEngine
 import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
 import com.athletedata.openAthleteMetrics.ble.driver.DriverStorage
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
@@ -34,6 +36,7 @@ class DevicesViewModel @Inject constructor(
     private val deviceRepository: DeviceRepository,
     private val driverStorage: DriverStorage,
     private val driverRegistry: DriverRegistry,
+    private val bleEngine: BleEngine,
 ) : ViewModel() {
 
     val devices: StateFlow<List<Device>> = deviceRepository.getAllDevices()
@@ -51,6 +54,31 @@ class DevicesViewModel @Inject constructor(
 
     private val _driverEvents = Channel<DriverEvent>(Channel.BUFFERED)
     val driverEvents: Flow<DriverEvent> = _driverEvents.receiveAsFlow()
+
+    val connectionState: StateFlow<BleConnectionState> = bleEngine.connectionState
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = BleConnectionState.Idle,
+        )
+
+    fun onAddDeviceTapped() {
+        val current = connectionState.value
+        if (current is BleConnectionState.Idle || current is BleConnectionState.Error) {
+            bleEngine.startScan()
+        }
+    }
+
+    fun onSyncTapped() {
+        if (connectionState.value !is BleConnectionState.Connected) return
+        viewModelScope.launch { bleEngine.triggerSync() }
+    }
+
+    fun onDisconnectTapped() { bleEngine.disconnect() }
+
+    fun onSyncAcknowledged() { bleEngine.acknowledgeSyncComplete() }
+
+    fun onDisconnectDismissed() { bleEngine.resetToIdle() }
 
     fun selectTab(tab: DevicesTab) {
         _selectedTab.value = tab

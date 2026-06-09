@@ -23,6 +23,18 @@
     <uses-feature android:name="android.hardware.bluetooth_le"
         android:required="true" />
 
+    <!-- API 26–28: broad external storage read -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
+    <!-- API 29–32: scoped storage — no permission needed for
+         file picker via SAF; no declaration required -->
+
+    <!-- API 33+: granular media permissions not needed for
+         .json files via SAF file picker; no declaration
+         required -->
+
     <application
         android:name=".AthleteDataApplication"
         android:allowBackup="true"

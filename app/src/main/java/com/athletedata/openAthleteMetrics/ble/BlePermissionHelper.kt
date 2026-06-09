@@ -21,6 +21,17 @@ object BlePermissionHelper {
             ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
         }
 
+    fun storagePermissionsRequired(): Boolean =
+        Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
+
+    fun storagePermissionGranted(context: Context): Boolean =
+        if (storagePermissionsRequired())
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.READ_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED
+        else true  // API 29+: SAF handles access, no permission needed
+
     // Called only after allGranted() returns true, so BLUETOOTH_CONNECT is held on API 31+.
     @SuppressLint("MissingPermission")
     fun isBluetoothEnabled(context: Context): Boolean {

@@ -1,5 +1,6 @@
 package com.athletedata.openAthleteMetrics.ui.devices
 
+import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
@@ -20,10 +22,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -31,8 +35,12 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.Bluetooth
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -55,6 +63,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.athletedata.openAthleteMetrics.ble.BleConnectionState
 import com.athletedata.openAthleteMetrics.ble.BlePermissionHelper
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
 import com.athletedata.openAthleteMetrics.ble.rememberBlePermissionState
@@ -65,8 +74,8 @@ import com.athletedata.openAthleteMetrics.ui.theme.TypographyMeta
 import com.athletedata.openAthleteMetrics.ui.theme.TypographyTitle
 import com.athletedata.openAthleteMetrics.ui.theme.space4
 import com.athletedata.openAthleteMetrics.ui.theme.space8
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import timber.log.Timber
 
 @Composable
 fun DevicesScreen(
@@ -76,6 +85,7 @@ fun DevicesScreen(
     val devices by viewModel.devices.collectAsStateWithLifecycle()
     val drivers by viewModel.drivers.collectAsStateWithLifecycle()
     val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
+    val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -87,6 +97,10 @@ fun DevicesScreen(
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri -> uri?.let { viewModel.onDriverFileSelected(it) } }
+
+    val storagePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> if (granted) filePicker.launch("*/*") }
 
     LaunchedEffect(Unit) {
         viewModel.driverEvents.collect { event ->
@@ -141,6 +155,17 @@ fun DevicesScreen(
                     onNavigateBack = onNavigateBack,
                 )
 
+                if (selectedTab == DevicesTab.DEVICE && connectionState !is BleConnectionState.Idle) {
+                    BleBanner(
+                        state = connectionState,
+                        onSyncTapped = viewModel::onSyncTapped,
+                        onDisconnectTapped = viewModel::onDisconnectTapped,
+                        onSyncAcknowledged = viewModel::onSyncAcknowledged,
+                        onAddDeviceTapped = viewModel::onAddDeviceTapped,
+                        onDisconnectDismissed = viewModel::onDisconnectDismissed,
+                    )
+                }
+
                 val sortedDevices = remember(devices) { devices.sortedBy { it.displayName } }
 
                 LazyVerticalGrid(
@@ -148,12 +173,12 @@ fun DevicesScreen(
                     contentPadding = PaddingValues(space8),
                     verticalArrangement = Arrangement.spacedBy(space8),
                     horizontalArrangement = Arrangement.spacedBy(space8),
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.weight(1f),
                 ) {
                     when (selectedTab) {
                         DevicesTab.DEVICE -> {
                             items(sortedDevices, key = { it.id }) { device ->
-                                DeviceCell(device)
+                                DeviceCell(device, connectionState)
                             }
                             item {
                                 AddCell("Add Device") {
@@ -166,7 +191,7 @@ fun DevicesScreen(
                                                     "Please enable Bluetooth to add a device"
                                                 )
                                             }
-                                        else -> Timber.d("BLE ready")
+                                        else -> viewModel.onAddDeviceTapped()
                                     }
                                 }
                             }
@@ -179,7 +204,17 @@ fun DevicesScreen(
                                 )
                             }
                             item {
-                                AddCell("Add Driver") { filePicker.launch("*/*") }
+                                AddCell("Add Driver") {
+                                    if (BlePermissionHelper.storagePermissionsRequired() &&
+                                        !BlePermissionHelper.storagePermissionGranted(context)
+                                    ) {
+                                        storagePermissionLauncher.launch(
+                                            Manifest.permission.READ_EXTERNAL_STORAGE
+                                        )
+                                    } else {
+                                        filePicker.launch("*/*")
+                                    }
+                                }
                             }
                         }
                     }
@@ -276,7 +311,7 @@ private fun AddCell(label: String, onClick: () -> Unit = {}) {
 }
 
 @Composable
-private fun DeviceCell(device: Device) {
+private fun DeviceCell(device: Device, connectionState: BleConnectionState) {
     Box(
         modifier = Modifier
             .aspectRatio(1f)
@@ -327,6 +362,21 @@ private fun DeviceCell(device: Device) {
                 textAlign = TextAlign.Center,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        val isActive = when (connectionState) {
+            is BleConnectionState.Connected -> connectionState.deviceAddress == device.bleAddress
+            is BleConnectionState.Syncing   -> connectionState.deviceAddress == device.bleAddress
+            else -> false
+        }
+        if (isActive) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp)
+                    .size(8.dp)
+                    .background(MaterialTheme.colorScheme.primary, CircleShape)
             )
         }
     }
@@ -386,6 +436,110 @@ private fun DriverCell(manifest: WasmDriverManifest, onLongPress: () -> Unit) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+    }
+}
+
+@Composable
+private fun BleBanner(
+    state: BleConnectionState,
+    onSyncTapped: () -> Unit,
+    onDisconnectTapped: () -> Unit,
+    onSyncAcknowledged: () -> Unit,
+    onAddDeviceTapped: () -> Unit,
+    onDisconnectDismissed: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = space8, vertical = space4),
+        shape = RoundedCornerShape(CardRadius),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(space8)) {
+            when (state) {
+                is BleConnectionState.Scanning -> {
+                    Text("Scanning for devices...", style = TypographyTitle)
+                    Spacer(Modifier.height(space4))
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                is BleConnectionState.Connecting -> {
+                    Text("Connecting...", style = TypographyTitle)
+                    Spacer(Modifier.height(space4))
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                is BleConnectionState.Connected -> {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "Connected · ${state.driverName}",
+                            style = TypographyTitle,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Button(onClick = onSyncTapped) { Text("Sync") }
+                        Spacer(Modifier.width(space4))
+                        TextButton(onClick = onDisconnectTapped) { Text("Disconnect") }
+                    }
+                }
+                is BleConnectionState.Syncing -> {
+                    Text("Syncing...", style = TypographyTitle)
+                    Spacer(Modifier.height(space4))
+                    LinearProgressIndicator(
+                        progress = { state.progress },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                is BleConnectionState.SyncComplete -> {
+                    val s = state.summary
+                    val totalRejected = s.readingsRejected + s.sessionsRejected + s.activitiesRejected
+                    Text("Sync complete", style = TypographyTitle, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(space4))
+                    Text(
+                        "${s.readingsAccepted} readings · ${s.sessionsAccepted} sessions · ${s.activitiesAccepted} activities",
+                        style = TypographyMeta,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (totalRejected > 0) {
+                        Spacer(Modifier.height(space4))
+                        Text(
+                            "($totalRejected items skipped)",
+                            style = TypographyMeta,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    Spacer(Modifier.height(space4))
+                    TextButton(
+                        onClick = onSyncAcknowledged,
+                        modifier = Modifier.align(Alignment.End),
+                    ) { Text("Dismiss") }
+                }
+                is BleConnectionState.Disconnected -> {
+                    Text("Disconnected", style = TypographyTitle)
+                    if (state.reason != null) {
+                        Text(
+                            state.reason,
+                            style = TypographyMeta,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    LaunchedEffect(state) {
+                        delay(3_000)
+                        onDisconnectDismissed()
+                    }
+                }
+                is BleConnectionState.Error -> {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            state.message,
+                            style = TypographyMeta,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = onAddDeviceTapped) { Text("Retry") }
+                    }
+                }
+                is BleConnectionState.Idle -> { /* never shown — caller guards !is Idle */ }
+            }
         }
     }
 }

@@ -173,6 +173,12 @@ class BleEngine @Inject constructor(
         pendingMetrics += driverRegistry.parseMetrics(manifest, characteristicUuid, bytes)
         driverRegistry.parseSleep(manifest, characteristicUuid, bytes)?.let { pendingSleep += it }
         driverRegistry.parseActivity(manifest, characteristicUuid, bytes)?.let { pendingActivities += it }
+        if (!driverRegistry.isWasmLoaded(manifest)) {
+            _connectionState.value = BleConnectionState.Error(
+                "Driver '${manifest.displayName}' WASM failed to initialise"
+            )
+            return
+        }
         pendingRaw += RawPayload(
             characteristicUuid = characteristicUuid,
             payload = bytes,
@@ -304,7 +310,11 @@ class BleEngine @Inject constructor(
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
             scope.launch {
-                Timber.d("BleEngine: MTU=$mtu status=$status, discovering services")
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    Timber.w("BleEngine: MTU negotiation failed status=$status, proceeding with default MTU")
+                } else {
+                    Timber.d("BleEngine: MTU=$mtu, discovering services")
+                }
                 gatt.discoverServices()
             }
         }
@@ -376,6 +386,12 @@ class BleEngine @Inject constructor(
             status: Int,
         ) {
             scope.launch {
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    Timber.w(
+                        "BleEngine: write to ${characteristic.uuid} failed status=$status — " +
+                            "sync command skipped, device may not stream data"
+                    )
+                }
                 commandIndex++
                 executeNextSyncCommand()
             }

@@ -1,11 +1,13 @@
 package com.athletedata.openAthleteMetrics.data.repository
 
+import androidx.work.WorkManager
 import com.athletedata.openAthleteMetrics.data.db.ActivityDao
 import com.athletedata.openAthleteMetrics.data.db.toEntity
 import com.athletedata.openAthleteMetrics.data.db.toModel
 import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.DataSource
 import com.athletedata.openAthleteMetrics.data.model.UserCategory
+import com.athletedata.openAthleteMetrics.worker.enqueueSummaryWorker
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import java.time.LocalDate
@@ -16,12 +18,21 @@ import javax.inject.Singleton
 @Singleton
 class RoomActivityRepository @Inject constructor(
     private val dao: ActivityDao,
+    private val workManager: WorkManager,
 ) : ActivityRepository {
 
-    override suspend fun insert(activity: Activity) = dao.insert(activity.toEntity())
+    override suspend fun insert(activity: Activity) {
+        dao.insert(activity.toEntity())
+        enqueueSummaryWorker(activity.startTime.atZone(ZoneOffset.UTC).toLocalDate(), workManager)
+    }
 
-    override suspend fun insertAll(activities: List<Activity>) =
+    override suspend fun insertAll(activities: List<Activity>) {
         dao.insertAll(activities.map { it.toEntity() })
+        activities
+            .map { it.startTime.atZone(ZoneOffset.UTC).toLocalDate() }
+            .distinct()
+            .forEach { date -> enqueueSummaryWorker(date, workManager) }
+    }
 
     override suspend fun deleteBySource(source: DataSource) = dao.deleteBySource(source)
 

@@ -155,7 +155,7 @@ fun DevicesScreen(
                     onNavigateBack = onNavigateBack,
                 )
 
-                if (selectedTab == DevicesTab.DEVICE && connectionState !is BleConnectionState.Idle) {
+                if (connectionState !is BleConnectionState.Idle) {
                     BleBanner(
                         state = connectionState,
                         onSyncTapped = viewModel::onSyncTapped,

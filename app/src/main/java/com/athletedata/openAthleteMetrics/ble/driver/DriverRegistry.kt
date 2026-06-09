@@ -16,6 +16,7 @@ class DriverRegistry @Inject constructor(
 ) {
     private val _drivers = CopyOnWriteArrayList<WasmDriverManifest>()
     private var wasmLoadedId: String? = null
+    private val _failedDriverIds = mutableSetOf<String>()
 
     fun initialiseDrivers() {
         driverStorage.loadAllDrivers().forEach { register(it) }
@@ -25,6 +26,11 @@ class DriverRegistry @Inject constructor(
     fun register(manifest: WasmDriverManifest) {
         _drivers.removeIf { it.id == manifest.id }
         _drivers.add(manifest)
+        _failedDriverIds.remove(manifest.id)
+        if (wasmLoadedId == manifest.id) {
+            wasmEngine.unload()
+            wasmLoadedId = null
+        }
     }
 
     fun unregister(driverId: String) {
@@ -36,6 +42,8 @@ class DriverRegistry @Inject constructor(
     }
 
     fun allDrivers(): List<WasmDriverManifest> = _drivers.toList()
+
+    fun isWasmLoaded(manifest: WasmDriverManifest): Boolean = wasmLoadedId == manifest.id
 
     fun resolve(
         deviceName: String?,
@@ -58,7 +66,7 @@ class DriverRegistry @Inject constructor(
         characteristicUuid: String,
         data: ByteArray,
     ): List<MetricReading> {
-        ensureWasmLoaded(manifest)
+        if (!ensureWasmLoaded(manifest)) return emptyList()
         return wasmEngine.parseMetrics(characteristicUuid, data, manifest.id)
     }
 
@@ -67,7 +75,7 @@ class DriverRegistry @Inject constructor(
         characteristicUuid: String,
         data: ByteArray,
     ): SleepSession? {
-        ensureWasmLoaded(manifest)
+        if (!ensureWasmLoaded(manifest)) return null
         return wasmEngine.parseSleep(characteristicUuid, data, manifest.id)
     }
 
@@ -76,14 +84,20 @@ class DriverRegistry @Inject constructor(
         characteristicUuid: String,
         data: ByteArray,
     ): Activity? {
-        ensureWasmLoaded(manifest)
+        if (!ensureWasmLoaded(manifest)) return null
         return wasmEngine.parseActivity(characteristicUuid, data, manifest.id)
     }
 
-    private fun ensureWasmLoaded(manifest: WasmDriverManifest) {
-        if (wasmLoadedId != manifest.id) {
-            wasmEngine.load(manifest)
+    private fun ensureWasmLoaded(manifest: WasmDriverManifest): Boolean {
+        if (wasmLoadedId == manifest.id) return true
+        if (manifest.id in _failedDriverIds) return false
+        return if (wasmEngine.load(manifest)) {
             wasmLoadedId = manifest.id
+            true
+        } else {
+            Timber.e("DriverRegistry: WASM load failed for driver '${manifest.id}'")
+            _failedDriverIds.add(manifest.id)
+            false
         }
     }
 }

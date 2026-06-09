@@ -1,6 +1,5 @@
 package com.athletedata.openAthleteMetrics.ble.driver
 
-import com.athletedata.openAthleteMetrics.ble.wasm.JsonDriverEngine
 import com.athletedata.openAthleteMetrics.ble.wasm.WasmDriverEngine
 import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.MetricReading
@@ -14,7 +13,6 @@ import javax.inject.Singleton
 class DriverRegistry @Inject constructor(
     private val driverStorage: DriverStorage,
     private val wasmEngine: WasmDriverEngine,
-    private val jsonEngine: JsonDriverEngine,
 ) {
     private val _drivers = CopyOnWriteArrayList<WasmDriverManifest>()
     private var wasmLoadedId: String? = null
@@ -59,37 +57,27 @@ class DriverRegistry @Inject constructor(
         manifest: WasmDriverManifest,
         characteristicUuid: String,
         data: ByteArray,
-    ): List<MetricReading> = when (val parsing = manifest.parsing) {
-        is ParsingConfig.JsonParsing ->
-            jsonEngine.parseMetrics(characteristicUuid, data, parsing.rules, manifest.id)
-        is ParsingConfig.WasmParsing -> {
-            ensureWasmLoaded(manifest)
-            wasmEngine.parseMetrics(characteristicUuid, data, manifest.id)
-        }
+    ): List<MetricReading> {
+        ensureWasmLoaded(manifest)
+        return wasmEngine.parseMetrics(characteristicUuid, data, manifest.id)
     }
 
     fun parseSleep(
         manifest: WasmDriverManifest,
         characteristicUuid: String,
         data: ByteArray,
-    ): SleepSession? = when (manifest.parsing) {
-        is ParsingConfig.WasmParsing -> {
-            ensureWasmLoaded(manifest)
-            wasmEngine.parseSleep(characteristicUuid, data, manifest.id)
-        }
-        else -> null
+    ): SleepSession? {
+        ensureWasmLoaded(manifest)
+        return wasmEngine.parseSleep(characteristicUuid, data, manifest.id)
     }
 
     fun parseActivity(
         manifest: WasmDriverManifest,
         characteristicUuid: String,
         data: ByteArray,
-    ): Activity? = when (manifest.parsing) {
-        is ParsingConfig.WasmParsing -> {
-            ensureWasmLoaded(manifest)
-            wasmEngine.parseActivity(characteristicUuid, data, manifest.id)
-        }
-        else -> null
+    ): Activity? {
+        ensureWasmLoaded(manifest)
+        return wasmEngine.parseActivity(characteristicUuid, data, manifest.id)
     }
 
     private fun ensureWasmLoaded(manifest: WasmDriverManifest) {

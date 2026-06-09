@@ -8,8 +8,8 @@ import kotlinx.serialization.Serializable
  * Top-level in-memory representation of a driver manifest file.
  *
  * Each driver is a single `.json` file on device storage. The file must conform to the
- * schema documented in `app/src/main/assets/drivers/example_simple.json` (JSON-mode) and
- * `example_wasm.json` (WASM-mode). Use [ManifestValidator.validate] before trusting any field.
+ * schema documented in `app/src/main/assets/drivers/example_wasm.json`.
+ * Use [ManifestValidator.validate] before trusting any field.
  */
 @Serializable
 data class WasmDriverManifest(

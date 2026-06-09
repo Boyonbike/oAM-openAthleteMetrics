@@ -32,12 +32,6 @@ class ManifestValidator {
         }
 
         when (val parsing = manifest.parsing) {
-            is ParsingConfig.JsonParsing -> {
-                if (parsing.rules.isEmpty()) {
-                    errors += "parsing.rules must not be empty for JSON-mode drivers"
-                }
-            }
-
             is ParsingConfig.WasmParsing -> {
                 if (parsing.wasmBytes.size < WASM_MAGIC.size ||
                     !parsing.wasmBytes.copyOf(WASM_MAGIC.size).contentEquals(WASM_MAGIC)

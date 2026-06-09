@@ -1,5 +1,8 @@
 # BLE Device Driver Authoring Guide
 
+> All drivers use WASM mode for parsing. A driver is a single `.json` file
+> containing device configuration and an embedded WASM binary.
+
 This document contains everything needed to write a device driver for the app —
 either as a human developer or as an AI given a device protocol document alongside
 this guide.
@@ -54,13 +57,9 @@ until the user taps **Sync**.
 
 Every incoming BLE notification is routed through the driver's parsing logic.
 
-- **JSON mode** — the app's `JsonDriverEngine` walks the `parsing.rules` array,
-  finds rules matching the characteristic and packet identifier byte, and extracts
-  field values using byte offsets and scaling.
-
-- **WASM mode** — the app's `WasmDriverEngine` calls the exported WASM functions
-  with the raw bytes. The WASM module writes JSON output into shared linear memory.
-  The app reads and deserialises that JSON into the standard model objects.
+The app's `WasmDriverEngine` calls the exported WASM functions with the raw bytes.
+The WASM module writes JSON output into shared linear memory. The app reads and
+deserialises that JSON into the standard model objects.
 
 Parsing errors never crash the app or abort a sync. A bad packet is logged and
 skipped. The rest of the sync continues.
@@ -215,79 +214,7 @@ enters Connected state and the app begins accumulating notification data.
 
 ---
 
-### The `parsing` Block — JSON Mode
-
-Use JSON mode when **all** of the following are true:
-
-- Every metric fits in a single BLE packet
-- No encryption or obfuscation
-- No stateful parsing (no rolling counters, delta encoding, or session tokens)
-- Each field is at a fixed byte offset with simple optional scaling
-
-```json
-"parsing": {
-  "mode": "JSON",
-  "rules": [
-    {
-      "characteristic": "notify",
-      "match": {
-        "byte": 0,
-        "value": "0x04"
-      },
-      "fields": [
-        {
-          "metric": "HR",
-          "byteOffset": 1,
-          "byteLength": 1,
-          "signed": false,
-          "unit": "bpm"
-        },
-        {
-          "metric": "BATTERY",
-          "byteOffset": 2,
-          "byteLength": 1,
-          "signed": false,
-          "scale": 1.0,
-          "unit": "%"
-        }
-      ]
-    }
-  ]
-}
-```
-
-**Rule fields:**
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `characteristic` | string | yes | Role name from `ble.characteristics` that carries this packet. |
-| `match.byte` | int | yes | Index into the payload to check for packet identification. |
-| `match.value` | string | yes | Expected hex value at that byte index, e.g. `"0x04"`. |
-| `fields` | array | yes | List of values to extract from a matching packet. |
-
-**Field extraction fields:**
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `metric` | string | yes | MetricType name (see supported values above). |
-| `byteOffset` | int | yes | Byte index of the value in the payload (0-based). |
-| `byteLength` | int | yes | Number of bytes to read (1, 2, or 4). |
-| `signed` | bool | yes | Whether to interpret the bytes as a signed integer. |
-| `scale` | float | no | Multiply the raw integer by this value. Omit if no scaling needed. |
-| `unit` | string | yes | Output unit string, e.g. `"bpm"`, `"ms"`, `"%"`. |
-
-Multi-byte values are read little-endian.
-
----
-
-### The `parsing` Block — WASM Mode
-
-Use WASM mode when **any** of the following are true:
-
-- Multi-packet assembly is required for any metric
-- Encryption or obfuscation is present
-- Stateful parsing is required (counters, deltas, session tokens)
-- Logic more complex than a single byte match is needed
+### The `parsing` Block
 
 ```json
 "parsing": {
@@ -450,48 +377,7 @@ Signal "no activity data" by returning `0` or writing `{}`.
 
 ---
 
-## Complete Examples
-
-### JSON Mode Driver (simple heart rate band)
-
-```json
-{
-  "id": "example_hr_band_v1",
-  "displayName": "Example HR Band",
-  "version": "1.0.0",
-  "author": "example-author",
-  "supportedMetrics": ["HR", "BATTERY"],
-  "ble": {
-    "matchByName": "ExampleHR",
-    "matchByServiceUuid": "0000fee0-0000-1000-8000-00805f9b34fb",
-    "matchConfidence": "CERTAIN",
-    "services": ["0000fee0-0000-1000-8000-00805f9b34fb"],
-    "characteristics": {
-      "notify": "0000fee1-0000-1000-8000-00805f9b34fb",
-      "write":  "0000fee2-0000-1000-8000-00805f9b34fb"
-    }
-  },
-  "syncCommands": [
-    { "type": "WRITE", "characteristic": "write", "bytes": "0x01 0xAB 0x00" },
-    { "type": "DELAY", "millis": 200 }
-  ],
-  "parsing": {
-    "mode": "JSON",
-    "rules": [
-      {
-        "characteristic": "notify",
-        "match": { "byte": 0, "value": "0x04" },
-        "fields": [
-          { "metric": "HR",      "byteOffset": 1, "byteLength": 1, "signed": false, "unit": "bpm" },
-          { "metric": "BATTERY", "byteOffset": 2, "byteLength": 1, "signed": false, "unit": "%" }
-        ]
-      }
-    ]
-  }
-}
-```
-
-### WASM Mode Driver (complex device with multi-packet parsing)
+## Complete Example
 
 ```json
 {
@@ -541,9 +427,9 @@ is rejected entirely with an error message shown to the user.
 | `supportedMetrics` not empty | Must contain at least one valid MetricType value |
 | `ble.services` not empty | Must list at least one service UUID |
 | At least one match field | `matchByName` or `matchByServiceUuid` must be present |
-| JSON mode: `rules` not empty | Must have at least one parse rule |
-| WASM mode: valid magic header | First 4 bytes of the decoded WASM binary must be `0x00 0x61 0x73 0x6D` |
-| WASM mode: `exports.parseMetrics` not blank | The metrics export name must be specified |
+| `parsing.mode` | Must be `"WASM"` |
+| `parsing.wasmBase64` | Must decode to a valid WASM binary (magic header check: first 4 bytes must be `0x00 0x61 0x73 0x6D`) |
+| `exports.parseMetrics` | Must not be blank |
 
 ---
 
@@ -556,10 +442,9 @@ is rejected entirely with an error message shown to the user.
 - [ ] `matchConfidence` is `CERTAIN` only if name + UUID uniquely identify this device
 - [ ] All `syncCommands` use role names that exist in `ble.characteristics`
 - [ ] No proprietary score metrics included in `supportedMetrics`
-- [ ] JSON mode: every rule has a `match` condition that uniquely identifies the packet type
-- [ ] WASM mode: binary starts with `0x00 0x61 0x73 0x6D` (valid WASM magic header)
-- [ ] WASM mode: `parse_metrics` (or your chosen export name) is exported from the module
-- [ ] WASM mode: output JSON conforms to the schemas in this document
+- [ ] WASM binary starts with `0x00 0x61 0x73 0x6D` (valid WASM magic header)
+- [ ] `parse_metrics` (or your chosen export name) is exported from the module
+- [ ] Output JSON conforms to the schemas in this document
 - [ ] Driver file loads without validation errors in the app
 - [ ] At least one metric appears on the Dashboard after syncing
 

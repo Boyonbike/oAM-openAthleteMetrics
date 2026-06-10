@@ -17,6 +17,9 @@ interface SleepSessionDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entity: SleepSessionEntity)
 
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertOrIgnore(entity: SleepSessionEntity): Long
+
     @Delete
     suspend fun delete(entity: SleepSessionEntity)
 

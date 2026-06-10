@@ -20,8 +20,8 @@ interface MetricRepository {
     /** Batch insert — preferred for device sync or seeder writes. */
     suspend fun insertAll(readings: List<MetricReading>)
 
-    /** Batch insert from BLE device — skips duplicates instead of overwriting. */
-    suspend fun insertAllFromDevice(readings: List<MetricReading>)
+    /** Batch insert from BLE device — skips duplicates; returns count of skipped rows. */
+    suspend fun insertAllFromDevice(readings: List<MetricReading>): Int
 
     /** Inserts a reading and forces source = MANUAL and createdAt = now. */
     suspend fun insertManual(reading: MetricReading)

@@ -41,10 +41,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.TopAppBar
 import com.athletedata.openAthleteMetrics.ui.components.LoadingState
 import com.athletedata.openAthleteMetrics.ui.components.SectionHeader
-import com.athletedata.openAthleteMetrics.ui.nav.AppTopBar
-import com.athletedata.openAthleteMetrics.ui.nav.Page
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -53,9 +56,7 @@ import java.time.format.DateTimeFormatter
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DailyQuestionsScreen(
-    onNavigate: (Page) -> Unit,
-    onSettingsClick: () -> Unit,
-    onDevicesClick: () -> Unit,
+    onNavigateBack: () -> Unit,
     onNavigateToDate: (LocalDate) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: DailyQuestionsViewModel = hiltViewModel(),
@@ -77,14 +78,17 @@ fun DailyQuestionsScreen(
         modifier = modifier,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            AppTopBar(
-                currentPage = Page.QUESTIONS,
-                continuousIndex = Page.QUESTIONS.ordinal.toFloat(),
-                subtitle = questionsState.date.format(DateTimeFormatter.ofPattern("EEE, d MMM")),
-                onSubtitleClick = { showDatePicker = true },
-                onSettingsClick = onSettingsClick,
-                onDevicesClick = onDevicesClick,
-                onNavigate = onNavigate,
+            TopAppBar(
+                title = {
+                    TextButton(onClick = { showDatePicker = true }) {
+                        Text(questionsState.date.format(DateTimeFormatter.ofPattern("EEE, d MMM")))
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onNavigateBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
             )
         },
     ) { innerPadding ->

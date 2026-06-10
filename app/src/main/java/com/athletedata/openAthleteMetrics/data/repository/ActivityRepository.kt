@@ -12,6 +12,9 @@ interface ActivityRepository {
 
     suspend fun insertAll(activities: List<Activity>)
 
+    /** Batch insert from BLE device using insert-or-ignore. Returns count of rows already existing (skipped). */
+    suspend fun insertAllFromDevice(activities: List<Activity>): Int
+
     suspend fun deleteBySource(source: DataSource)
 
     suspend fun updateCategory(id: Long, category: UserCategory)

@@ -194,7 +194,12 @@ fun DevicesScreen(
 
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
-                    contentPadding = PaddingValues(space8),
+                    contentPadding = PaddingValues(
+                        start = space8,
+                        top = space8,
+                        end = space8,
+                        bottom = space8 + 80.dp,
+                    ),
                     verticalArrangement = Arrangement.spacedBy(space8),
                     horizontalArrangement = Arrangement.spacedBy(space8),
                     modifier = Modifier.weight(1f),
@@ -598,6 +603,7 @@ private fun BleBanner(
                 }
                 is BleConnectionState.SyncComplete -> {
                     val s = state.summary
+                    val totalSkipped  = s.readingsSkipped + s.sessionsSkipped + s.activitiesSkipped
                     val totalRejected = s.readingsRejected + s.sessionsRejected + s.activitiesRejected
                     Text("Sync complete", style = TypographyTitle, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(space4))
@@ -606,10 +612,18 @@ private fun BleBanner(
                         style = TypographyMeta,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if (totalSkipped > 0) {
+                        Spacer(Modifier.height(space4))
+                        Text(
+                            "$totalSkipped already up to date",
+                            style = TypographyMeta,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     if (totalRejected > 0) {
                         Spacer(Modifier.height(space4))
                         Text(
-                            "($totalRejected items skipped)",
+                            "($totalRejected items rejected)",
                             style = TypographyMeta,
                             color = MaterialTheme.colorScheme.error,
                         )

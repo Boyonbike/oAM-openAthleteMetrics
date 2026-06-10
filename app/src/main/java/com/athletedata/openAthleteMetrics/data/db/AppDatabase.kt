@@ -15,6 +15,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *   5 — unique index on metric_readings(driver_id, metric_type, recorded_at) for BLE deduplication
  *   6 — added activities, devices, sync_sessions, raw_device_data tables for BLE device sync
  *   7 — added last_battery_pct to devices; battery is device metadata, not a MetricReading
+ *   8 — unique dedup index on sleep_sessions(driver_id, date); index on activities(driver_id, start_time) made unique
  */
 @Database(
     entities = [
@@ -29,7 +30,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SyncSessionEntity::class,
         RawDeviceDataEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 @TypeConverters(Converters::class)
@@ -228,6 +229,20 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_6_7 = object : Migration(6, 7) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE `devices` ADD COLUMN `last_battery_pct` INTEGER")
+            }
+        }
+
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_sleep_sessions_dedup " +
+                    "ON sleep_sessions(driver_id, date)"
+                )
+                db.execSQL("DROP INDEX IF EXISTS index_activities_driver_id_start_time")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_activities_dedup " +
+                    "ON activities(driver_id, start_time)"
+                )
             }
         }
     }

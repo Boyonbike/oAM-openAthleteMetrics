@@ -136,10 +136,13 @@ class DeviceSyncProcessor @Inject constructor(
             return SyncSummary(
                 readingsAccepted = readingsAccepted,
                 readingsRejected = readingsRejected,
+                readingsSkipped = 0,
                 sessionsAccepted = sessionsAccepted,
                 sessionsRejected = sessionsRejected,
+                sessionsSkipped = 0,
                 activitiesAccepted = activitiesAccepted,
                 activitiesRejected = activitiesRejected,
+                activitiesSkipped = 0,
                 rejectionReasons = rejectionReasons,
                 finalStatus = finalStatus,
             )

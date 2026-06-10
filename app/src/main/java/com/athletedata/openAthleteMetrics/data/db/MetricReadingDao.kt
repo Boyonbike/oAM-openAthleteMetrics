@@ -21,7 +21,7 @@ interface MetricReadingDao {
     suspend fun insertAll(entities: List<MetricReadingEntity>)
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun insertAllOrIgnore(entities: List<MetricReadingEntity>)
+    suspend fun insertAllOrIgnore(entities: List<MetricReadingEntity>): List<Long>
 
     @Delete
     suspend fun delete(entity: MetricReadingEntity)

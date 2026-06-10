@@ -82,6 +82,33 @@ Validation rules applied to every metric reading:
 - Unit must not be blank
 - Metric type must be a known value
 
+The app never overwrites existing data. All three data types (metric readings,
+sleep sessions, activities) use insert-or-ignore behaviour — if a record with the
+same device and timestamp already exists in the database, the incoming record is
+silently skipped. This means:
+- Drivers should return all available data on every sync without tracking what
+  has already been sent
+- Re-syncing the same data repeatedly is safe and has no side effects
+- Historical data and current data are treated identically — send everything,
+  the app handles deduplication
+
+## Deduplication
+
+The app deduplicates incoming data using these keys:
+
+| Data type       | Deduplication key                                   |
+|-----------------|-----------------------------------------------------|
+| Metric readings | `driver_id` + `metric_type` + `recorded_at` (ms)   |
+| Sleep sessions  | `driver_id` + `date` (ISO date of morning after)   |
+| Activities      | `driver_id` + `start_time` (ms)                    |
+
+Two records are considered duplicates if all key fields match. A duplicate is
+silently skipped — it is never an error.
+
+The `driver_id` used for deduplication is the `id` field from the manifest. Data
+from two drivers with different ids will never conflict even if their timestamps
+overlap.
+
 ### 6. Display
 
 Parsed data appears on the Dashboard and History screens. The app never interprets
@@ -315,6 +342,10 @@ Unknown keys are ignored by the app — you can include extra fields for debuggi
 | `confidence` | float | no | Signal quality 0.0–1.0 if available. Null otherwise. |
 | `metaJson` | string | no | Any device-specific extra data as a JSON string. Null otherwise. |
 
+> **Deduplication:** `recordedAtMs` is part of the deduplication key. Use the exact
+> timestamp from the device — do not round or normalise, as this would prevent correct
+> deduplication.
+
 An empty array `[]` is valid and equivalent to returning `0`.
 
 **parseSleep** — writes a single JSON object or nothing:
@@ -336,6 +367,10 @@ An empty array `[]` is valid and equivalent to returning `0`.
 | `sleepEndMs` | int64 | yes | Unix epoch ms when sleep ended. |
 | `durationMinutes` | int | yes | Total sleep duration in minutes. |
 | `stagesJson` | string | no | JSON array of stage objects: `[{"stage":"DEEP","startMs":...,"endMs":...}]`. Valid stage values: `DEEP`, `LIGHT`, `REM`, `AWAKE`. Null if device does not provide stage breakdown. |
+
+> **Deduplication:** `dateIso` is part of the deduplication key. One sleep session per
+> date per driver is stored. If the device reports multiple sessions for the same night,
+> only the first received is kept.
 
 Signal "no sleep data" by returning `0` or writing `{}`.
 
@@ -372,6 +407,9 @@ Signal "no sleep data" by returning `0` or writing `{}`.
 | `distanceMeters` | float | no | Distance in metres. Null if not available. |
 | `steps` | int | no | Steps during this activity. Null if not available. |
 | `hrZonesJson` | string | no | HR zone breakdown: `[{"zone":1,"seconds":120},...]`. Null if not available. |
+
+> **Deduplication:** `startTimeMs` is part of the deduplication key. Use the exact
+> start timestamp from the device.
 
 Signal "no activity data" by returning `0` or writing `{}`.
 
@@ -447,6 +485,9 @@ is rejected entirely with an error message shown to the user.
 - [ ] Output JSON conforms to the schemas in this document
 - [ ] Driver file loads without validation errors in the app
 - [ ] At least one metric appears on the Dashboard after syncing
+- [ ] Timestamps are exact device values — not rounded, truncated, or normalised
+- [ ] Driver has been tested by syncing twice in a row — second sync should show
+      all records as "already up to date" with no duplicates created
 
 ---
 

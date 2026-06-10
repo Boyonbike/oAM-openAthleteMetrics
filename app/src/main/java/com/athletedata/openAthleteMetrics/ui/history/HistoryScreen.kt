@@ -88,6 +88,9 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import com.athletedata.openAthleteMetrics.ui.nav.LocalBottomNavScrollBehavior
+import com.athletedata.openAthleteMetrics.ui.nav.rememberBottomNavNestedScrollConnection
 
 private val DATE_FORMATTER_LONG  = DateTimeFormatter.ofPattern("d MMM yyyy")
 private val DATE_FORMATTER_SHORT = DateTimeFormatter.ofPattern("d MMM")
@@ -118,6 +121,8 @@ fun HistoryScreen(
     val today = remember { LocalDate.now() }
     var showDatePicker    by remember { mutableStateOf(false) }
     var showOverlaySheet  by remember { mutableStateOf(false) }
+    val scrollBehavior = LocalBottomNavScrollBehavior.current
+    val nestedScrollConnection = rememberBottomNavNestedScrollConnection(scrollBehavior)
 
     Scaffold(
         modifier = modifier,
@@ -136,8 +141,10 @@ fun HistoryScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .nestedScroll(nestedScrollConnection)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .padding(bottom = 80.dp),
         ) {
             HistoryChart(
                 allSeries     = seriesList.map { it.entries },

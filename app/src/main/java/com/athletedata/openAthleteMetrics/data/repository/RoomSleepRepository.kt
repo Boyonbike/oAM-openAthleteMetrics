@@ -30,6 +30,18 @@ class RoomSleepRepository @Inject constructor(
         }
     }
 
+    override suspend fun insertFromDevice(session: SleepSession): Int {
+        try {
+            val rowId = dao.insertOrIgnore(
+                session.copy(source = DataSource.DEVICE).toEntity()
+            )
+            return if (rowId == -1L) 1 else 0
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to insert device sleep session")
+            throw e
+        }
+    }
+
     override fun getSessionForDate(date: LocalDate): Flow<SleepSession?> =
         dao.getSessionForDate(date).map { it?.toModel() }
 

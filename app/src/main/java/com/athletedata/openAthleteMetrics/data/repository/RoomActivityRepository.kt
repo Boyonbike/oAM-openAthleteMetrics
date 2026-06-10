@@ -34,6 +34,11 @@ class RoomActivityRepository @Inject constructor(
             .forEach { date -> enqueueSummaryWorker(date, workManager) }
     }
 
+    override suspend fun insertAllFromDevice(activities: List<Activity>): Int {
+        val rowIds = dao.insertAllOrIgnore(activities.map { it.copy(source = DataSource.DEVICE).toEntity() })
+        return rowIds.count { it == -1L }
+    }
+
     override suspend fun deleteBySource(source: DataSource) = dao.deleteBySource(source)
 
     override suspend fun updateCategory(id: Long, category: UserCategory) =

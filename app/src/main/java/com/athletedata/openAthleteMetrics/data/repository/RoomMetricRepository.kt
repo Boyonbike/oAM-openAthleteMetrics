@@ -46,13 +46,12 @@ class RoomMetricRepository @Inject constructor(
         }
     }
 
-    override suspend fun insertAllFromDevice(readings: List<MetricReading>) {
+    override suspend fun insertAllFromDevice(readings: List<MetricReading>): Int {
         try {
-            dao.insertAllOrIgnore(readings.map { it.copy(source = DataSource.DEVICE).toEntity() })
-            readings
-                .map { it.recordedAt.toLocalDate() }
-                .distinct()
-                .forEach { date -> enqueueSummaryWorker(date, workManager) }
+            val rowIds = dao.insertAllOrIgnore(
+                readings.map { it.copy(source = DataSource.DEVICE).toEntity() }
+            )
+            return rowIds.count { it == -1L }
         } catch (e: Exception) {
             Timber.e(e, "Failed to batch-insert device metric readings")
             throw e

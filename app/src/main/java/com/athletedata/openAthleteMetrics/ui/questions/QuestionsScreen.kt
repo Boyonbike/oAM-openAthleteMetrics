@@ -76,6 +76,9 @@ import androidx.compose.foundation.layout.navigationBars
 import com.athletedata.openAthleteMetrics.ui.theme.TypographyMeta
 import com.athletedata.openAthleteMetrics.ui.theme.TypographyTitle
 import kotlinx.coroutines.launch
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import com.athletedata.openAthleteMetrics.ui.nav.LocalBottomNavScrollBehavior
+import com.athletedata.openAthleteMetrics.ui.nav.rememberBottomNavNestedScrollConnection
 
 private val DATE_FORMATTER = DateTimeFormatter.ofPattern("d MMM yyyy")
 
@@ -100,6 +103,8 @@ fun QuestionsScreen(
     // null = sheet closed; non-null = editing that item (create uses a sentinel with id = -1)
     var showAddSheet by remember { mutableStateOf(false) }
     var editingItem by remember { mutableStateOf<QuestionItem?>(null) }
+    val scrollBehavior = LocalBottomNavScrollBehavior.current
+    val nestedScrollConnection = rememberBottomNavNestedScrollConnection(scrollBehavior)
 
     LaunchedEffect(Unit) {
         viewModel.errors.collect { snackbarHostState.showSnackbar(it) }
@@ -136,7 +141,8 @@ fun QuestionsScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
+                .padding(innerPadding)
+                .nestedScroll(nestedScrollConnection),
         ) {
             // ── Tab selector with inline action icons ─────────────────────────
             Box(
@@ -198,7 +204,8 @@ fun QuestionsScreen(
                     .weight(1f)
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .padding(bottom = 80.dp),
             ) {
                 when (selectedTab) {
                     Tab.LIFESTYLE -> {

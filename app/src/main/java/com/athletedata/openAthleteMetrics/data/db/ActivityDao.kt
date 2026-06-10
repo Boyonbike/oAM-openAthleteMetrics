@@ -19,6 +19,9 @@ interface ActivityDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(entities: List<ActivityEntity>)
 
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertAllOrIgnore(entities: List<ActivityEntity>): List<Long>
+
     @Query("DELETE FROM activities WHERE source = :source")
     suspend fun deleteBySource(source: DataSource)
 

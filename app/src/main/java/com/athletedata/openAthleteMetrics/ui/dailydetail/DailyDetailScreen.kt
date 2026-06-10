@@ -44,6 +44,9 @@ import com.athletedata.openAthleteMetrics.data.model.UserCategory
 import com.athletedata.openAthleteMetrics.ui.components.SectionHeader
 import com.athletedata.openAthleteMetrics.ui.theme.TypographyMeta
 import com.athletedata.openAthleteMetrics.ui.theme.TypographyTitle
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import com.athletedata.openAthleteMetrics.ui.nav.LocalBottomNavScrollBehavior
+import com.athletedata.openAthleteMetrics.ui.nav.rememberBottomNavNestedScrollConnection
 import java.time.format.DateTimeFormatter
 
 private val DATE_HEADER_FORMATTER = DateTimeFormatter.ofPattern("EEEE d MMMM")
@@ -131,12 +134,16 @@ private fun SuccessContent(
     innerPadding: PaddingValues,
     onActivityTap: (ActivityUiItem) -> Unit,
 ) {
+    val scrollBehavior = LocalBottomNavScrollBehavior.current
+    val nestedScrollConnection = rememberBottomNavNestedScrollConnection(scrollBehavior)
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(innerPadding)
+            .nestedScroll(nestedScrollConnection)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(bottom = 80.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         WearableSection(summary = state.summary, sleep = state.sleep)

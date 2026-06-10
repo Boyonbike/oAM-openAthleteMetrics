@@ -167,7 +167,8 @@ fun SettingsScreen(
                 .padding(innerPadding)
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .padding(bottom = 80.dp),
         ) {
             // ── Section 1: Theme ──────────────────────────────────────────────
             SectionHeader("Theme")

@@ -1,10 +1,5 @@
 package com.athletedata.openAthleteMetrics.ui.overview
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.WindowInsets
@@ -21,8 +16,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import com.athletedata.openAthleteMetrics.ui.nav.LocalBottomNavScrollBehavior
+import com.athletedata.openAthleteMetrics.ui.nav.rememberBottomNavNestedScrollConnection
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.KeyboardArrowLeft
 import androidx.compose.material.icons.outlined.KeyboardArrowRight
@@ -96,8 +93,9 @@ fun DashboardScreen(
     viewModel: OverviewViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val showCheckinBanner by viewModel.showCheckinBanner.collectAsStateWithLifecycle()
     val activities by viewModel.activities.collectAsStateWithLifecycle()
+    val scrollBehavior = LocalBottomNavScrollBehavior.current
+    val nestedScrollConnection = rememberBottomNavNestedScrollConnection(scrollBehavior)
     val snackbarHostState = remember { SnackbarHostState() }
     val today = remember { LocalDate.now() }
     var showDatePicker by remember { mutableStateOf(false) }
@@ -125,13 +123,15 @@ fun DashboardScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
+                .padding(innerPadding)
+                .nestedScroll(nestedScrollConnection),
         ) {
             Column(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
+                    .padding(bottom = 80.dp)
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
                 Row(
@@ -201,17 +201,6 @@ fun DashboardScreen(
                 }
 
                 Spacer(Modifier.height(24.dp))
-            }
-
-            AnimatedVisibility(
-                visible = showCheckinBanner,
-                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
-            ) {
-                CheckinReminderBanner(
-                    onOpen = { onNavigateToQuestions(uiState.date) },
-                    onDismiss = viewModel::dismissCheckinBanner,
-                )
             }
         }
     }
@@ -845,59 +834,6 @@ private fun DashboardWeightSheet(
                 enabled = weightKg.toDoubleOrNull() != null,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Save") }
-        }
-    }
-}
-
-// ── Check-in reminder banner ──────────────────────────────────────────────────
-
-@Composable
-private fun CheckinReminderBanner(
-    onOpen: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    Card(
-        onClick = onOpen,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Daily check-in not completed",
-                    style = TypographyTitle,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                    text = "Lifestyle · Habits",
-                    style = TypographyMeta,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            TextButton(onClick = onOpen) {
-                Text(
-                    text = "Open →",
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-            IconButton(onClick = onDismiss) {
-                Icon(
-                    imageVector = Icons.Outlined.Close,
-                    contentDescription = "Dismiss check-in reminder",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
         }
     }
 }

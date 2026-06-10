@@ -16,6 +16,9 @@ interface SleepRepository {
     /** Inserts or replaces the sleep session. Source must be set by the caller. */
     suspend fun insert(session: SleepSession)
 
+    /** Inserts a device sleep session using insert-or-ignore. Returns 1 if already existed, 0 if newly inserted. */
+    suspend fun insertFromDevice(session: SleepSession): Int
+
     /** Live stream of the session for a given night (keyed by morning date), or null. */
     fun getSessionForDate(date: LocalDate): Flow<SleepSession?>
 

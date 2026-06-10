@@ -16,7 +16,6 @@ import com.athletedata.openAthleteMetrics.data.repository.MetricRepository
 import com.athletedata.openAthleteMetrics.data.repository.QuestionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -88,8 +87,6 @@ class OverviewViewModel @Inject constructor(
     private val _errors = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val errors: SharedFlow<String> = _errors.asSharedFlow()
 
-    private val _dismissedForSession = MutableStateFlow(false)
-
     val uiState: StateFlow<OverviewUiState> = globalAppState.selectedDate
         .flatMapLatest { date ->
             val sparklineFrom = date.minusDays(6)
@@ -159,25 +156,8 @@ class OverviewViewModel @Inject constructor(
             initialValue = emptyList(),
         )
 
-    val showCheckinBanner: StateFlow<Boolean> = combine(
-        uiState,
-        _dismissedForSession,
-    ) { state, dismissed ->
-        !dismissed && !state.isLoading &&
-            state.date == LocalDate.now() &&
-            !state.hasAnyQuestionsAnswered
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = false,
-    )
-
     fun setDate(date: LocalDate) {
         globalAppState.setDate(date)
-    }
-
-    fun dismissCheckinBanner() {
-        _dismissedForSession.value = true
     }
 
     fun setActivityCategory(activityId: Long, category: UserCategory) {

@@ -2,6 +2,7 @@ package com.athletedata.openAthleteMetrics.data.db
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.athletedata.openAthleteMetrics.data.model.DataSource
 import com.athletedata.openAthleteMetrics.data.model.SleepSession
@@ -15,7 +16,10 @@ import java.time.LocalDate
  * column holds a JSON array of stage blocks rather than individual rows,
  * keeping dashboard queries simple.
  */
-@Entity(tableName = "sleep_sessions")
+@Entity(
+    tableName = "sleep_sessions",
+    indices = [Index(value = ["driver_id", "date"], unique = true)],
+)
 data class SleepSessionEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,

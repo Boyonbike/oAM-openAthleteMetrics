@@ -26,10 +26,24 @@ interface SyncSessionDao {
     @Query("DELETE FROM sync_sessions")
     suspend fun deleteAll()
 
-    @Query("UPDATE sync_sessions SET status = 'FAILED' WHERE status = 'PARTIAL' AND started_at < :cutoffMs")
+    @Query("UPDATE sync_sessions SET status = 'FAILED' WHERE status = 'PARTIAL' AND ended_at IS NULL AND started_at < :cutoffMs")
     suspend fun markOldPartialsAsFailed(cutoffMs: Long)
 
     // ── Reads ─────────────────────────────────────────────────────────────────
+
+    @Query("SELECT * FROM sync_sessions WHERE id = :id")
+    suspend fun getById(id: Long): SyncSessionEntity?
+
+    @Query(
+        """
+        SELECT * FROM sync_sessions
+        WHERE status = 'PARTIAL'
+          AND ended_at IS NULL
+          AND started_at >= :cutoffMs
+        ORDER BY started_at DESC
+        """
+    )
+    suspend fun getRecentPartial(cutoffMs: Long): List<SyncSessionEntity>
 
     @Query(
         """

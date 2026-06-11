@@ -69,6 +69,7 @@ import com.athletedata.openAthleteMetrics.ble.BlePermissionHelper
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
 import com.athletedata.openAthleteMetrics.ble.rememberBlePermissionState
 import com.athletedata.openAthleteMetrics.data.model.Device
+import com.athletedata.openAthleteMetrics.data.model.SyncSession
 import com.athletedata.openAthleteMetrics.ui.components.PillSelector
 import com.athletedata.openAthleteMetrics.ui.theme.CardRadius
 import com.athletedata.openAthleteMetrics.ui.theme.TypographyMeta
@@ -89,6 +90,7 @@ fun DevicesScreen(
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val reprocessState by viewModel.reprocessState.collectAsStateWithLifecycle()
     val reprocessingDeviceId by viewModel.reprocessingDeviceId.collectAsStateWithLifecycle()
+    val recoverySessions by viewModel.recoverySessions.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -99,6 +101,7 @@ fun DevicesScreen(
     var deviceToRemove by remember { mutableStateOf<Device?>(null) }
     var deviceToShowActions by remember { mutableStateOf<Device?>(null) }
     var deviceToReprocess by remember { mutableStateOf<Device?>(null) }
+    var showEarlySyncWarning by remember { mutableStateOf(false) }
 
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -195,6 +198,23 @@ fun DevicesScreen(
         )
     }
 
+    if (showEarlySyncWarning) {
+        AlertDialog(
+            onDismissRequest = { showEarlySyncWarning = false },
+            title = { Text("Sync may be incomplete") },
+            text = { Text("The device may still be sending data. Syncing now may result in incomplete data.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showEarlySyncWarning = false
+                    viewModel.onSyncTapped()
+                }) { Text("Sync anyway") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEarlySyncWarning = false }) { Text("Wait") }
+            },
+        )
+    }
+
     deviceToReprocess?.let { device ->
         AlertDialog(
             onDismissRequest = { deviceToReprocess = null },
@@ -241,6 +261,13 @@ fun DevicesScreen(
                     )
                 }
 
+                recoverySessions.forEach { session ->
+                    RecoveryBanner(
+                        session = session,
+                        onRecover = { viewModel.onRecoverSessionTapped(session.id) },
+                    )
+                }
+
                 val sortedDevices = remember(devices) { devices.sortedBy { it.displayName } }
 
                 LazyVerticalGrid(
@@ -264,7 +291,17 @@ fun DevicesScreen(
                                     reprocessState = reprocessState,
                                     isReprocessingThisDevice = reprocessingDeviceId == device.id,
                                     onConnect = { viewModel.onDeviceCellTapped(device) },
-                                    onSync = viewModel::onSyncTapped,
+                                    onSync = {
+                                        val state = connectionState
+                                        if (state is BleConnectionState.Connected &&
+                                            state.deviceAddress == device.bleAddress &&
+                                            state.packetsReceived > 0 &&
+                                            !state.isQuiescent) {
+                                            showEarlySyncWarning = true
+                                        } else {
+                                            viewModel.onSyncTapped()
+                                        }
+                                    },
                                     onLongPress = { deviceToShowActions = device },
                                     onDisconnect = viewModel::onDisconnectTapped,
                                 )
@@ -431,6 +468,8 @@ private fun DeviceCell(
         is BleConnectionState.SyncComplete  -> connectionState.deviceAddress == device.bleAddress
         else -> false
     }
+    val streamState = (connectionState as? BleConnectionState.Connected)
+        ?.takeIf { it.deviceAddress == device.bleAddress }
 
     Box(
         modifier = Modifier
@@ -511,6 +550,23 @@ private fun DeviceCell(
                 textAlign = TextAlign.Center,
                 maxLines = 1,
             )
+            if (streamState != null && streamState.packetsReceived > 0) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = if (streamState.isQuiescent)
+                        "Ready to sync — ${streamState.packetsReceived} packets received"
+                    else
+                        "Receiving data... ${streamState.packetsReceived} packets",
+                    style = TypographyMeta,
+                    color = if (streamState.isQuiescent)
+                        MaterialTheme.colorScheme.primary
+                    else
+                        MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
 
         // State B: Connecting — scrim + spinner
@@ -632,6 +688,34 @@ private fun DriverCell(manifest: WasmDriverManifest, onLongPress: () -> Unit) {
 }
 
 @Composable
+private fun RecoveryBanner(session: SyncSession, onRecover: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = space8, vertical = space4),
+        shape = RoundedCornerShape(CardRadius),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(space8),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Sync interrupted ${relativeTime(session.startedAt.toEpochMilli())}. Tap to complete it from saved data.",
+                style = TypographyMeta,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(modifier = Modifier.width(space8))
+            TextButton(onClick = onRecover) { Text("Recover") }
+        }
+    }
+}
+
+@Composable
 private fun BleBanner(
     state: BleConnectionState,
     onSyncAcknowledged: () -> Unit,
@@ -668,30 +752,28 @@ private fun BleBanner(
                 }
                 is BleConnectionState.SyncComplete -> {
                     val s = state.summary
-                    val totalNew = s.readingsInserted + s.sessionsInserted + s.activitiesInserted
-                    val totalSkipped = s.readingsSkipped + s.activitiesSkipped
-                    val totalRejected = s.readingsRejected + s.sessionsRejected + s.activitiesRejected
-                    val title = if (totalNew == 0) "Already up to date" else "Sync complete"
-                    val subtitle = when {
-                        totalNew == 0 -> null
-                        totalSkipped == 0 -> "$totalNew records imported"
-                        else -> "$totalNew new records, $totalSkipped already up to date"
-                    }
-                    Text(title, style = TypographyTitle, fontWeight = FontWeight.Bold)
-                    if (subtitle != null) {
+                    val newCount = s.newRecordsInserted + s.accumulatorUpdates +
+                        s.sessionsInserted + s.activitiesInserted
+                    val hasNew = newCount > 0
+                    Text(
+                        if (hasNew) "Sync complete" else "Already up to date",
+                        style = TypographyTitle,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    if (hasNew) {
                         Spacer(Modifier.height(space4))
                         Text(
-                            subtitle,
+                            "$newCount new records",
                             style = TypographyMeta,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    if (totalRejected > 0) {
+                    if (state.summary.syncedBeforeQuiescence) {
                         Spacer(Modifier.height(space4))
                         Text(
-                            "($totalRejected items rejected)",
+                            "(early sync)",
                             style = TypographyMeta,
-                            color = MaterialTheme.colorScheme.error,
+                            color = MaterialTheme.colorScheme.tertiary,
                         )
                     }
                     Spacer(Modifier.height(space4))
@@ -724,6 +806,23 @@ private fun BleBanner(
                         )
                         TextButton(onClick = onAddDeviceTapped) { Text("Retry") }
                     }
+                }
+                is BleConnectionState.GattCacheError -> {
+                    Text(
+                        "Having trouble connecting to ${state.deviceName}.",
+                        style = TypographyTitle,
+                    )
+                    Spacer(Modifier.height(space4))
+                    Text(
+                        "Try turning Bluetooth off and on, then reconnect.",
+                        style = TypographyMeta,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(space4))
+                    TextButton(
+                        onClick = onAddDeviceTapped,
+                        modifier = Modifier.align(Alignment.End),
+                    ) { Text("Retry") }
                 }
                 is BleConnectionState.Idle,
                 is BleConnectionState.Connected -> { /* never shown — caller guards these */ }

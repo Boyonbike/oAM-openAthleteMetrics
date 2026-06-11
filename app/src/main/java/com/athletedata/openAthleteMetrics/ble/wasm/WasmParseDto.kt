@@ -26,7 +26,7 @@ internal data class SleepWasmDto(
 internal data class ActivityWasmDto(
     val startTimeMs: Long,
     val endTimeMs: Long,
-    val durationMinutes: Int,
+    val durationMinutes: Int = 0,
     val deviceName: String,
     val avgHrBpm: Double? = null,
     val maxHrBpm: Double? = null,

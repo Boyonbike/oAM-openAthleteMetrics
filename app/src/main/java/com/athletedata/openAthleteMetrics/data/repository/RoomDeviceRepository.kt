@@ -34,6 +34,9 @@ class RoomDeviceRepository @Inject constructor(
     override fun getAllDevices(): Flow<List<Device>> =
         dao.getAllDevices().map { entities -> entities.map { it.toModel() } }
 
+    override suspend fun getDeviceById(id: Long): Device? =
+        dao.getById(id)?.toModel()
+
     override suspend fun getDeviceByAddress(bleAddress: String): Device? =
         dao.getDeviceByAddress(bleAddress)?.toModel()
 

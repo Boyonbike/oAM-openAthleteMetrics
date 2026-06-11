@@ -34,7 +34,20 @@ interface ActivityDao {
     @Query("UPDATE activities SET user_category = :category, notes = :notes WHERE id = :id")
     suspend fun updateCategoryAndNotes(id: Long, category: UserCategory?, notes: String?)
 
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertOrIgnore(entity: ActivityEntity): Long
+
     // ── Reads ─────────────────────────────────────────────────────────────────
+
+    @Query(
+        """
+        SELECT * FROM activities
+        WHERE driver_id = :driverId
+        AND start_time BETWEEN :windowStart AND :windowEnd
+        LIMIT 1
+        """
+    )
+    suspend fun findNear(driverId: String, windowStart: Long, windowEnd: Long): ActivityEntity?
 
     @Query(
         """

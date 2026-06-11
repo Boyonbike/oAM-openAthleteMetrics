@@ -43,6 +43,10 @@ data class SyncSessionEntity(
     val recordsImported: Int = 0,
     @ColumnInfo(name = "error_message")
     val errorMessage: String? = null,
+    @ColumnInfo(name = "packets_received")
+    val packetsReceived: Int = 0,
+    @ColumnInfo(name = "synced_before_quiescence")
+    val syncedBeforeQuiescence: Boolean = false,
 )
 
 // ── Mappers ──────────────────────────────────────────────────────────────────
@@ -56,6 +60,8 @@ fun SyncSessionEntity.toModel() = SyncSession(
     status = status,
     recordsImported = recordsImported,
     errorMessage = errorMessage,
+    packetsReceived = packetsReceived,
+    syncedBeforeQuiescence = syncedBeforeQuiescence,
 )
 
 fun SyncSession.toEntity() = SyncSessionEntity(
@@ -67,4 +73,6 @@ fun SyncSession.toEntity() = SyncSessionEntity(
     status = status,
     recordsImported = recordsImported,
     errorMessage = errorMessage,
+    packetsReceived = packetsReceived,
+    syncedBeforeQuiescence = syncedBeforeQuiescence,
 )

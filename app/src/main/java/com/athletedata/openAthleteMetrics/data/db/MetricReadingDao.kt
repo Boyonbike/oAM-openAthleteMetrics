@@ -5,43 +5,102 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import com.athletedata.openAthleteMetrics.data.model.DataSource
 import com.athletedata.openAthleteMetrics.data.model.MetricType
 import kotlinx.coroutines.flow.Flow
+import timber.log.Timber
+import java.time.Instant
 
 @Dao
-interface MetricReadingDao {
+abstract class MetricReadingDao {
 
     // ── Writes ────────────────────────────────────────────────────────────────
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(entity: MetricReadingEntity)
+    abstract suspend fun insert(entity: MetricReadingEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertAll(entities: List<MetricReadingEntity>)
+    abstract suspend fun insertAll(entities: List<MetricReadingEntity>)
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun insertAllOrIgnore(entities: List<MetricReadingEntity>): List<Long>
+    abstract suspend fun insertAllOrIgnore(entities: List<MetricReadingEntity>): List<Long>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    protected abstract suspend fun insertOrIgnore(entity: MetricReadingEntity): Long
 
     /** Upserts a single accumulator reading; latest daily total always wins. */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsert(entity: MetricReadingEntity)
+    abstract suspend fun upsert(entity: MetricReadingEntity)
 
     /** Batch upserts accumulator readings; latest daily total always wins for each row. */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertAll(entities: List<MetricReadingEntity>)
+    abstract suspend fun upsertAll(entities: List<MetricReadingEntity>)
+
+    enum class AccumulatorWriteOutcome { INSERTED, UPDATED, NO_CHANGE, GUARDED }
+
+    /**
+     * Guarded upsert for accumulator metrics.
+     * - INSERTED: no prior row — first-time write.
+     * - UPDATED: incoming value is strictly higher than stored — real progress.
+     * - NO_CHANGE: incoming value equals stored — same data re-synced, no write needed.
+     * - GUARDED: incoming value is lower than stored — kept existing, wrote nothing.
+     */
+    @Transaction
+    open suspend fun upsertAccumulator(reading: MetricReadingEntity): AccumulatorWriteOutcome {
+        val existing = getByDriverTypeAndDate(reading.driverId, reading.metricType, reading.recordedAt)
+        return when {
+            existing == null -> {
+                insertOrIgnore(reading)
+                AccumulatorWriteOutcome.INSERTED
+            }
+            reading.value > existing.value -> {
+                upsert(reading)
+                AccumulatorWriteOutcome.UPDATED
+            }
+            reading.value == existing.value -> {
+                AccumulatorWriteOutcome.NO_CHANGE
+            }
+            else -> {
+                Timber.w(
+                    "Accumulator value guard: skipping %s incoming=%.2f stored=%.2f — " +
+                    "incoming value is lower, keeping stored record",
+                    reading.metricType,
+                    reading.value,
+                    existing.value,
+                )
+                AccumulatorWriteOutcome.GUARDED
+            }
+        }
+    }
 
     @Delete
-    suspend fun delete(entity: MetricReadingEntity)
+    abstract suspend fun delete(entity: MetricReadingEntity)
 
     /** Deletes all readings from a specific source; used for seeder cleanup. */
     @Query("DELETE FROM metric_readings WHERE source = :source")
-    suspend fun deleteBySource(source: DataSource)
+    abstract suspend fun deleteBySource(source: DataSource)
 
     @Query("DELETE FROM metric_readings")
-    suspend fun deleteAll()
+    abstract suspend fun deleteAll()
 
     // ── Reads ─────────────────────────────────────────────────────────────────
+
+    /** Exact-key lookup by the accumulator dedup index; returns null if no row exists. */
+    @Query(
+        """
+        SELECT * FROM metric_readings
+        WHERE driver_id IS :driverId
+          AND metric_type = :metricType
+          AND recorded_at = :recordedAt
+        LIMIT 1
+        """
+    )
+    abstract suspend fun getByDriverTypeAndDate(
+        driverId: String?,
+        metricType: MetricType,
+        recordedAt: Instant,
+    ): MetricReadingEntity?
 
     /**
      * Returns readings of [metricType] in the half-open interval
@@ -60,7 +119,7 @@ interface MetricReadingDao {
         ORDER BY recorded_at ASC
         """
     )
-    fun getReadingsInRange(
+    abstract fun getReadingsInRange(
         metricType: MetricType,
         startMs: Long,
         endMs: Long,
@@ -75,7 +134,7 @@ interface MetricReadingDao {
         LIMIT 1
         """
     )
-    fun getLatestReading(metricType: MetricType): Flow<MetricReadingEntity?>
+    abstract fun getLatestReading(metricType: MetricType): Flow<MetricReadingEntity?>
 
     /**
      * One-shot (non-Flow) read of all readings for a date range; used by
@@ -91,7 +150,7 @@ interface MetricReadingDao {
         ORDER BY recorded_at ASC
         """
     )
-    suspend fun getReadingsInRangeOnce(
+    abstract suspend fun getReadingsInRangeOnce(
         metricType: MetricType,
         startMs: Long,
         endMs: Long,
@@ -102,12 +161,12 @@ interface MetricReadingDao {
         "SELECT COUNT(*) FROM metric_readings " +
         "WHERE source = :source AND recorded_at >= :startMs AND recorded_at < :endMs"
     )
-    fun countSourceDataInRange(source: DataSource, startMs: Long, endMs: Long): Flow<Int>
+    abstract fun countSourceDataInRange(source: DataSource, startMs: Long, endMs: Long): Flow<Int>
 
     /** One-shot row count; used by the seeder to check for existing data before re-seeding. */
     @Query(
         "SELECT COUNT(*) FROM metric_readings " +
         "WHERE source = :source AND recorded_at >= :startMs AND recorded_at < :endMs"
     )
-    suspend fun countSourceDataInRangeOnce(source: DataSource, startMs: Long, endMs: Long): Int
+    abstract suspend fun countSourceDataInRangeOnce(source: DataSource, startMs: Long, endMs: Long): Int
 }

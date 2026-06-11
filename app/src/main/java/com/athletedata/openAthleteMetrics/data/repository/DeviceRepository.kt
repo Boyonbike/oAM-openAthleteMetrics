@@ -11,6 +11,8 @@ interface DeviceRepository {
 
     fun getAllDevices(): Flow<List<Device>>
 
+    suspend fun getDeviceById(id: Long): Device?
+
     suspend fun getDeviceByAddress(bleAddress: String): Device?
 
     suspend fun updateLastSeen(bleAddress: String, timestampMs: Long)

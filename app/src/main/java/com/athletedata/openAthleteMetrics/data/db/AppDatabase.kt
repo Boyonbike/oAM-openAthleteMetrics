@@ -17,6 +17,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *   7 — added last_battery_pct to devices; battery is device metadata, not a MetricReading
  *   8 — unique dedup index on sleep_sessions(driver_id, date); index on activities(driver_id, start_time) made unique
  *   9 — one-time cleanup of corrupt sleep_sessions written during mid-sleep syncs (end <= start or duration < 1 min)
+ *  10 — added packets_received and synced_before_quiescence to sync_sessions for stream-completeness heuristic
  */
 @Database(
     entities = [
@@ -31,7 +32,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SyncSessionEntity::class,
         RawDeviceDataEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = false,
 )
 @TypeConverters(Converters::class)
@@ -257,6 +258,13 @@ abstract class AppDatabase : RoomDatabase() {
                        OR (sleep_end_ms - sleep_start_ms) < 60000
                     """.trimIndent()
                 )
+            }
+        }
+
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `sync_sessions` ADD COLUMN `packets_received` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `sync_sessions` ADD COLUMN `synced_before_quiescence` INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

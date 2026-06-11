@@ -17,21 +17,29 @@ import timber.log.Timber
 import java.time.Instant
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
+import java.util.TimeZone
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
  * Manages one live Chicory WASM [Instance] for the currently active BLE driver.
  *
- * ## Memory layout (shared between Kotlin and WASM)
+ * ## Memory layout (spec v2, specVersion = "2")
  *
  * ```
- * Offset 0x0000 (    0)  INPUT REGION   ≤ 4,096 bytes
- *   Kotlin writes raw BLE characteristic bytes here before every call.
+ * Offset 0x0000 (  0)  METADATA REGION  16 bytes
+ *   Bytes 0–7:  syncStartMs      — i64 little-endian — UTC epoch ms when sync began
+ *   Bytes 8–9:  utcOffsetMinutes — i16 little-endian — device timezone offset in minutes
+ *   Bytes 10–15: reserved (zeroed)
  *
- * Offset 0x1000 (4,096)  OUTPUT REGION  ≤ 61,440 bytes
- *   WASM writes its UTF-8 JSON result here; returns byte count as i32.
+ * Offset 0x0010 ( 16)  INPUT REGION     ≤ 4,080 bytes
+ *   Raw BLE characteristic bytes
+ *
+ * Offset 0x1000 (4096) OUTPUT REGION    ≤ 61,440 bytes
+ *   WASM writes UTF-8 JSON; returns byte count as i32
  * ```
+ *
+ * Spec v1 drivers (specVersion = "1") receive BLE bytes at offset 0 with no metadata header.
  *
  * ## Driver author contract
  * - Module must declare `(memory (export "memory") 1)` (at least 1 page = 65,536 bytes).
@@ -45,6 +53,9 @@ class WasmDriverEngine @Inject constructor() {
     private var instance: Instance? = null
     private var loadedManifest: WasmDriverManifest? = null
     private val parseMutex = Mutex()
+
+    private var syncStartMs: Long = 0L
+    private var previousPacketSize: Int = 0
 
     /**
      * Compiles and instantiates the WASM binary from [manifest].
@@ -64,6 +75,12 @@ class WasmDriverEngine @Inject constructor() {
                 false
             }
         }
+    }
+
+    /** Records the sync start time and resets stale-byte tracking. Call once per sync session. */
+    fun startSync() {
+        syncStartMs = System.currentTimeMillis()
+        previousPacketSize = 0
     }
 
     /**
@@ -150,10 +167,18 @@ class WasmDriverEngine @Inject constructor() {
                 ?.takeIf { it.isNotBlank() && it != "{}" }
                 ?: return@withLock null
             val dto = json.decodeFromString<ActivityWasmDto>(jsonStr)
+            val derivedDuration = ((dto.endTimeMs - dto.startTimeMs) / 60_000L).toInt()
+            if (derivedDuration <= 0) {
+                Timber.w(
+                    "WasmDriverEngine: Discarding activity ${dto.deviceName}: derived duration ≤ 0 " +
+                    "startMs=${dto.startTimeMs} endMs=${dto.endTimeMs}"
+                )
+                return@withLock null
+            }
             Activity(
                 startTime = Instant.ofEpochMilli(dto.startTimeMs),
                 endTime = Instant.ofEpochMilli(dto.endTimeMs),
-                durationMinutes = dto.durationMinutes,
+                durationMinutes = derivedDuration,
                 deviceName = dto.deviceName,
                 source = DataSource.DEVICE,
                 driverId = driverId,
@@ -176,6 +201,8 @@ class WasmDriverEngine @Inject constructor() {
     fun unload() {
         instance = null
         loadedManifest = null
+        syncStartMs = 0L
+        previousPacketSize = 0
     }
 
     private fun instantiate(wasmBytes: ByteArray): Instance {
@@ -184,16 +211,46 @@ class WasmDriverEngine @Inject constructor() {
     }
 
     /**
-     * Writes [data] into WASM memory at [IN_OFFSET], calls [functionName], and returns the
-     * JSON string the WASM wrote at [OUT_OFFSET]. Returns null when outLen == 0 ("no data")
-     * or on any [ChicoryException] — after a trap the instance is re-instantiated.
+     * Writes metadata and [data] into WASM memory, calls [functionName], and returns the
+     * JSON string the WASM wrote at [OUT_OFFSET].
+     *
+     * For spec v2 drivers: writes the 16-byte metadata header (syncStartMs, utcOffsetMinutes,
+     * reserved zeros) then the packet bytes at offset 16. Stale bytes from the previous
+     * (longer) packet are zeroed. The WASM export is called with offset 16.
+     *
+     * For spec v1 drivers: writes bytes at offset 0 with no metadata header. A warning is
+     * logged to prompt migration.
+     *
+     * Returns null when outLen == 0 ("no data") or on any [ChicoryException] — after a trap
+     * the instance is re-instantiated.
      */
     private fun callParse(functionName: String, data: ByteArray): String? {
         val inst = instance ?: return null
+        val manifest = loadedManifest ?: return null
+        val isV2 = manifest.specVersion == "2"
+        val inputOffset = if (isV2) IN_OFFSET_V2 else IN_OFFSET_V1
+
         return try {
             val memory = inst.memory()
-            memory.write(IN_OFFSET, data)
-            val result = inst.export(functionName).apply(IN_OFFSET.toLong(), data.size.toLong())
+
+            if (isV2) {
+                memory.write(0, longToLeBytes(syncStartMs))
+                memory.write(8, shortToLeBytes(utcOffsetMinutes()))
+                memory.write(10, ByteArray(6))                      // reserved, zeroed
+                memory.write(IN_OFFSET_V2, data)
+                val stale = previousPacketSize - data.size
+                if (stale > 0) memory.write(IN_OFFSET_V2 + data.size, ByteArray(stale))
+            } else {
+                Timber.w(
+                    "WasmDriverEngine: driver ${manifest.id} uses spec v1 layout — " +
+                    "metadata not available. Update to specVersion 2 for " +
+                    "syncStartMs and utcOffsetMinutes support."
+                )
+                memory.write(IN_OFFSET_V1, data)
+            }
+            previousPacketSize = data.size
+
+            val result = inst.export(functionName).apply(inputOffset.toLong(), data.size.toLong())
             val outLen = result[0].toInt()
             if (outLen <= 0) null else memory.readString(OUT_OFFSET, outLen)
         } catch (e: ChicoryException) {
@@ -215,8 +272,20 @@ class WasmDriverEngine @Inject constructor() {
         return Instant.ofEpochMilli(maxOf(reportedEndMs, stageMaxEndMs))
     }
 
+    private fun longToLeBytes(value: Long): ByteArray =
+        ByteArray(8) { i -> (value shr (i * 8)).toByte() }
+
+    private fun shortToLeBytes(value: Short): ByteArray {
+        val v = value.toInt()
+        return byteArrayOf((v and 0xFF).toByte(), ((v shr 8) and 0xFF).toByte())
+    }
+
+    private fun utcOffsetMinutes(): Short =
+        (TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60_000).toShort()
+
     companion object {
-        private const val IN_OFFSET = 0
+        private const val IN_OFFSET_V1 = 0   // legacy: spec v1 drivers read BLE bytes from offset 0
+        private const val IN_OFFSET_V2 = 16  // spec v2: bytes 0–15 are the metadata header
         private const val OUT_OFFSET = 0x1000
         private val json = Json { ignoreUnknownKeys = true }
     }

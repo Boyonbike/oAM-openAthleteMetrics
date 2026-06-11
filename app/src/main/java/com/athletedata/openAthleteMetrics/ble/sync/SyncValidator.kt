@@ -7,6 +7,7 @@ import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.data.model.SleepSession
 import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneOffset
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.abs
@@ -69,16 +70,27 @@ class SyncValidator @Inject constructor() {
                 else -> null
             }
             if (reason != null) {
-                Log.w(TAG, "Rejecting invalid sleep session for $dateIso: $reason")
+                Log.w(TAG, "Rejecting sleep session [$dateIso]: $reason")
                 ValidationResult.Rejected(session, reason)
             } else {
-                ValidationResult.Accepted(session)
+                val expectedDate = session.sleepEndMs.atZone(ZoneOffset.UTC).toLocalDate()
+                val corrected = if (session.date != expectedDate) {
+                    Log.w(TAG, "Correcting sleep session date from ${session.date} to $expectedDate (sleepEndMs=${session.sleepEndMs})")
+                    session.copy(date = expectedDate)
+                } else {
+                    session
+                }
+                ValidationResult.Accepted(corrected)
             }
         }
 
     fun validateActivities(activities: List<Activity>): List<ValidationResult<Activity>> =
         activities.map { activity ->
             val reason = when {
+                activity.startTime.isBefore(EARLIEST_VALID_TIMESTAMP) ->
+                    "startTimeMs=${activity.startTime.toEpochMilli()} fails floor check"
+                activity.startTime.isAfter(Instant.now().plusSeconds(3_600)) ->
+                    "startTimeMs=${activity.startTime} is more than 1 hour in the future"
                 !activity.endTime.isAfter(activity.startTime) ->
                     "endTime ${activity.endTime} is not after startTime ${activity.startTime}"
                 activity.durationMinutes <= 0 ->
@@ -88,7 +100,7 @@ class SyncValidator @Inject constructor() {
                 else -> null
             }
             if (reason != null) {
-                Log.w(TAG, "Rejected Activity: $reason")
+                Log.w(TAG, "Rejecting activity [${activity.deviceName}]: $reason")
                 ValidationResult.Rejected(activity, reason)
             } else {
                 ValidationResult.Accepted(activity)

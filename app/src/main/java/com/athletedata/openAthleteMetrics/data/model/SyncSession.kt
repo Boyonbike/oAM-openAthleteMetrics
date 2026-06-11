@@ -11,4 +11,6 @@ data class SyncSession(
     val status: SyncStatus,
     val recordsImported: Int,
     val errorMessage: String? = null,
+    val packetsReceived: Int = 0,
+    val syncedBeforeQuiescence: Boolean = false,
 )

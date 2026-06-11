@@ -17,4 +17,8 @@ interface SyncSessionRepository {
     suspend fun deleteOlderThan(threshold: Instant)
 
     suspend fun markOldPartialsAsFailed(threshold: Instant)
+
+    suspend fun getById(id: Long): SyncSession?
+
+    suspend fun getRecentPartial(since: Instant): List<SyncSession>
 }

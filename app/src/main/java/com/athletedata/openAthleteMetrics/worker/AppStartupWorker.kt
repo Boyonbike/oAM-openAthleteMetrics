@@ -21,7 +21,14 @@ class AppStartupWorker @AssistedInject constructor(
 ) : CoroutineWorker(context, workerParams) {
 
     override suspend fun doWork(): Result = try {
-        syncSessionRepository.markOldPartialsAsFailed(Instant.now().minusSeconds(3600))
+        val cutoff = Instant.now().minusSeconds(86400)
+        // Log each stale session before marking (getRecentPartial(EPOCH) returns all in-flight PARTIAL rows).
+        syncSessionRepository.getRecentPartial(Instant.EPOCH)
+            .filter { it.startedAt < cutoff }
+            .forEach { session ->
+                Timber.i("Expiring stale PARTIAL SyncSession ${session.id} from ${session.startedAt}")
+            }
+        syncSessionRepository.markOldPartialsAsFailed(cutoff)
         Result.success()
     } catch (e: Exception) {
         Timber.e(e, "AppStartupWorker failed")

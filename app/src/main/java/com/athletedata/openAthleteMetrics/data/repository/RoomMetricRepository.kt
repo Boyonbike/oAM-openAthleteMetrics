@@ -46,18 +46,34 @@ class RoomMetricRepository @Inject constructor(
         }
     }
 
-    override suspend fun insertAllFromDevice(readings: List<MetricReading>): Int {
+    override suspend fun insertAllFromDevice(readings: List<MetricReading>): DeviceInsertResult {
         try {
             val entities = readings.map { it.copy(source = DataSource.DEVICE).toEntity() }
             val (accumulators, pointInTime) = entities.partition {
                 MetricType.ACCUMULATOR_METRICS.contains(it.metricType)
             }
-            // Accumulators (steps, calories, distance, elevation): replace so the latest
-            // daily total always wins over any earlier partial value from the same sync day.
-            dao.upsertAll(accumulators)
-            // Point-in-time readings (HR, HRV, SpO2, etc.): immutable once written.
+            var accumulatorInserted = 0
+            var accumulatorUpdates = 0
+            var accumulatorNoChange = 0
+            var accumulatorGuarded = 0
+            accumulators.forEach { entity ->
+                when (dao.upsertAccumulator(entity)) {
+                    MetricReadingDao.AccumulatorWriteOutcome.INSERTED  -> accumulatorInserted++
+                    MetricReadingDao.AccumulatorWriteOutcome.UPDATED   -> accumulatorUpdates++
+                    MetricReadingDao.AccumulatorWriteOutcome.NO_CHANGE -> accumulatorNoChange++
+                    MetricReadingDao.AccumulatorWriteOutcome.GUARDED   -> accumulatorGuarded++
+                }
+            }
             val rowIds = dao.insertAllOrIgnore(pointInTime)
-            return rowIds.count { it == -1L }
+            val pointInTimeNew = rowIds.count { it != -1L }
+            val readingsSkipped = rowIds.count { it == -1L }
+            return DeviceInsertResult(
+                newRecordsInserted = pointInTimeNew + accumulatorInserted,
+                accumulatorUpdates = accumulatorUpdates,
+                accumulatorNoChange = accumulatorNoChange,
+                accumulatorGuarded = accumulatorGuarded,
+                readingsSkipped = readingsSkipped,
+            )
         } catch (e: Exception) {
             Timber.e(e, "Failed to batch-insert device metric readings")
             throw e

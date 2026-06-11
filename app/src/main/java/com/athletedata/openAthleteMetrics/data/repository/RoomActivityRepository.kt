@@ -10,10 +10,12 @@ import com.athletedata.openAthleteMetrics.data.model.UserCategory
 import com.athletedata.openAthleteMetrics.worker.enqueueSummaryWorker
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import timber.log.Timber
 import java.time.LocalDate
 import java.time.ZoneOffset
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.abs
 
 @Singleton
 class RoomActivityRepository @Inject constructor(
@@ -35,8 +37,50 @@ class RoomActivityRepository @Inject constructor(
     }
 
     override suspend fun insertAllFromDevice(activities: List<Activity>): Int {
-        val rowIds = dao.insertAllOrIgnore(activities.map { it.copy(source = DataSource.DEVICE).toEntity() })
-        return rowIds.count { it == -1L }
+        val window = 30_000L
+        var skipped = 0
+        for (activity in activities) {
+            val validated = fixDurationIfNeeded(activity)
+            val entity = validated.copy(source = DataSource.DEVICE).toEntity()
+            val driverId = entity.driverId
+            val existing = if (driverId != null) {
+                dao.findNear(
+                    driverId = driverId,
+                    windowStart = entity.startTime.toEpochMilli() - window,
+                    windowEnd = entity.startTime.toEpochMilli() + window,
+                )
+            } else null
+
+            if (existing != null) {
+                val delta = entity.startTime.toEpochMilli() - existing.startTime.toEpochMilli()
+                Timber.d(
+                    "Activity drift-match: incoming startMs=%d matched existing startMs=%d delta=%dms",
+                    entity.startTime.toEpochMilli(), existing.startTime.toEpochMilli(), delta,
+                )
+                if (entity.durationMinutes > existing.durationMinutes) {
+                    dao.insert(entity.copy(id = existing.id))
+                } else {
+                    skipped++
+                }
+            } else {
+                val rowId = dao.insertOrIgnore(entity)
+                if (rowId == -1L) skipped++
+            }
+        }
+        return skipped
+    }
+
+    private fun fixDurationIfNeeded(activity: Activity): Activity {
+        val derivedMinutes = ((activity.endTime.toEpochMilli() - activity.startTime.toEpochMilli()) / 60_000L).toInt()
+        return if (abs(derivedMinutes - activity.durationMinutes) > 2) {
+            Timber.w(
+                "Activity duration mismatch: stored=%d derived=%d — using derived value",
+                activity.durationMinutes, derivedMinutes,
+            )
+            activity.copy(durationMinutes = derivedMinutes)
+        } else {
+            activity
+        }
     }
 
     override suspend fun replaceAllFromDevice(activities: List<Activity>): Int {

@@ -30,4 +30,10 @@ class RoomSyncSessionRepository @Inject constructor(
 
     override suspend fun markOldPartialsAsFailed(threshold: Instant) =
         dao.markOldPartialsAsFailed(threshold.toEpochMilli())
+
+    override suspend fun getById(id: Long): SyncSession? =
+        dao.getById(id)?.toModel()
+
+    override suspend fun getRecentPartial(since: Instant): List<SyncSession> =
+        dao.getRecentPartial(since.toEpochMilli()).map { it.toModel() }
 }

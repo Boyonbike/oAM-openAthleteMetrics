@@ -41,6 +41,10 @@ class DriverRegistry @Inject constructor(
         }
     }
 
+    fun startSync() {
+        wasmEngine.startSync()
+    }
+
     fun allDrivers(): List<WasmDriverManifest> = _drivers.toList()
 
     fun isWasmLoaded(manifest: WasmDriverManifest): Boolean = wasmLoadedId == manifest.id

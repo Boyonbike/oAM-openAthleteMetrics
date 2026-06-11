@@ -25,6 +25,7 @@ data class WasmDriverManifest(
     val ble: BleConfig,
     val syncCommands: List<SyncCommand> = emptyList(),
     val parsing: ParsingConfig,
+    val specVersion: String = "1",
 )
 
 /**

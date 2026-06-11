@@ -9,8 +9,11 @@ import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
 import com.athletedata.openAthleteMetrics.ble.driver.DriverStorage
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
 import com.athletedata.openAthleteMetrics.ble.sync.DeviceReprocessor
+import com.athletedata.openAthleteMetrics.ble.sync.DeviceSyncProcessor
 import com.athletedata.openAthleteMetrics.data.model.Device
+import com.athletedata.openAthleteMetrics.data.model.SyncSession
 import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
+import com.athletedata.openAthleteMetrics.data.repository.SyncSessionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -51,6 +54,8 @@ class DevicesViewModel @Inject constructor(
     private val driverRegistry: DriverRegistry,
     private val bleEngine: BleEngine,
     private val deviceReprocessor: DeviceReprocessor,
+    private val syncProcessor: DeviceSyncProcessor,
+    private val syncSessionRepository: SyncSessionRepository,
 ) : ViewModel() {
 
     val devices: StateFlow<List<Device>> = deviceRepository.getAllDevices()
@@ -85,6 +90,9 @@ class DevicesViewModel @Inject constructor(
     private val _reprocessingDeviceId = MutableStateFlow<Long?>(null)
     val reprocessingDeviceId: StateFlow<Long?> = _reprocessingDeviceId.asStateFlow()
 
+    private val _recoverySessions = MutableStateFlow<List<SyncSession>>(emptyList())
+    val recoverySessions: StateFlow<List<SyncSession>> = _recoverySessions.asStateFlow()
+
     init {
         // CHANGE 1: default to Device tab if either drivers or devices exist
         viewModelScope.launch {
@@ -95,11 +103,17 @@ class DevicesViewModel @Inject constructor(
             }
         }
 
+        // Check for interrupted syncs that have raw data available for recovery.
+        viewModelScope.launch(Dispatchers.IO) {
+            val since = Instant.now().minus(24, ChronoUnit.HOURS)
+            _recoverySessions.value = syncSessionRepository.getRecentPartial(since)
+        }
     }
 
     fun onAddDeviceTapped() {
         val current = connectionState.value
-        if (current is BleConnectionState.Idle || current is BleConnectionState.Error) {
+        if (current is BleConnectionState.Idle || current is BleConnectionState.Error ||
+            current is BleConnectionState.GattCacheError) {
             bleEngine.startScan()
         }
     }
@@ -139,6 +153,19 @@ class DevicesViewModel @Inject constructor(
     fun onSyncAcknowledged() { bleEngine.acknowledgeSyncComplete() }
 
     fun onDisconnectDismissed() { bleEngine.resetToIdle() }
+
+    fun onRecoverSessionTapped(sessionId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                syncProcessor.processFromRaw(sessionId)
+                _recoverySessions.value = _recoverySessions.value.filter { it.id != sessionId }
+                _snackbarEvents.send("Recovery complete")
+            } catch (e: Exception) {
+                Timber.e(e, "Recovery failed for session $sessionId")
+                _snackbarEvents.send("Recovery failed: ${e.message}")
+            }
+        }
+    }
 
     fun onReprocessConfirmed(device: Device) {
         if (connectionState.value !is BleConnectionState.Idle) {

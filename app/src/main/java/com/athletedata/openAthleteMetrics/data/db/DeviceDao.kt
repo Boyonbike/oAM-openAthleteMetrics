@@ -35,6 +35,9 @@ interface DeviceDao {
     @Query("SELECT * FROM devices ORDER BY display_name ASC")
     fun getAllDevices(): Flow<List<DeviceEntity>>
 
+    @Query("SELECT * FROM devices WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): DeviceEntity?
+
     @Query("SELECT * FROM devices WHERE ble_address = :bleAddress LIMIT 1")
     suspend fun getDeviceByAddress(bleAddress: String): DeviceEntity?
 }

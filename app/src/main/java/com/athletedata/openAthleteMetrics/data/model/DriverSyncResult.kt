@@ -27,4 +27,6 @@ data class DriverSyncResult(
     val sleepSessions: List<SleepSession>,
     val activities: List<Activity>,
     val rawPayloads: List<RawPayload>,
+    val packetsReceived: Int = 0,
+    val syncedBeforeQuiescence: Boolean = false,
 )

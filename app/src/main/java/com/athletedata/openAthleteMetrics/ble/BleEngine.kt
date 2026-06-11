@@ -24,9 +24,11 @@ import com.athletedata.openAthleteMetrics.ble.sync.SyncSummary
 import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.DriverSyncResult
 import com.athletedata.openAthleteMetrics.data.model.MetricReading
+import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.data.model.RawPayload
 import com.athletedata.openAthleteMetrics.data.model.SleepSession
 import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
+import com.athletedata.openAthleteMetrics.data.repository.RawDeviceDataRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -43,23 +45,25 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.time.Instant
-import java.util.Collections
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class BleEngine @Inject constructor(
-    @ApplicationContext val context: Context,
+    @param:ApplicationContext val context: Context,
     private val driverRegistry: DriverRegistry,
     private val syncProcessor: DeviceSyncProcessor,
     private val deviceRepository: DeviceRepository,
+    private val rawDeviceDataRepository: RawDeviceDataRepository,
 ) {
     companion object {
         private const val CCCD_UUID = "00002902-0000-1000-8000-00805f9b34fb"
         private const val MTU_REQUEST = 512
         private const val SCAN_TIMEOUT_MS = 30_000L
         private const val MAX_RETRIES = 3
+        private const val STREAM_QUIESCENCE_MS = 3_000L
+        private const val SILENT_SYNC_TIMEOUT_MS = 15_000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -68,10 +72,15 @@ class BleEngine @Inject constructor(
     private var activeDeviceAddress: String? = null
     private var syncStartedAt: Instant = Instant.now()
 
-    private val pendingMetrics: MutableList<MetricReading> = Collections.synchronizedList(mutableListOf())
-    private val pendingSleep: MutableList<SleepSession> = Collections.synchronizedList(mutableListOf())
-    private val pendingActivities: MutableList<Activity> = Collections.synchronizedList(mutableListOf())
-    private val pendingRaw: MutableList<RawPayload> = Collections.synchronizedList(mutableListOf())
+    private val pendingMetrics = LinkedHashMap<Pair<MetricType, Long>, MetricReading>()
+    private val pendingSleep: MutableList<SleepSession> = mutableListOf()
+    private val seenSleepStartMs = HashSet<Long>()
+    private val pendingActivities = LinkedHashMap<Long, Activity>()
+
+    // Session ID created by beginSession() on the first assembled packet; cleared on each fresh
+    // connection and on disconnect. Raw packets are persisted against this ID immediately on
+    // arrival so they survive process death (Fix 18).
+    @Volatile private var currentSyncSessionId: Long? = null
 
     private var negotiatedMtu: Int = 23  // Android stack default; updated in onMtuChanged
     private val reassemblyBuffers = mutableMapOf<String, ByteArray>()
@@ -84,6 +93,15 @@ class BleEngine @Inject constructor(
         capacity = 512,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
+
+    // Packet counting and quiescence tracking for streaming heuristic (Fix 15).
+    // packetCount is written only on the single IO consumer coroutine; isQuiescent and
+    // quiescenceJob are written from both IO and Main — @Volatile ensures visibility.
+    @Volatile private var packetCount = 0
+    @Volatile private var isQuiescent = false
+    @Volatile private var quiescenceJob: Job? = null
+    @Volatile private var gattCacheRefreshAttempted = false
+    @Volatile private var silentSyncTimeoutJob: Job? = null
 
     private var activeGatt: BluetoothGatt? = null
     private var bleScanner: android.bluetooth.le.BluetoothLeScanner? = null
@@ -119,9 +137,6 @@ class BleEngine @Inject constructor(
             for ((uuid, bytes) in notificationChannel) {
                 handleNotification(uuid, bytes)
                 processedCount++
-                if (processedCount % 50 == 0) {
-                    Timber.d("BleEngine: Notification channel depth: ${notificationChannel.size}")
-                }
             }
         }
     }
@@ -156,7 +171,8 @@ class BleEngine @Inject constructor(
     @SuppressLint("MissingPermission")
     fun startScan() {
         val current = _connectionState.value
-        if (current !is BleConnectionState.Idle && current !is BleConnectionState.Error) return
+        if (current !is BleConnectionState.Idle && current !is BleConnectionState.Error &&
+            current !is BleConnectionState.GattCacheError) return
 
         val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         val adapter = manager?.adapter
@@ -211,12 +227,19 @@ class BleEngine @Inject constructor(
         userDisconnecting = true
         retryJob?.cancel()
         retryJob = null
+        silentSyncTimeoutJob?.cancel()
+        silentSyncTimeoutJob = null
+        gattCacheRefreshAttempted = false
+        quiescenceJob?.cancel()
+        quiescenceJob = null
+        packetCount = 0
+        isQuiescent = false
         stopScan()
         _connectionState.value = BleConnectionState.Disconnected(address, null)
-        pendingMetrics.clear()
-        pendingSleep.clear()
-        pendingActivities.clear()
-        pendingRaw.clear()
+        synchronized(pendingMetrics) { pendingMetrics.clear() }
+        synchronized(pendingSleep) { pendingSleep.clear(); seenSleepStartMs.clear() }
+        synchronized(pendingActivities) { pendingActivities.clear() }
+        currentSyncSessionId = null
         reassemblyBuffers.clear()
         scope.launch { @Suppress("MissingPermission") activeGatt?.disconnect() }
         // activeManifest / activeDeviceAddress are cleared by gattCallback
@@ -267,14 +290,33 @@ class BleEngine @Inject constructor(
         // Full packet assembled — pass to WASM parser and reset this characteristic's buffer.
         reassemblyBuffers[characteristicUuid] = ByteArray(0)
 
+        // Lazily create the session row on the first assembled packet (already on Dispatchers.IO).
+        if (currentSyncSessionId == null) {
+            val address = activeDeviceAddress ?: return
+            currentSyncSessionId = syncProcessor.beginSession(address, manifest.id, syncStartedAt)
+        }
+        val sessionId = currentSyncSessionId ?: return
+
         // Already on Dispatchers.IO (consumer coroutine); no inner launch needed.
         val readings = driverRegistry.parseMetrics(manifest, characteristicUuid, accumulated)
         val sleep    = driverRegistry.parseSleep(manifest, characteristicUuid, accumulated)
         val activity = driverRegistry.parseActivity(manifest, characteristicUuid, accumulated)
 
-        pendingMetrics.addAll(readings)
-        sleep?.let { pendingSleep.add(it) }
-        activity?.let { pendingActivities.add(it) }
+        synchronized(pendingMetrics) {
+            readings.forEach { reading ->
+                pendingMetrics[Pair(reading.metricType, reading.recordedAt.toEpochMilli())] = reading
+            }
+        }
+        synchronized(pendingSleep) {
+            sleep?.let { session ->
+                if (seenSleepStartMs.add(session.sleepStartMs.toEpochMilli())) {
+                    pendingSleep.add(session)
+                }
+            }
+        }
+        synchronized(pendingActivities) {
+            activity?.let { act -> pendingActivities[act.startTime.toEpochMilli()] = act }
+        }
 
         if (!driverRegistry.isWasmLoaded(manifest)) {
             _connectionState.value = BleConnectionState.Error(
@@ -282,23 +324,48 @@ class BleEngine @Inject constructor(
             )
             return
         }
-        pendingRaw.add(RawPayload(
-            characteristicUuid = characteristicUuid,
-            payload = accumulated,
-            receivedAt = Instant.now(),
-        ))
+
+        // Persist raw packet immediately so it survives process death (Fix 18).
+        rawDeviceDataRepository.insertAll(
+            listOf(RawPayload(characteristicUuid, accumulated, Instant.now())),
+            sessionId,
+        )
+
+        silentSyncTimeoutJob?.cancel()
+        silentSyncTimeoutJob = null
+
+        // Update live packet counter and restart quiescence timer.
+        val count = ++packetCount
+        val address = activeDeviceAddress ?: return
+        quiescenceJob?.cancel()
+        isQuiescent = false
+        if (_connectionState.value is BleConnectionState.Connected) {
+            _connectionState.value = BleConnectionState.Connected(address, manifest.displayName, count, false)
+            quiescenceJob = scope.launch {
+                delay(STREAM_QUIESCENCE_MS)
+                if (_connectionState.value is BleConnectionState.Connected) {
+                    isQuiescent = true
+                    _connectionState.value = BleConnectionState.Connected(address, manifest.displayName, count, true)
+                }
+            }
+        }
     }
 
     suspend fun triggerSync(): SyncSummary? {
         if (_connectionState.value !is BleConnectionState.Connected) return null
         val manifest = activeManifest ?: return null
         val address = activeDeviceAddress ?: return null
+        val capturedPacketCount = packetCount
+        val capturedBeforeQuiescence = !isQuiescent
+        quiescenceJob?.cancel()
+        quiescenceJob = null
         _connectionState.value = BleConnectionState.Syncing(address, 0f)
+        val preSyncSessionId = currentSyncSessionId
+        currentSyncSessionId = null
         return try {
-            val metricReadings = synchronized(pendingMetrics) { pendingMetrics.toList().also { pendingMetrics.clear() } }
-            val sleepSessions = synchronized(pendingSleep) { pendingSleep.toList().also { pendingSleep.clear() } }
-            val activities = synchronized(pendingActivities) { pendingActivities.toList().also { pendingActivities.clear() } }
-            val rawPayloads = synchronized(pendingRaw) { pendingRaw.toList().also { pendingRaw.clear() } }
+            val metricReadings = synchronized(pendingMetrics) { pendingMetrics.values.toList().also { pendingMetrics.clear() } }
+            val sleepSessions = synchronized(pendingSleep) { pendingSleep.toList().also { pendingSleep.clear(); seenSleepStartMs.clear() } }
+            val activities = synchronized(pendingActivities) { pendingActivities.values.toList().also { pendingActivities.clear() } }
             val result = DriverSyncResult(
                 deviceId = address,
                 driverId = manifest.id,
@@ -307,7 +374,9 @@ class BleEngine @Inject constructor(
                 metricReadings = metricReadings,
                 sleepSessions = sleepSessions,
                 activities = activities,
-                rawPayloads = rawPayloads,
+                rawPayloads = emptyList(), // packets already persisted on arrival
+                packetsReceived = capturedPacketCount,
+                syncedBeforeQuiescence = capturedBeforeQuiescence,
             )
             reassemblyBuffers.forEach { (uuid, buf) ->
                 if (buf.isNotEmpty()) {
@@ -315,7 +384,7 @@ class BleEngine @Inject constructor(
                 }
             }
             reassemblyBuffers.clear()
-            val summary = syncProcessor.process(result)
+            val summary = syncProcessor.process(result, preSyncSessionId = preSyncSessionId)
             _connectionState.value = BleConnectionState.SyncComplete(summary, activeDeviceAddress ?: "")
             summary
         } catch (e: Exception) {
@@ -367,16 +436,27 @@ class BleEngine @Inject constructor(
 
     @SuppressLint("MissingPermission")
     private fun connect(device: BluetoothDevice, manifest: WasmDriverManifest, resetRetries: Boolean) {
+        silentSyncTimeoutJob?.cancel()
+        silentSyncTimeoutJob = null
         activeManifest = manifest
         activeDeviceAddress = device.address
         if (resetRetries) {
             retryCount = 0
+            gattCacheRefreshAttempted = false
             syncStartedAt = Instant.now()
+            driverRegistry.startSync()
+            synchronized(pendingMetrics) { pendingMetrics.clear() }
+            synchronized(pendingSleep) { pendingSleep.clear(); seenSleepStartMs.clear() }
+            synchronized(pendingActivities) { pendingActivities.clear() }
+            currentSyncSessionId = null
+            packetCount = 0
+            isQuiescent = false
+            quiescenceJob?.cancel()
+            quiescenceJob = null
+        } else {
+            val existingCount = synchronized(pendingMetrics) { pendingMetrics.size }
+            Timber.i("Reconnect: accumulator has $existingCount existing readings — duplicates from re-stream will be discarded in memory")
         }
-        pendingMetrics.clear()
-        pendingSleep.clear()
-        pendingActivities.clear()
-        pendingRaw.clear()
         reassemblyBuffers.clear()
         negotiatedMtu = 23
         notifySetupQueue.clear()
@@ -479,9 +559,6 @@ class BleEngine @Inject constructor(
         ) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
                 val bytes = characteristic.value?.clone() ?: return
-                if (notificationChannel.size >= 512) {
-                    Timber.w("BleEngine: Notification channel full — dropping oldest packet")
-                }
                 notificationChannel.trySend(Pair(characteristic.uuid.toString(), bytes))
             }
         }
@@ -492,9 +569,6 @@ class BleEngine @Inject constructor(
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray,
         ) {
-            if (notificationChannel.size >= 512) {
-                Timber.w("BleEngine: Notification channel full — dropping oldest packet")
-            }
             notificationChannel.trySend(Pair(characteristic.uuid.toString(), value.clone()))
         }
 
@@ -561,6 +635,31 @@ class BleEngine @Inject constructor(
         if (commandIndex >= commands.size) {
             Timber.d("BleEngine: sync commands done, device ready")
             _connectionState.value = BleConnectionState.Connected(address, manifest.displayName)
+            silentSyncTimeoutJob?.cancel()
+            silentSyncTimeoutJob = scope.launch {
+                delay(SILENT_SYNC_TIMEOUT_MS)
+                if (_connectionState.value !is BleConnectionState.Connected || packetCount > 0) return@launch
+                val gatt = activeGatt ?: return@launch
+                val capturedAddress = activeDeviceAddress ?: return@launch
+                val capturedManifest = activeManifest ?: return@launch
+                Timber.w("BleEngine: No notifications received after ${SILENT_SYNC_TIMEOUT_MS}ms — possible GATT cache issue")
+                if (!gattCacheRefreshAttempted) {
+                    gattCacheRefreshAttempted = true
+                    if (gatt.refreshCache()) {
+                        Timber.i("BleEngine: GATT cache refreshed — reconnecting")
+                        closeGatt()
+                        val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)
+                            ?.adapter ?: return@launch
+                        @Suppress("MissingPermission")
+                        val device = adapter.getRemoteDevice(capturedAddress)
+                        connect(device, capturedManifest, resetRetries = false)
+                    } else {
+                        _connectionState.value = BleConnectionState.GattCacheError(capturedAddress, capturedManifest.displayName)
+                    }
+                } else {
+                    _connectionState.value = BleConnectionState.GattCacheError(capturedAddress, capturedManifest.displayName)
+                }
+            }
             return
         }
 
@@ -672,4 +771,19 @@ class BleEngine @Inject constructor(
             .filter { it.isNotEmpty() }
             .map { it.removePrefix("0x").removePrefix("0X").toInt(16).toByte() }
             .toByteArray()
+
+    // Android caches GATT service/characteristic handles per device MAC address. A firmware
+    // update that changes handles causes sync commands to target the wrong handles silently —
+    // no error is returned and no notifications arrive. BluetoothGatt.refresh() (hidden API,
+    // availability varies by Android version and OEM) clears the cache so the next connect
+    // re-discovers services fresh. If unavailable, a Bluetooth adapter reset (user action) is
+    // the only alternative that works on all Android versions.
+    private fun BluetoothGatt.refreshCache(): Boolean =
+        try {
+            val method = javaClass.getMethod("refresh")
+            method.invoke(this) as Boolean
+        } catch (e: Exception) {
+            Timber.w("BleEngine: GATT refresh not available: ${e.message}")
+            false
+        }
 }

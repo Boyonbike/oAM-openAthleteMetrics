@@ -23,6 +23,14 @@ interface MetricReadingDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertAllOrIgnore(entities: List<MetricReadingEntity>): List<Long>
 
+    /** Upserts a single accumulator reading; latest daily total always wins. */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(entity: MetricReadingEntity)
+
+    /** Batch upserts accumulator readings; latest daily total always wins for each row. */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(entities: List<MetricReadingEntity>)
+
     @Delete
     suspend fun delete(entity: MetricReadingEntity)
 

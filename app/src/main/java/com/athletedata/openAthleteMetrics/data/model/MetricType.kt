@@ -23,4 +23,18 @@ enum class MetricType {
     CALORIES,         // total calories burned (kcal)
     ACTIVE_CALORIES,  // active (non-basal) calories burned (kcal)
     BASAL_CALORIES,   // basal metabolic rate calories (kcal)
+    ;
+
+    companion object {
+        /**
+         * Metrics that accumulate over a UTC day. Their deduplication key (type + UTC-midnight
+         * timestamp) is stable across syncs, so a later sync with a higher total must replace
+         * any earlier partial value. Fix is forward-looking — existing partial records written
+         * before this change remain but will be replaced on the user's next sync.
+         */
+        val ACCUMULATOR_METRICS: Set<MetricType> = setOf(
+            STEPS, CALORIES, ACTIVE_CALORIES, BASAL_CALORIES,
+            DISTANCE, ELEVATION_GAIN, ELEVATION_LOSS,
+        )
+    }
 }

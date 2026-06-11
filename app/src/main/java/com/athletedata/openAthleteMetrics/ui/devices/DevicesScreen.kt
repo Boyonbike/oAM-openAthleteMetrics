@@ -603,19 +603,20 @@ private fun BleBanner(
                 }
                 is BleConnectionState.SyncComplete -> {
                     val s = state.summary
-                    val totalSkipped  = s.readingsSkipped + s.sessionsSkipped + s.activitiesSkipped
+                    val totalNew = s.readingsInserted + s.sessionsInserted + s.activitiesInserted
+                    val totalSkipped = s.readingsSkipped + s.activitiesSkipped
                     val totalRejected = s.readingsRejected + s.sessionsRejected + s.activitiesRejected
-                    Text("Sync complete", style = TypographyTitle, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(space4))
-                    Text(
-                        "${s.readingsAccepted} readings · ${s.sessionsAccepted} sessions · ${s.activitiesAccepted} activities",
-                        style = TypographyMeta,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    if (totalSkipped > 0) {
+                    val title = if (totalNew == 0) "Already up to date" else "Sync complete"
+                    val subtitle = when {
+                        totalNew == 0 -> null
+                        totalSkipped == 0 -> "$totalNew records imported"
+                        else -> "$totalNew new records, $totalSkipped already up to date"
+                    }
+                    Text(title, style = TypographyTitle, fontWeight = FontWeight.Bold)
+                    if (subtitle != null) {
                         Spacer(Modifier.height(space4))
                         Text(
-                            "$totalSkipped already up to date",
+                            subtitle,
                             style = TypographyMeta,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

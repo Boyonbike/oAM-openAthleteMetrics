@@ -51,6 +51,16 @@ class RoomSleepRepository @Inject constructor(
     override suspend fun getSessionForDateOnce(date: LocalDate): SleepSession? =
         dao.getSessionForDateOnce(date)?.toModel()
 
+    override suspend fun insertOrReplace(session: SleepSession) {
+        try {
+            dao.insert(session.copy(source = DataSource.DEVICE).toEntity())
+            enqueueSummaryWorker(session.date, workManager)
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to insert/replace sleep session")
+            throw e
+        }
+    }
+
     override suspend fun deleteBySource(source: DataSource) {
         try {
             dao.deleteBySource(source)

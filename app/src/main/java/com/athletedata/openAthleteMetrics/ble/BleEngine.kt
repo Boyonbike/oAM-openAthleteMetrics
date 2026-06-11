@@ -70,6 +70,9 @@ class BleEngine @Inject constructor(
     private val pendingActivities = mutableListOf<Activity>()
     private val pendingRaw = mutableListOf<RawPayload>()
 
+    private var negotiatedMtu: Int = 23  // Android stack default; updated in onMtuChanged
+    private val reassemblyBuffers = mutableMapOf<String, ByteArray>()
+
     private var activeGatt: BluetoothGatt? = null
     private var bleScanner: android.bluetooth.le.BluetoothLeScanner? = null
     private var scanTimeoutJob: Job? = null
@@ -189,6 +192,7 @@ class BleEngine @Inject constructor(
         pendingSleep.clear()
         pendingActivities.clear()
         pendingRaw.clear()
+        reassemblyBuffers.clear()
         scope.launch { @Suppress("MissingPermission") activeGatt?.disconnect() }
         // activeManifest / activeDeviceAddress are cleared by gattCallback
         // when userDisconnecting == true
@@ -207,11 +211,40 @@ class BleEngine @Inject constructor(
         }
     }
 
+    /**
+     * Reassembly strategy: "short-packet terminal"
+     *
+     * The ATT layer delivers at most (negotiatedMtu - 3) bytes per notification callback.
+     * A fragment whose size equals that maximum may be followed by more fragments;
+     * a fragment shorter than that maximum is the final (or only) fragment.
+     *
+     * This matches the standard BLE streaming pattern used by the Hume Band: all its
+     * packets are 3-4 bytes — always shorter than any realistic ATT payload size — so
+     * each notification is immediately a complete packet (no buffering occurs in practice).
+     * The buffer is present so that drivers for devices with larger packets work correctly
+     * without engine changes.
+     *
+     * To support a device with a different framing convention (e.g. length prefix,
+     * continuation-flag header, or fixed frame size), replace the completeness check
+     * below and document the new strategy here.
+     */
     fun handleNotification(characteristicUuid: String, bytes: ByteArray) {
         val manifest = activeManifest ?: return
-        pendingMetrics += driverRegistry.parseMetrics(manifest, characteristicUuid, bytes)
-        driverRegistry.parseSleep(manifest, characteristicUuid, bytes)?.let { pendingSleep += it }
-        driverRegistry.parseActivity(manifest, characteristicUuid, bytes)?.let { pendingActivities += it }
+
+        val maxPayload = negotiatedMtu - 3
+        val existing = reassemblyBuffers[characteristicUuid] ?: ByteArray(0)
+        val accumulated = existing + bytes
+        reassemblyBuffers[characteristicUuid] = accumulated
+
+        // A fragment smaller than the max ATT payload is the terminal fragment.
+        if (bytes.size >= maxPayload) return  // still receiving; wait for next callback
+
+        // Full packet assembled — pass to WASM parser and reset this characteristic's buffer.
+        reassemblyBuffers[characteristicUuid] = ByteArray(0)
+
+        pendingMetrics += driverRegistry.parseMetrics(manifest, characteristicUuid, accumulated)
+        driverRegistry.parseSleep(manifest, characteristicUuid, accumulated)?.let { pendingSleep += it }
+        driverRegistry.parseActivity(manifest, characteristicUuid, accumulated)?.let { pendingActivities += it }
         if (!driverRegistry.isWasmLoaded(manifest)) {
             _connectionState.value = BleConnectionState.Error(
                 "Driver '${manifest.displayName}' WASM failed to initialise"
@@ -220,7 +253,7 @@ class BleEngine @Inject constructor(
         }
         pendingRaw += RawPayload(
             characteristicUuid = characteristicUuid,
-            payload = bytes,
+            payload = accumulated,
             receivedAt = Instant.now(),
         )
     }
@@ -241,6 +274,12 @@ class BleEngine @Inject constructor(
                 activities = pendingActivities.toList(),
                 rawPayloads = pendingRaw.toList(),
             )
+            reassemblyBuffers.forEach { (uuid, buf) ->
+                if (buf.isNotEmpty()) {
+                    Timber.w("BleEngine: Discarding incomplete packet on $uuid: ${buf.size} bytes")
+                }
+            }
+            reassemblyBuffers.clear()
             pendingMetrics.clear()
             pendingSleep.clear()
             pendingActivities.clear()
@@ -307,6 +346,8 @@ class BleEngine @Inject constructor(
         pendingSleep.clear()
         pendingActivities.clear()
         pendingRaw.clear()
+        reassemblyBuffers.clear()
+        negotiatedMtu = 23
         notifySetupQueue.clear()
         commandIndex = 0
         inSyncCommandNotify = false
@@ -352,7 +393,8 @@ class BleEngine @Inject constructor(
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     Timber.w("BleEngine: MTU negotiation failed status=$status, proceeding with default MTU")
                 } else {
-                    Timber.d("BleEngine: MTU=$mtu, discovering services")
+                    negotiatedMtu = mtu
+                    Timber.i("MTU negotiated: $mtu bytes")
                 }
                 gatt.discoverServices()
             }

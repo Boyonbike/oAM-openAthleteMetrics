@@ -20,6 +20,7 @@ import com.athletedata.openAthleteMetrics.data.repository.SyncSessionRepository
 import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
+import timber.log.Timber
 
 @Singleton
 class DeviceSyncProcessor @Inject constructor(
@@ -79,23 +80,40 @@ class DeviceSyncProcessor @Inject constructor(
             val acceptedSessions = sessionResults
                 .filterIsInstance<ValidationResult.Accepted<SleepSession>>()
                 .map { it.item }
+            val validSessions = acceptedSessions.filter { session ->
+                val startMs = session.sleepStartMs.toEpochMilli()
+                val endMs = session.sleepEndMs.toEpochMilli()
+                val valid = endMs != 0L && endMs > startMs && (endMs - startMs) >= 60_000L
+                if (!valid) {
+                    Timber.w(
+                        "Discarding in-progress or invalid sleep session for ${session.date}: " +
+                        "startMs=$startMs endMs=$endMs"
+                    )
+                }
+                valid
+            }
             val acceptedActivities = activityResults
                 .filterIsInstance<ValidationResult.Accepted<Activity>>()
                 .map { it.item }
 
             // c-f. Persist accepted data and raw payloads.
-            metricRepository.insertAllFromDevice(acceptedReadings)
-            mergeSleepSessions(acceptedSessions).forEach { sleepRepository.insert(it) }
-            activityRepository.insertAll(acceptedActivities)
+            val readingsSkipped = metricRepository.insertAllFromDevice(acceptedReadings)
+            val mergedSessions = mergeSleepSessions(validSessions)
+            mergedSessions.forEach { sleepRepository.insertOrReplace(it) }
+            val activitiesSkipped = activityRepository.insertAllFromDevice(acceptedActivities)
             rawDeviceDataRepository.insertAll(result.rawPayloads, syncSessionId)
 
             // g. Compute final counts and status (battery readings are not counted — they go to device metadata).
             val readingsAccepted = acceptedReadings.size
+            val readingsInserted = readingsAccepted - readingsSkipped
             val healthReadingsTotal = result.metricReadings.count { it.metricType != MetricType.BATTERY }
             val readingsRejected = healthReadingsTotal - readingsAccepted
-            val sessionsAccepted = acceptedSessions.size
-            val sessionsRejected = result.sleepSessions.size - sessionsAccepted
+            val sessionsAccepted = validSessions.size
+            val sessionsInserted = mergedSessions.size
+            val sessionsSkippedCount = acceptedSessions.size - validSessions.size
+            val sessionsRejected = result.sleepSessions.size - acceptedSessions.size
             val activitiesAccepted = acceptedActivities.size
+            val activitiesInserted = activitiesAccepted - activitiesSkipped
             val activitiesRejected = result.activities.size - activitiesAccepted
             val totalAccepted = readingsAccepted + sessionsAccepted + activitiesAccepted
             val totalRejected = readingsRejected + sessionsRejected + activitiesRejected
@@ -137,14 +155,17 @@ class DeviceSyncProcessor @Inject constructor(
 
             return SyncSummary(
                 readingsAccepted = readingsAccepted,
+                readingsInserted = readingsInserted,
                 readingsRejected = readingsRejected,
-                readingsSkipped = 0,
+                readingsSkipped = readingsSkipped,
                 sessionsAccepted = sessionsAccepted,
+                sessionsInserted = sessionsInserted,
                 sessionsRejected = sessionsRejected,
-                sessionsSkipped = 0,
+                sessionsSkipped = sessionsSkippedCount,
                 activitiesAccepted = activitiesAccepted,
+                activitiesInserted = activitiesInserted,
                 activitiesRejected = activitiesRejected,
-                activitiesSkipped = 0,
+                activitiesSkipped = activitiesSkipped,
                 rejectionReasons = rejectionReasons,
                 finalStatus = finalStatus,
             )

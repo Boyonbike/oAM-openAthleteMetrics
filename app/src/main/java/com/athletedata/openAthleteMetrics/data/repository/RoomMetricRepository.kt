@@ -48,9 +48,15 @@ class RoomMetricRepository @Inject constructor(
 
     override suspend fun insertAllFromDevice(readings: List<MetricReading>): Int {
         try {
-            val rowIds = dao.insertAllOrIgnore(
-                readings.map { it.copy(source = DataSource.DEVICE).toEntity() }
-            )
+            val entities = readings.map { it.copy(source = DataSource.DEVICE).toEntity() }
+            val (accumulators, pointInTime) = entities.partition {
+                MetricType.ACCUMULATOR_METRICS.contains(it.metricType)
+            }
+            // Accumulators (steps, calories, distance, elevation): replace so the latest
+            // daily total always wins over any earlier partial value from the same sync day.
+            dao.upsertAll(accumulators)
+            // Point-in-time readings (HR, HRV, SpO2, etc.): immutable once written.
+            val rowIds = dao.insertAllOrIgnore(pointInTime)
             return rowIds.count { it == -1L }
         } catch (e: Exception) {
             Timber.e(e, "Failed to batch-insert device metric readings")

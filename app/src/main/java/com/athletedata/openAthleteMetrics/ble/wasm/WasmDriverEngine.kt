@@ -55,6 +55,7 @@ class WasmDriverEngine @Inject constructor() {
     private val parseMutex = Mutex()
 
     private var syncStartMs: Long = 0L
+    private var capturedUtcOffsetMinutes: Short = 0
     private var previousPacketSize: Int = 0
 
     /**
@@ -80,6 +81,7 @@ class WasmDriverEngine @Inject constructor() {
     /** Records the sync start time and resets stale-byte tracking. Call once per sync session. */
     fun startSync() {
         syncStartMs = System.currentTimeMillis()
+        capturedUtcOffsetMinutes = utcOffsetMinutes()
         previousPacketSize = 0
     }
 
@@ -235,7 +237,7 @@ class WasmDriverEngine @Inject constructor() {
 
             if (isV2) {
                 memory.write(0, longToLeBytes(syncStartMs))
-                memory.write(8, shortToLeBytes(utcOffsetMinutes()))
+                memory.write(8, shortToLeBytes(capturedUtcOffsetMinutes))
                 memory.write(10, ByteArray(6))                      // reserved, zeroed
                 memory.write(IN_OFFSET_V2, data)
                 val stale = previousPacketSize - data.size

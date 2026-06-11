@@ -559,7 +559,8 @@ class BleEngine @Inject constructor(
         ) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
                 val bytes = characteristic.value?.clone() ?: return
-                notificationChannel.trySend(Pair(characteristic.uuid.toString(), bytes))
+                val result = notificationChannel.trySend(Pair(characteristic.uuid.toString(), bytes))
+                if (result.isFailure) Timber.w("BleEngine: notification channel full — BLE packet dropped")
             }
         }
 
@@ -569,7 +570,8 @@ class BleEngine @Inject constructor(
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray,
         ) {
-            notificationChannel.trySend(Pair(characteristic.uuid.toString(), value.clone()))
+            val result = notificationChannel.trySend(Pair(characteristic.uuid.toString(), value.clone()))
+            if (result.isFailure) Timber.w("BleEngine: notification channel full — BLE packet dropped")
         }
 
         override fun onCharacteristicWrite(

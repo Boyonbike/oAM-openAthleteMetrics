@@ -50,8 +50,7 @@ After matching, the app:
 5. Executes `syncCommands` in order — writes, notification enables, and delays
 
 After the sync command sequence completes, the device is in **Connected** state.
-Data begins flowing via BLE notifications. The app accumulates all incoming packets
-until the user taps **Sync**.
+The app then triggers sync automatically — it does not wait for a user action.
 
 ### 4. Parsing
 
@@ -74,22 +73,39 @@ skipped. The rest of the sync continues.
 
 ### 5. Sync Processing
 
-When the user taps **Sync**, the app passes all accumulated data to
-`DeviceSyncProcessor.process()`, which:
+Once the connection and sync-command sequence completes, the app automatically
+passes all accumulated data to `DeviceSyncProcessor.process()`, which:
 
 1. Records a `SyncSession` row in the database
 2. Validates all readings, sleep sessions, and activities
 3. Inserts valid data into `metric_readings`, `sleep_sessions`, and `activities`
-4. Stores raw BLE payloads in `raw_device_data` for future reprocessing
+4. Raw BLE payloads are stored in `raw_device_data` on packet arrival (not at this
+   step) and are retained for 7 days for future reprocessing
 5. Re-runs `DailySummaryWorker` to update the Dashboard
 6. Updates the device's `last_sync_ms` timestamp
 
-Validation rules applied to every metric reading:
+Validation rules applied to every **metric reading**:
 
 - Value must not be NaN or Infinite
 - Timestamp must be after 2020-01-01 and not more than 1 hour in the future
 - Unit must not be blank
 - Metric type must be a known value
+
+Validation rules applied to every **sleep session**:
+
+- `sleepStartMs` and `sleepEndMs` must both be after 2020-01-01
+- `sleepEndMs` must be greater than `sleepStartMs`
+- Session duration must be between 1 minute and 24 hours
+- `sleepEndMs` must not be more than 1 hour in the future
+- `date` must not be in the future
+- After passing all checks, the validator normalises `date` to the UTC calendar date
+  of `sleepEndMs` — see the Sleep section under Date Attribution Rules
+
+Validation rules applied to every **activity**:
+
+- `startTimeMs` must be after 2020-01-01 and not more than 1 hour in the future
+- `endTimeMs` must be after `startTimeMs`
+- `deviceName` must not be blank
 
 The app uses **insert-or-ignore** for point-in-time metrics and sleep sessions, and
 **insert-or-replace with a value guard** for accumulator metrics (STEPS, CALORIES,
@@ -98,7 +114,7 @@ DISTANCE, and other daily totals). This distinction matters:
 - Point-in-time: if a record with the same deduplication key already exists, the
   incoming record is silently skipped
 - Accumulators: if a record with the same deduplication key already exists, it is
-  replaced **only if the incoming value is greater than or equal to the stored value**
+  replaced **only if the incoming value is strictly greater than the stored value**
   — this allows a final day total to overwrite a partial, while protecting against a
   corrupt re-sync that produces a lower value (e.g. 0 steps) overwriting a correct
   record. A re-sync that produces a lower accumulator value than what is stored is
@@ -116,13 +132,13 @@ The app deduplicates incoming data using these keys:
 | Data type       | Deduplication key                                   |
 |-----------------|-----------------------------------------------------|
 | Metric readings (point-in-time) | `driver_id` + `metric_type` + `recorded_at` (ms) |
-| Metric readings (accumulator)   | `driver_id` + `metric_type` + `recorded_at` (ms) — uses insert-or-replace |
-| Sleep sessions  | `driver_id` + `date` (ISO date of morning after)   |
+| Metric readings (accumulator)   | `driver_id` + `metric_type` + `recorded_at` (ms) — replaced only when incoming value is strictly greater than stored |
+| Sleep sessions  | `driver_id` + `date` (UTC date of `sleepEndMs`)     |
 | Activities      | `driver_id` + `start_time` (ms)                    |
 
 Two records are considered duplicates if all key fields match. A duplicate
 point-in-time record is silently skipped. A duplicate accumulator record replaces
-the existing one.
+the existing one only when the incoming value is strictly greater.
 
 The `driver_id` used for deduplication is the `id` field from the manifest. Data
 from two drivers with different ids will never conflict even if their timestamps
@@ -199,14 +215,14 @@ driver handles.
 Relative offsets are values like "3600 seconds ago" or "4 hours into the day" that
 must be resolved against a reference point to produce an absolute timestamp.
 
-- **Relative to sync time** → reconstruct as `recordedAtMs = syncTimeMs - offsetMs`
-  where `syncTimeMs` is `System.currentTimeMillis()` captured once at the start of
-  the sync, before any packets are processed. Use this single captured value for the
-  entire sync — do not call `currentTimeMillis()` per packet, as clock skew across a
-  multi-minute sync will corrupt relative timestamps. Document in your driver that
-  timestamps are reconstructed from sync time and are therefore approximate.
-  Historical records reconstructed this way are less reliable than device-native
-  timestamps.
+- **Relative to sync time** → reconstruct as `recordedAtMs = syncStartMs - offsetMs`
+  where `syncStartMs` is read from the metadata region at offset 0 as an i64 (see
+  Memory Layout). The app captures this value once at the start of the sync, before
+  any packets are processed. Use this single value for the entire sync — do not read
+  the system clock per packet, as doing so across a multi-minute sync will corrupt
+  relative timestamps. Document in your driver that timestamps are reconstructed from
+  sync time and are therefore approximate. Historical records reconstructed this way
+  are less reliable than device-native timestamps.
 
 - **Relative to a day boundary** → some devices send offsets within a named calendar
   day (e.g. "day index 3, offset 14400 seconds"). Reconstruct as `recordedAtMs =
@@ -217,12 +233,12 @@ must be resolved against a reference point to produce an absolute timestamp.
 
 **Does the device send no timestamp at all?**
 
-Use `System.currentTimeMillis()` as a last resort. This is only acceptable for
-truly instantaneous readings where the timestamp is genuinely "now" (e.g. a live HR
-reading triggered by a sync command). It is never acceptable for historical records —
-a historical record with no timestamp cannot be reliably attributed to the correct
-date and should be discarded rather than incorrectly dated. Document that the driver
-uses sync time for this metric.
+Use `syncStartMs` from the metadata region as a last resort. This is only acceptable
+for truly instantaneous readings where the timestamp is genuinely "now" (e.g. a live
+HR reading triggered by a sync command). It is never acceptable for historical
+records — a historical record with no timestamp cannot be reliably attributed to the
+correct date and should be discarded rather than incorrectly dated. Document that the
+driver uses sync time for this metric.
 
 ### Historical Data: Never Use Sync Time as recordedAtMs
 
@@ -261,7 +277,7 @@ readings may be misattributed if the device clock is wrong.
 Given a correct UTC `recordedAtMs`, the calendar date a reading belongs to is
 determined as follows.
 
-**Point-in-time metrics** (HR, HRV, RHR, SPO2, BATTERY, RESPIRATORY_RATE,
+**Point-in-time metrics** (HR, HRV, RHR, SPO2, RESPIRATORY_RATE,
 SKIN_TEMP, BODY_TEMP, TEMP_DEVIATION, VO2_MAX)
 
 The calendar date is the UTC date of `recordedAtMs`. A reading at
@@ -289,45 +305,26 @@ If the device sends a partial day total mid-sync (e.g. steps so far today), stil
 emit it with `recordedAtMs` set to UTC midnight of today. If the user syncs again
 later that day, the updated total will replace the partial via insert-or-replace.
 
+**BATTERY**
+
+BATTERY is a special case. It is not stored in `metric_readings` — it is written
+directly to the device record as the last known battery percentage and displayed in
+the Devices screen. Emit it exactly as you would a point-in-time metric; the app
+routes it automatically. Date attribution rules do not apply to BATTERY.
+
 **Sleep sessions**
 
 Sleep sessions span a date boundary — a person falls asleep on one calendar day and
 wakes on the next.
 
-`dateIso` must always be the **local calendar date the user woke up** — the morning
-the sleep ended in the device's local time, not the night it began. A session where
-the user wakes at 07:00 local time on June 10 must have `dateIso = "2026-06-10"`
-regardless of what that maps to in UTC.
-
-This is the morning-after convention in local time. It matches how the user
-experiences their data — looking at June 10 should show the sleep that preceded that
-day. Deriving `dateIso` from the UTC date of `sleepEndMs` produces the wrong date for
-users in UTC+ timezones (where waking at 07:00 local may still be the previous UTC
-day) and for users in UTC− timezones in the early morning hours.
-
-There are two valid paths to a correct `dateIso`:
-
-**Path 1 — Device reports local wake time directly (preferred).** Most wearables
-report sleep wake time in device-local time. If the device gives you a local date or
-local datetime for the wake event, use the date portion directly as `dateIso`. This
-is the most reliable approach and requires no UTC offset calculation.
-
-**Path 2 — Device reports wake time as UTC only.** If the device only gives you
-`sleepEndMs` as UTC, you need the user's UTC offset to derive the correct local date.
-Read `utcOffsetMinutes` from the metadata region at bytes 8–9 (see Memory Layout).
-The app writes the device's current UTC offset there before every call. Convert:
-`localSleepEndMs = sleepEndMs + (utcOffsetMinutes * 60_000)` then extract the date
-from `localSleepEndMs` as the local calendar date.
-
-> **DST caveat for Path 2:** `utcOffsetMinutes` in the metadata is the offset at sync
-> time. For historical sleep sessions recorded when a different DST offset was in
-> effect, this value may be off by one hour. This can push `dateIso` to the wrong day
-> in edge cases (e.g. a historical sleep ending at 00:30 local during a DST
-> transition). This is an inherent limitation when the device does not report local
-> time directly. Document the limitation in your driver.
+`dateIso` must be the **UTC calendar date of `sleepEndMs`**. The app's validator
+always normalises `date` to the UTC date of `sleepEndMs` regardless of what you
+provide — supplying any other value will produce a correction warning in the logs
+without affecting storage. To avoid the warning, set `dateIso` to `sleepEndMs`
+formatted as a UTC date string (YYYY-MM-DD in UTC).
 
 `sleepStartMs` and `sleepEndMs` themselves remain UTC epoch milliseconds — only
-`dateIso` is derived in local time. Do not convert the timestamps.
+`dateIso` is derived from them.
 
 `sleepStartMs` and `sleepEndMs` must cover the full session from first sleep onset
 to final wake. Do not trim AWAKE periods from the ends — they are part of the
@@ -434,7 +431,7 @@ Implications for driver authors:
 **Value guard and downward corrections:**
 
 The app's accumulator value guard (see Sync Processing) only replaces a stored
-accumulator record when the incoming value is greater than or equal to the stored
+accumulator record when the incoming value is strictly greater than the stored
 value. This protects against corrupt re-syncs that emit 0. However, it also prevents
 legitimate downward corrections — for example, a firmware update that recalculates
 calorie totals with a corrected algorithm, or a distance reading reduced after GPS
@@ -482,11 +479,12 @@ Check every arithmetic operation involving timestamps: addition, subtraction,
 multiplication, division, and bit shifts. A single i32 intermediate in a chain of
 i64 operations is enough to corrupt the result.
 
-### The Input Region Is Zeroed Beyond the Current Packet
+### The Input Region Is Zeroed Beyond the Current Packet (specVersion 2)
 
-The app writes the current packet starting at offset 16 and zeroes any bytes beyond
-`16 + byteLength` that were written by the previous packet. Reads past `byteLength`
-return `0x00` — not stale data from a previous packet.
+For specVersion 2 drivers, the app writes the current packet starting at offset 16
+and zeroes any bytes beyond `16 + byteLength` that were written by the previous
+packet. Reads past `byteLength` return `0x00` — not stale data from a previous
+packet.
 
 Your parser should still treat the input as a slice of exactly `byteLength` bytes
 starting at offset 16 (passed as param 1). Do not rely on zero-padding for packet
@@ -505,6 +503,7 @@ A driver file is a UTF-8 encoded `.json` file. Every field is described below.
   "id": "example_device_v1",
   "displayName": "Example Device",
   "version": "1.0.0",
+  "specVersion": "2",
   "author": "your-name",
   "supportedMetrics": ["HR", "HRV", "SPO2", "STEPS", "BATTERY"],
   "ble": { ... },
@@ -518,6 +517,7 @@ A driver file is a UTF-8 encoded `.json` file. Every field is described below.
 | `id` | string | yes | Stable unique identifier. Stored in the database — never change it after release. Use lowercase and underscores. |
 | `displayName` | string | yes | Human-readable name shown in the Devices screen. |
 | `version` | string | yes | Semver string, e.g. `"1.0.0"`. |
+| `specVersion` | string | no | Memory layout version. Use `"2"` to enable the 16-byte metadata header (`syncStartMs`, `utcOffsetMinutes`). Omit or set to `"1"` for the legacy layout (BLE bytes at offset 0, no metadata). Any value other than `"2"` falls back to spec v1 behaviour. All new drivers should use `"2"`. |
 | `author` | string | yes | Your name or handle. |
 | `supportedMetrics` | string[] | yes | Array of metric type names this driver can produce. See supported values below. |
 | `ble` | object | yes | BLE discovery and characteristic configuration. |
@@ -532,7 +532,7 @@ HRV              Heart rate variability (ms)
 RHR              Resting heart rate (bpm)
 SPO2             Blood oxygen saturation (%)
 STEPS            Step count (steps) — daily total only, one per day
-BATTERY          Device battery level (%)
+BATTERY          Device battery level (%) — routed to device metadata, not metric_readings
 RESPIRATORY_RATE Breaths per minute
 SKIN_TEMP        Skin temperature (°C)
 BODY_TEMP        Body temperature (°C)
@@ -548,9 +548,14 @@ BASAL_CALORIES   Basal metabolic calories (kcal) — daily total only, one per d
 
 > **Sleep capability is not declared via `supportedMetrics`.** Sleep stage data lives
 > inside `SleepSession.stagesJson` — it is not emitted as a MetricReading and
-> `SLEEP_STAGE` is not a valid value in `supportedMetrics`. Sleep support is declared
+> `SLEEP_STAGE` should not appear in `supportedMetrics`. Sleep support is declared
 > by including `parseSleep` in `parsing.exports`. If your driver supports sleep, add
 > `parseSleep` to exports and omit `SLEEP_STAGE` from `supportedMetrics` entirely.
+
+> **BATTERY routing:** BATTERY is written to the device record (last known battery
+> percentage visible in the Devices screen), not to `metric_readings`. Include it in
+> `supportedMetrics` if your device reports battery level. The app routes it
+> automatically — no special handling is needed in your parser.
 
 Do not include any proprietary manufacturer metrics (readiness scores, recovery
 scores, sleep scores, body battery, strain scores, or similar). The app stores
@@ -620,15 +625,15 @@ notifications. Three command types are available:
 ```
 
 The app executes these in order. After the last command completes, the device
-enters Connected state and the app begins accumulating notification data.
+enters Connected state and sync fires automatically.
 
-> **Packet interleaving:** All sync commands fire before any data is processed.
-> A device may begin responding to the first command before the last command has been
-> sent. If your parser has any state that depends on receiving packets in a specific
-> order, add `DELAY` commands between sync writes to give the device time to respond
-> before the next command is issued. If packet ordering is critical, use longer
-> delays and validate packet types explicitly in your parser rather than relying on
-> arrival order.
+> **Packet interleaving:** Sync commands execute before the sync trigger fires.
+> However, BLE notifications are enabled before sync commands run, so a device may
+> begin sending notification data before the last command has been sent. If your
+> parser has any state that depends on receiving packets in a specific order, add
+> `DELAY` commands between sync writes to give the device time to respond before the
+> next command is issued. If packet ordering is critical, use longer delays and
+> validate packet types explicitly in your parser rather than relying on arrival order.
 
 ---
 
@@ -648,6 +653,7 @@ enters Connected state and the app begins accumulating notification data.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `mode` | string | yes | Must be `"WASM"`. Drivers using any other mode are rejected. |
 | `wasmBase64` | string | yes | The compiled `.wasm` binary encoded as Base64. |
 | `exports.parseMetrics` | string | yes | Name of the exported WASM function that parses metric readings. |
 | `exports.parseSleep` | string | no | Name of the exported WASM function that parses sleep sessions. Omit if device has no sleep data. |
@@ -683,10 +689,9 @@ Offset 0x0000 (    0) — METADATA REGION — 16 bytes
               reconstruction. Do not call any system clock from WASM.
   Bytes 8–9:  utcOffsetMinutes — i16 little-endian — the device's current
               UTC offset in minutes (e.g. UTC+1 = 60, UTC-5 = -300, UTC = 0).
-              Use this to derive local dateIso for sleep sessions when the
-              device only provides UTC timestamps (Path 2 in Date Attribution).
-              Note: this is the offset at sync time — see DST caveat in the
-              sleep date attribution section.
+              Available for any local-time conversion your parser needs.
+              Note: this is the offset at sync time — historical data that
+              was recorded under a different DST offset may be off by one hour.
   Bytes 10–15: reserved — will always be zero in spec v2. Do not read or
               write these bytes. Future spec versions may define values here;
               a non-zero value in bytes 10–15 does not indicate an error.
@@ -715,7 +720,8 @@ All three exported parse functions use the same signature:
 
 ```
 (func (param i32 i32) (result i32))
-  param 1 — memory offset of input bytes (always 16 / 0x0010)
+  param 1 — memory offset of input bytes (16 / 0x0010 for specVersion 2;
+             0 for specVersion 1 legacy drivers)
   param 2 — length of input bytes
   result  — byte length of JSON written at offset 4096
 ```
@@ -725,7 +731,8 @@ region.
 
 ### Call Sequence (per notification)
 
-1. App writes `syncStartMs` (i64, little-endian) to memory offset `0`
+1. App writes the 16-byte metadata header: `syncStartMs` (i64 LE) at offset 0,
+   `utcOffsetMinutes` (i16 LE) at offset 8, six zero bytes at offsets 10–15
 2. App writes raw BLE bytes to memory offset `16`
 3. App zeroes bytes `16 + byteLength` through `16 + previousByteLength - 1`
    (clears stale bytes from the previous packet)
@@ -785,7 +792,7 @@ An empty array `[]` is valid and equivalent to returning `0`.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `dateIso` | string | yes | Local calendar date the user woke up, e.g. `"2024-01-15"`. Derived from the local time representation of `sleepEndMs` — not from the UTC date of `sleepEndMs`. |
+| `dateIso` | string | yes | The UTC calendar date of `sleepEndMs`, e.g. `"2024-01-15"`. The app always normalises this field to the UTC date of `sleepEndMs` — set it to that value to avoid a correction warning. |
 | `sleepStartMs` | int64 | yes | UTC epoch ms when sleep began. Must be before `sleepEndMs`. |
 | `sleepEndMs` | int64 | yes | UTC epoch ms when sleep ended. Must be greater than `sleepStartMs`. |
 | `durationMinutes` | int | no | Ignored. Set to `0`. Duration is always derived from `(sleepEndMs − sleepStartMs) / 60000`. |
@@ -799,7 +806,10 @@ An empty array `[]` is valid and equivalent to returning `0`.
 > same `dateIso`. The engine merges all sessions sharing the same `(driverId,
 > dateIso)` into a single full-night record: the earliest `sleepStartMs`, the latest
 > `sleepEndMs`, and the union of all stage objects sorted by `startMs`. Total
-> duration is recomputed from the merged span.
+> duration is recomputed from the merged span. The merge also includes any session
+> already stored in the database for that `(driverId, date)` pair — so a session
+> split across two syncs (start data in sync 1, end data in sync 2) is correctly
+> assembled on the second sync.
 
 Signal "no sleep data" by returning `0` or writing `{}`.
 
@@ -809,7 +819,7 @@ Signal "no sleep data" by returning `0` or writing `{}`.
 {
   "startTimeMs": 1705276800000,
   "endTimeMs": 1705280400000,
-  "durationMinutes": 60,
+  "durationMinutes": 0,
   "deviceName": "Outdoor Run",
   "avgHrBpm": 145.0,
   "maxHrBpm": 178.0,
@@ -897,12 +907,17 @@ is rejected entirely with an error message shown to the user.
 |---|---|
 | `id` not blank | Must be a non-empty string |
 | `version` is semver | Must match `X.Y.Z` where X, Y, Z are integers |
-| `supportedMetrics` not empty | Must contain at least one valid MetricType value |
+| `supportedMetrics` not empty | Must contain at least one value |
 | `ble.services` not empty | Must list at least one service UUID |
-| At least one match field | `matchByName` or `matchByServiceUuid` must be present |
 | `parsing.mode` | Must be `"WASM"` |
 | `parsing.wasmBase64` | Must decode to a valid WASM binary (magic header check: first 4 bytes must be `0x00 0x61 0x73 0x6D`) |
 | `exports.parseMetrics` | Must not be blank |
+| `specVersion` | Only `"1"` and `"2"` produce defined behaviour. Other values fall back silently to spec v1 layout. No rejection. |
+
+> **Advisory (not enforced by the validator):** At least one of `matchByName` or
+> `matchByServiceUuid` should be present so the scanner can identify candidate
+> devices. A driver with both fields absent will load successfully but will never
+> match any scanned device.
 
 ---
 
@@ -911,6 +926,8 @@ is rejected entirely with an error message shown to the user.
 **Structure**
 - [ ] `id` is unique and will not change in future versions
 - [ ] `version` follows semver (`X.Y.Z`)
+- [ ] `specVersion: "2"` is present in the manifest (required for the new memory layout)
+- [ ] If upgrading an existing specVersion 1 driver: `specVersion` updated to `"2"` and module reads `syncStartMs` from offset 0 and BLE bytes from offset 16 (not offset 0)
 - [ ] All UUIDs are full 128-bit format
 - [ ] `matchByName` matches the exact advertised device name (check with a BLE scanner app)
 - [ ] `matchConfidence` is `CERTAIN` only if name + UUID uniquely identify this device
@@ -926,20 +943,17 @@ is rejected entirely with an error message shown to the user.
 - [ ] If device timestamps are in local time, conversion to UTC is documented and tested
 - [ ] DST is not a problem — the driver does not use today's UTC offset for historical records
 - [ ] Accumulator metrics (STEPS, CALORIES, DISTANCE, etc.) emit one reading per calendar day with `recordedAtMs` set to UTC midnight of that day
-- [ ] Sleep `dateIso` is the **local calendar date** the user woke up — either taken directly from device-local wake time (Path 1), or derived using `utcOffsetMinutes` from the metadata region (Path 2)
-- [ ] If using Path 2 (UTC + offset), DST caveat is documented in the driver
+- [ ] Sleep `dateIso` is the UTC calendar date of `sleepEndMs` (YYYY-MM-DD in UTC)
 - [ ] Sleep `sleepStartMs` and `sleepEndMs` cover the full session including AWAKE periods at the boundaries
 - [ ] In-progress sleep sessions (sleepEndMs = 0 or ≤ sleepStartMs) return 0, not a corrupt record
 - [ ] `SLEEP_STAGE` is not in `supportedMetrics` — sleep capability is declared via `parseSleep` in exports
 - [ ] If the driver uses `syncStartMs` for relative timestamp reconstruction, it reads it from offset 0 as i64
-- [ ] If the driver uses `utcOffsetMinutes` for local dateIso derivation, it reads it from offset 8 as i16
-- [ ] `specVersion: "2"` is present in the manifest (required for the new memory layout)
+- [ ] If the driver uses `utcOffsetMinutes` for any local-time conversion, it reads it from offset 8 as i16
 
 **Data integrity**
 - [ ] No unrecognised or proprietary metric types are emitted
 - [ ] STEPS and other accumulators are daily totals, not per-interval values
 - [ ] Activity `steps` field contains activity-only steps, not the daily total
-- [ ] WASM output never exceeds 61,440 bytes (offset 0xF000)
 - [ ] Parser handles unknown packet types by returning 0, not crashing
 
 **WASM correctness**
@@ -962,7 +976,7 @@ is rejected entirely with an error message shown to the user.
 **Correctness under failure conditions**
 - [ ] Parser does not emit a sleep session when sleepEndMs is 0, missing, or ≤ sleepStartMs
 - [ ] If the device sends complete stage arrays in multiple packets, stages are not doubled in the merge
-- [ ] BATTERY readings are not emitted into metric_readings — battery is device metadata only
+- [ ] BATTERY readings are not expected in `metric_readings` — battery is routed to device metadata automatically
 - [ ] Driver changelog documents any version that changes recordedAtMs values, so users know to use Reprocess
 
 ---

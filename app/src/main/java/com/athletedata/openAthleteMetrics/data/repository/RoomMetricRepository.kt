@@ -64,6 +64,17 @@ class RoomMetricRepository @Inject constructor(
         }
     }
 
+    override suspend fun replaceAllFromDevice(readings: List<MetricReading>): Int {
+        return try {
+            val entities = readings.map { it.copy(source = DataSource.DEVICE).toEntity() }
+            dao.upsertAll(entities)   // REPLACE for all types — intentional for reprocessing
+            entities.size
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to force-replace device metric readings")
+            throw e
+        }
+    }
+
     override suspend fun insertManual(reading: MetricReading) {
         try {
             val entity = reading.copy(

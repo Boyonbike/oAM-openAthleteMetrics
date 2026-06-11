@@ -1,6 +1,7 @@
 package com.athletedata.openAthleteMetrics.data.repository
 
 import com.athletedata.openAthleteMetrics.data.model.SyncSession
+import java.time.Instant
 import kotlinx.coroutines.flow.Flow
 
 interface SyncSessionRepository {
@@ -12,4 +13,8 @@ interface SyncSessionRepository {
     fun getSessionsForDevice(deviceId: Long): Flow<List<SyncSession>>
 
     suspend fun getLatestSessionForDevice(deviceId: Long): SyncSession?
+
+    suspend fun deleteOlderThan(threshold: Instant)
+
+    suspend fun markOldPartialsAsFailed(threshold: Instant)
 }

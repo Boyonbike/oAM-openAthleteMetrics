@@ -87,6 +87,8 @@ fun DevicesScreen(
     val drivers by viewModel.drivers.collectAsStateWithLifecycle()
     val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
+    val reprocessState by viewModel.reprocessState.collectAsStateWithLifecycle()
+    val reprocessingDeviceId by viewModel.reprocessingDeviceId.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -95,6 +97,8 @@ fun DevicesScreen(
     var errorMessages by remember { mutableStateOf<List<String>?>(null) }
     var driverToDelete by remember { mutableStateOf<WasmDriverManifest?>(null) }
     var deviceToRemove by remember { mutableStateOf<Device?>(null) }
+    var deviceToShowActions by remember { mutableStateOf<Device?>(null) }
+    var deviceToReprocess by remember { mutableStateOf<Device?>(null) }
 
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -168,6 +172,53 @@ fun DevicesScreen(
         )
     }
 
+    deviceToShowActions?.let { device ->
+        AlertDialog(
+            onDismissRequest = { deviceToShowActions = null },
+            title = { Text(device.displayName) },
+            text = null,
+            confirmButton = {
+                Column {
+                    TextButton(onClick = {
+                        deviceToShowActions = null
+                        deviceToReprocess = device
+                    }) { Text("Reprocess synced data") }
+                    TextButton(onClick = {
+                        deviceToShowActions = null
+                        deviceToRemove = device
+                    }) { Text("Remove device") }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deviceToShowActions = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    deviceToReprocess?.let { device ->
+        AlertDialog(
+            onDismissRequest = { deviceToReprocess = null },
+            title = { Text("Reprocess synced data") },
+            text = {
+                Text(
+                    "This will reprocess raw BLE data from ${device.displayName} " +
+                    "using the current driver. Covers the last 7 days of synced raw data — " +
+                    "older data must resync naturally. " +
+                    "Corrected values will replace existing records."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.onReprocessConfirmed(device)
+                    deviceToReprocess = null
+                }) { Text("Reprocess") }
+            },
+            dismissButton = {
+                TextButton(onClick = { deviceToReprocess = null }) { Text("Cancel") }
+            },
+        )
+    }
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background,
@@ -210,9 +261,11 @@ fun DevicesScreen(
                                 DeviceCell(
                                     device = device,
                                     connectionState = connectionState,
+                                    reprocessState = reprocessState,
+                                    isReprocessingThisDevice = reprocessingDeviceId == device.id,
                                     onConnect = { viewModel.onDeviceCellTapped(device) },
                                     onSync = viewModel::onSyncTapped,
-                                    onLongPress = { deviceToRemove = device },
+                                    onLongPress = { deviceToShowActions = device },
                                     onDisconnect = viewModel::onDisconnectTapped,
                                 )
                             }
@@ -364,6 +417,8 @@ private fun AddCell(label: String, sublabel: String? = null, onClick: () -> Unit
 private fun DeviceCell(
     device: Device,
     connectionState: BleConnectionState,
+    reprocessState: ReprocessState,
+    isReprocessingThisDevice: Boolean,
     onConnect: () -> Unit,
     onSync: () -> Unit,
     onLongPress: () -> Unit,
@@ -504,6 +559,16 @@ private fun DeviceCell(
                     tint = MaterialTheme.colorScheme.error,
                 )
             }
+        }
+
+        // Reprocess progress bar at bottom of card
+        if (isReprocessingThisDevice && reprocessState is ReprocessState.Running) {
+            LinearProgressIndicator(
+                progress = { reprocessState.progress },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter),
+            )
         }
     }
 }

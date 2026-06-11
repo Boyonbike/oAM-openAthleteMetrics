@@ -49,4 +49,8 @@ interface SleepSessionDao {
     /** One-shot read for a specific date; used by DailySummaryWorker. */
     @Query("SELECT * FROM sleep_sessions WHERE date = :date LIMIT 1")
     suspend fun getSessionForDateOnce(date: LocalDate): SleepSessionEntity?
+
+    /** One-shot read for a specific driver + date; used by DeviceSyncProcessor before merge. */
+    @Query("SELECT * FROM sleep_sessions WHERE driver_id = :driverId AND date = :date LIMIT 1")
+    suspend fun getByDriverAndDate(driverId: String, date: LocalDate): SleepSessionEntity?
 }

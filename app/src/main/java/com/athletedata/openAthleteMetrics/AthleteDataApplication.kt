@@ -3,8 +3,10 @@ package com.athletedata.openAthleteMetrics
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import androidx.work.WorkManager
 import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
 import com.athletedata.openAthleteMetrics.ble.wasm.WasmRuntimeCheck
+import com.athletedata.openAthleteMetrics.worker.AppStartupWorker
 import dagger.hilt.android.HiltAndroidApp
 import timber.log.Timber
 import javax.inject.Inject
@@ -29,6 +31,7 @@ class AthleteDataApplication : Application(), Configuration.Provider {
             Timber.e("WASM runtime: FAILED TO INITIALISE")
         }
         driverRegistry.initialiseDrivers()
+        AppStartupWorker.enqueue(WorkManager.getInstance(this))
     }
 
     override val workManagerConfiguration: Configuration

@@ -7,7 +7,6 @@ import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.data.model.SleepSession
 import java.time.Instant
 import java.time.LocalDate
-import java.time.temporal.ChronoUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.abs
@@ -45,10 +44,24 @@ class SyncValidator @Inject constructor() {
 
     fun validateSessions(sessions: List<SleepSession>): List<ValidationResult<SleepSession>> =
         sessions.map { session ->
-            val actualMinutes = ChronoUnit.MINUTES.between(session.sleepStartMs, session.sleepEndMs).toInt()
+            val dateIso = session.date.toString()
+            val startMs = session.sleepStartMs.toEpochMilli()
+            val endMs = session.sleepEndMs.toEpochMilli()
+            val durationMs = endMs - startMs
+            val actualMinutes = (durationMs / 60_000L).toInt()
             val reason = when {
-                !session.sleepEndMs.isAfter(session.sleepStartMs) ->
-                    "sleepEndMs ${session.sleepEndMs} is not after sleepStartMs ${session.sleepStartMs}"
+                session.sleepStartMs.isBefore(EARLIEST_VALID_TIMESTAMP) ->
+                    "sleepStartMs ${session.sleepStartMs} is before 2020-01-01"
+                session.sleepEndMs.isBefore(EARLIEST_VALID_TIMESTAMP) ->
+                    "sleepEndMs ${session.sleepEndMs} is before 2020-01-01"
+                endMs <= startMs ->
+                    "sleepEndMs $endMs is not after sleepStartMs $startMs"
+                durationMs < 60_000L ->
+                    "sleep duration ${durationMs}ms is less than 1 minute"
+                durationMs > 86_400_000L ->
+                    "sleep duration ${durationMs}ms exceeds 24 hours"
+                session.sleepEndMs.isAfter(Instant.now().plusMillis(3_600_000L)) ->
+                    "sleepEndMs ${session.sleepEndMs} is more than 1 hour in the future"
                 abs(actualMinutes - session.durationMinutes) > 2 ->
                     "durationMinutes ${session.durationMinutes} does not match computed $actualMinutes (tolerance 2 min)"
                 session.date.isAfter(LocalDate.now()) ->
@@ -56,7 +69,7 @@ class SyncValidator @Inject constructor() {
                 else -> null
             }
             if (reason != null) {
-                Log.w(TAG, "Rejected SleepSession: $reason")
+                Log.w(TAG, "Rejecting invalid sleep session for $dateIso: $reason")
                 ValidationResult.Rejected(session, reason)
             } else {
                 ValidationResult.Accepted(session)

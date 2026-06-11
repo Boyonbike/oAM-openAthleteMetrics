@@ -8,11 +8,13 @@ import com.athletedata.openAthleteMetrics.ble.BleEngine
 import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
 import com.athletedata.openAthleteMetrics.ble.driver.DriverStorage
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
+import com.athletedata.openAthleteMetrics.ble.sync.DeviceReprocessor
 import com.athletedata.openAthleteMetrics.data.model.Device
 import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -23,9 +25,19 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import timber.log.Timber
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 import javax.inject.Inject
 
 enum class DevicesTab { DEVICE, DRIVER }
+
+sealed class ReprocessState {
+    object Idle : ReprocessState()
+    data class Running(val progress: Float) : ReprocessState()
+    data class Done(val recordsReplaced: Int, val datesAffected: Int) : ReprocessState()
+    data class Failed(val message: String) : ReprocessState()
+}
 
 sealed class DriverEvent {
     data class ValidationError(val errors: List<String>) : DriverEvent()
@@ -38,6 +50,7 @@ class DevicesViewModel @Inject constructor(
     private val driverStorage: DriverStorage,
     private val driverRegistry: DriverRegistry,
     private val bleEngine: BleEngine,
+    private val deviceReprocessor: DeviceReprocessor,
 ) : ViewModel() {
 
     val devices: StateFlow<List<Device>> = deviceRepository.getAllDevices()
@@ -65,6 +78,12 @@ class DevicesViewModel @Inject constructor(
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = BleConnectionState.Idle,
         )
+
+    private val _reprocessState = MutableStateFlow<ReprocessState>(ReprocessState.Idle)
+    val reprocessState: StateFlow<ReprocessState> = _reprocessState.asStateFlow()
+
+    private val _reprocessingDeviceId = MutableStateFlow<Long?>(null)
+    val reprocessingDeviceId: StateFlow<Long?> = _reprocessingDeviceId.asStateFlow()
 
     init {
         // CHANGE 1: default to Device tab if either drivers or devices exist
@@ -120,6 +139,52 @@ class DevicesViewModel @Inject constructor(
     fun onSyncAcknowledged() { bleEngine.acknowledgeSyncComplete() }
 
     fun onDisconnectDismissed() { bleEngine.resetToIdle() }
+
+    fun onReprocessConfirmed(device: Device) {
+        if (connectionState.value !is BleConnectionState.Idle) {
+            viewModelScope.launch {
+                _snackbarEvents.send("Cannot reprocess while a BLE operation is active.")
+            }
+            return
+        }
+        if (_reprocessState.value is ReprocessState.Running) return
+
+        _reprocessingDeviceId.value = device.id
+        _reprocessState.value = ReprocessState.Running(0f)
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val since = Instant.now().minus(7, ChronoUnit.DAYS)
+                val summary = deviceReprocessor.reprocess(
+                    device = device,
+                    since = since,
+                    onProgress = { _reprocessState.value = ReprocessState.Running(it) },
+                )
+                if (summary.error != null) {
+                    _reprocessState.value = ReprocessState.Failed(summary.error)
+                    _snackbarEvents.send("Reprocess failed: ${summary.error}")
+                } else {
+                    _reprocessState.value = ReprocessState.Done(
+                        recordsReplaced = summary.recordsReplaced,
+                        datesAffected = summary.datesAffected.size,
+                    )
+                    _snackbarEvents.send(
+                        "Reprocessed ${summary.recordsReplaced} records across ${summary.datesAffected.size} days"
+                    )
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Reprocessing failed for device ${device.id}")
+                _reprocessState.value = ReprocessState.Failed(e.message ?: "Unknown error")
+                _snackbarEvents.send("Reprocess failed: ${e.message}")
+            } finally {
+                _reprocessingDeviceId.value = null
+                delay(3_000)
+                if (_reprocessState.value !is ReprocessState.Running) {
+                    _reprocessState.value = ReprocessState.Idle
+                }
+            }
+        }
+    }
 
     fun selectTab(tab: DevicesTab) {
         _selectedTab.value = tab

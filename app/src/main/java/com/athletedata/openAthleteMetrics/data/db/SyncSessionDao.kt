@@ -20,8 +20,14 @@ interface SyncSessionDao {
     @Query("DELETE FROM sync_sessions WHERE device_id = :deviceId")
     suspend fun deleteForDevice(deviceId: Long)
 
+    @Query("DELETE FROM sync_sessions WHERE started_at < :cutoffMs")
+    suspend fun deleteOlderThan(cutoffMs: Long)
+
     @Query("DELETE FROM sync_sessions")
     suspend fun deleteAll()
+
+    @Query("UPDATE sync_sessions SET status = 'FAILED' WHERE status = 'PARTIAL' AND started_at < :cutoffMs")
+    suspend fun markOldPartialsAsFailed(cutoffMs: Long)
 
     // ── Reads ─────────────────────────────────────────────────────────────────
 

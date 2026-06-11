@@ -12,4 +12,6 @@ interface RawDeviceDataRepository {
     suspend fun deleteForSession(syncSessionId: Long)
 
     suspend fun deleteOlderThan(threshold: Instant)
+
+    suspend fun getForDevice(deviceId: Long, since: Instant): List<RawPayload>
 }

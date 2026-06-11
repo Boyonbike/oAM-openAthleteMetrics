@@ -51,6 +51,9 @@ class RoomSleepRepository @Inject constructor(
     override suspend fun getSessionForDateOnce(date: LocalDate): SleepSession? =
         dao.getSessionForDateOnce(date)?.toModel()
 
+    override suspend fun getByDriverAndDate(driverId: String, date: LocalDate): SleepSession? =
+        dao.getByDriverAndDate(driverId, date)?.toModel()
+
     override suspend fun insertOrReplace(session: SleepSession) {
         try {
             dao.insert(session.copy(source = DataSource.DEVICE).toEntity())

@@ -61,7 +61,7 @@ class DriverRegistry @Inject constructor(
             ?: _drivers.firstOrNull { it.matches() }?.let { it to MatchConfidence.PROBABLE }
     }
 
-    fun parseMetrics(
+    suspend fun parseMetrics(
         manifest: WasmDriverManifest,
         characteristicUuid: String,
         data: ByteArray,
@@ -70,7 +70,7 @@ class DriverRegistry @Inject constructor(
         return wasmEngine.parseMetrics(characteristicUuid, data, manifest.id)
     }
 
-    fun parseSleep(
+    suspend fun parseSleep(
         manifest: WasmDriverManifest,
         characteristicUuid: String,
         data: ByteArray,
@@ -79,7 +79,7 @@ class DriverRegistry @Inject constructor(
         return wasmEngine.parseSleep(characteristicUuid, data, manifest.id)
     }
 
-    fun parseActivity(
+    suspend fun parseActivity(
         manifest: WasmDriverManifest,
         characteristicUuid: String,
         data: ByteArray,
@@ -88,7 +88,7 @@ class DriverRegistry @Inject constructor(
         return wasmEngine.parseActivity(characteristicUuid, data, manifest.id)
     }
 
-    private fun ensureWasmLoaded(manifest: WasmDriverManifest): Boolean {
+    private suspend fun ensureWasmLoaded(manifest: WasmDriverManifest): Boolean {
         if (wasmLoadedId == manifest.id) return true
         if (manifest.id in _failedDriverIds) return false
         return if (wasmEngine.load(manifest)) {

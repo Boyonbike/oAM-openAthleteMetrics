@@ -31,6 +31,9 @@ interface SleepRepository {
     /** One-shot read for a specific date; used by DailySummaryWorker. */
     suspend fun getSessionForDateOnce(date: LocalDate): SleepSession?
 
+    /** One-shot read keyed by driver + date; used by DeviceSyncProcessor to fetch the existing record before merge. */
+    suspend fun getByDriverAndDate(driverId: String, date: LocalDate): SleepSession?
+
     /** Deletes all sessions whose source matches [source]. Used by the seeder cleanup flow. */
     suspend fun deleteBySource(source: DataSource)
 }

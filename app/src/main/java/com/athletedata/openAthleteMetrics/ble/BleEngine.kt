@@ -32,6 +32,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -41,6 +43,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.time.Instant
+import java.util.Collections
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -65,13 +68,22 @@ class BleEngine @Inject constructor(
     private var activeDeviceAddress: String? = null
     private var syncStartedAt: Instant = Instant.now()
 
-    private val pendingMetrics = mutableListOf<MetricReading>()
-    private val pendingSleep = mutableListOf<SleepSession>()
-    private val pendingActivities = mutableListOf<Activity>()
-    private val pendingRaw = mutableListOf<RawPayload>()
+    private val pendingMetrics: MutableList<MetricReading> = Collections.synchronizedList(mutableListOf())
+    private val pendingSleep: MutableList<SleepSession> = Collections.synchronizedList(mutableListOf())
+    private val pendingActivities: MutableList<Activity> = Collections.synchronizedList(mutableListOf())
+    private val pendingRaw: MutableList<RawPayload> = Collections.synchronizedList(mutableListOf())
 
     private var negotiatedMtu: Int = 23  // Android stack default; updated in onMtuChanged
     private val reassemblyBuffers = mutableMapOf<String, ByteArray>()
+
+    // Packets arriving faster than WASM can parse them are held here. DROP_OLDEST
+    // prevents the BLE callback from blocking; 512 items covers burst scenarios.
+    // NOTE: packets dropped by the Android OS *before* onCharacteristicChanged fires
+    // are unrecoverable — this channel only prevents drops caused by slow processing.
+    private val notificationChannel = Channel<Pair<String, ByteArray>>(
+        capacity = 512,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
 
     private var activeGatt: BluetoothGatt? = null
     private var bleScanner: android.bluetooth.le.BluetoothLeScanner? = null
@@ -97,6 +109,19 @@ class BleEngine @Inject constructor(
                     triggerSync()
                 }
                 prev = state
+            }
+        }
+
+        // Single consumer: drains notificationChannel sequentially on IO so WASM
+        // parsing never runs concurrently and the BLE callback is never blocked.
+        scope.launch(Dispatchers.IO) {
+            var processedCount = 0
+            for ((uuid, bytes) in notificationChannel) {
+                handleNotification(uuid, bytes)
+                processedCount++
+                if (processedCount % 50 == 0) {
+                    Timber.d("BleEngine: Notification channel depth: ${notificationChannel.size}")
+                }
             }
         }
     }
@@ -228,7 +253,7 @@ class BleEngine @Inject constructor(
      * continuation-flag header, or fixed frame size), replace the completeness check
      * below and document the new strategy here.
      */
-    fun handleNotification(characteristicUuid: String, bytes: ByteArray) {
+    private suspend fun handleNotification(characteristicUuid: String, bytes: ByteArray) {
         val manifest = activeManifest ?: return
 
         val maxPayload = negotiatedMtu - 3
@@ -242,20 +267,26 @@ class BleEngine @Inject constructor(
         // Full packet assembled — pass to WASM parser and reset this characteristic's buffer.
         reassemblyBuffers[characteristicUuid] = ByteArray(0)
 
-        pendingMetrics += driverRegistry.parseMetrics(manifest, characteristicUuid, accumulated)
-        driverRegistry.parseSleep(manifest, characteristicUuid, accumulated)?.let { pendingSleep += it }
-        driverRegistry.parseActivity(manifest, characteristicUuid, accumulated)?.let { pendingActivities += it }
+        // Already on Dispatchers.IO (consumer coroutine); no inner launch needed.
+        val readings = driverRegistry.parseMetrics(manifest, characteristicUuid, accumulated)
+        val sleep    = driverRegistry.parseSleep(manifest, characteristicUuid, accumulated)
+        val activity = driverRegistry.parseActivity(manifest, characteristicUuid, accumulated)
+
+        pendingMetrics.addAll(readings)
+        sleep?.let { pendingSleep.add(it) }
+        activity?.let { pendingActivities.add(it) }
+
         if (!driverRegistry.isWasmLoaded(manifest)) {
             _connectionState.value = BleConnectionState.Error(
                 "Driver '${manifest.displayName}' WASM failed to initialise"
             )
             return
         }
-        pendingRaw += RawPayload(
+        pendingRaw.add(RawPayload(
             characteristicUuid = characteristicUuid,
             payload = accumulated,
             receivedAt = Instant.now(),
-        )
+        ))
     }
 
     suspend fun triggerSync(): SyncSummary? {
@@ -264,15 +295,19 @@ class BleEngine @Inject constructor(
         val address = activeDeviceAddress ?: return null
         _connectionState.value = BleConnectionState.Syncing(address, 0f)
         return try {
+            val metricReadings = synchronized(pendingMetrics) { pendingMetrics.toList().also { pendingMetrics.clear() } }
+            val sleepSessions = synchronized(pendingSleep) { pendingSleep.toList().also { pendingSleep.clear() } }
+            val activities = synchronized(pendingActivities) { pendingActivities.toList().also { pendingActivities.clear() } }
+            val rawPayloads = synchronized(pendingRaw) { pendingRaw.toList().also { pendingRaw.clear() } }
             val result = DriverSyncResult(
                 deviceId = address,
                 driverId = manifest.id,
                 syncStartedAt = syncStartedAt,
                 syncEndedAt = Instant.now(),
-                metricReadings = pendingMetrics.toList(),
-                sleepSessions = pendingSleep.toList(),
-                activities = pendingActivities.toList(),
-                rawPayloads = pendingRaw.toList(),
+                metricReadings = metricReadings,
+                sleepSessions = sleepSessions,
+                activities = activities,
+                rawPayloads = rawPayloads,
             )
             reassemblyBuffers.forEach { (uuid, buf) ->
                 if (buf.isNotEmpty()) {
@@ -280,10 +315,6 @@ class BleEngine @Inject constructor(
                 }
             }
             reassemblyBuffers.clear()
-            pendingMetrics.clear()
-            pendingSleep.clear()
-            pendingActivities.clear()
-            pendingRaw.clear()
             val summary = syncProcessor.process(result)
             _connectionState.value = BleConnectionState.SyncComplete(summary, activeDeviceAddress ?: "")
             summary
@@ -448,7 +479,10 @@ class BleEngine @Inject constructor(
         ) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
                 val bytes = characteristic.value?.clone() ?: return
-                scope.launch { handleNotification(characteristic.uuid.toString(), bytes) }
+                if (notificationChannel.size >= 512) {
+                    Timber.w("BleEngine: Notification channel full — dropping oldest packet")
+                }
+                notificationChannel.trySend(Pair(characteristic.uuid.toString(), bytes))
             }
         }
 
@@ -458,7 +492,10 @@ class BleEngine @Inject constructor(
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray,
         ) {
-            scope.launch { handleNotification(characteristic.uuid.toString(), value) }
+            if (notificationChannel.size >= 512) {
+                Timber.w("BleEngine: Notification channel full — dropping oldest packet")
+            }
+            notificationChannel.trySend(Pair(characteristic.uuid.toString(), value.clone()))
         }
 
         override fun onCharacteristicWrite(

@@ -4,6 +4,7 @@ import com.athletedata.openAthleteMetrics.data.db.SyncSessionDao
 import com.athletedata.openAthleteMetrics.data.db.toEntity
 import com.athletedata.openAthleteMetrics.data.db.toModel
 import com.athletedata.openAthleteMetrics.data.model.SyncSession
+import java.time.Instant
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
@@ -23,4 +24,10 @@ class RoomSyncSessionRepository @Inject constructor(
 
     override suspend fun getLatestSessionForDevice(deviceId: Long): SyncSession? =
         dao.getLatestSessionForDevice(deviceId)?.toModel()
+
+    override suspend fun deleteOlderThan(threshold: Instant) =
+        dao.deleteOlderThan(threshold.toEpochMilli())
+
+    override suspend fun markOldPartialsAsFailed(threshold: Instant) =
+        dao.markOldPartialsAsFailed(threshold.toEpochMilli())
 }

@@ -9,6 +9,8 @@ import com.athletedata.openAthleteMetrics.data.model.SleepSession
 import com.dylibso.chicory.runtime.Instance
 import com.dylibso.chicory.wasm.ChicoryException
 import com.dylibso.chicory.wasm.Parser
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import org.json.JSONArray
 import timber.log.Timber
@@ -42,22 +44,25 @@ class WasmDriverEngine @Inject constructor() {
 
     private var instance: Instance? = null
     private var loadedManifest: WasmDriverManifest? = null
+    private val parseMutex = Mutex()
 
     /**
      * Compiles and instantiates the WASM binary from [manifest].
      * Replaces any previously loaded instance.
      * Returns false if compilation fails.
      */
-    fun load(manifest: WasmDriverManifest): Boolean {
+    suspend fun load(manifest: WasmDriverManifest): Boolean {
         val wasm = manifest.parsing as? ParsingConfig.WasmParsing ?: return false
-        unload()
-        return try {
-            instance = instantiate(wasm.wasmBytes)
-            loadedManifest = manifest
-            true
-        } catch (e: Exception) {
-            Timber.w(e, "WasmDriverEngine: failed to load driver ${manifest.id}")
-            false
+        return parseMutex.withLock {
+            unload()
+            try {
+                instance = instantiate(wasm.wasmBytes)
+                loadedManifest = manifest
+                true
+            } catch (e: Exception) {
+                Timber.w(e, "WasmDriverEngine: failed to load driver ${manifest.id}")
+                false
+            }
         }
     }
 
@@ -65,14 +70,14 @@ class WasmDriverEngine @Inject constructor() {
      * Calls the WASM parseMetrics export with [data] and deserialises the result.
      * Returns an empty list on any error or missing export — never throws.
      */
-    fun parseMetrics(
+    suspend fun parseMetrics(
         characteristicUuid: String,
         data: ByteArray,
         driverId: String,
-    ): List<MetricReading> {
-        val wasm = loadedManifest?.parsing as? ParsingConfig.WasmParsing ?: return emptyList()
-        return try {
-            val jsonStr = callParse(wasm.exports.parseMetrics, data) ?: return emptyList()
+    ): List<MetricReading> = parseMutex.withLock {
+        val wasm = loadedManifest?.parsing as? ParsingConfig.WasmParsing ?: return@withLock emptyList()
+        try {
+            val jsonStr = callParse(wasm.exports.parseMetrics, data) ?: return@withLock emptyList()
             val now = Instant.now()
             json.decodeFromString<List<MetricWasmDto>>(jsonStr).map { dto ->
                 MetricReading(
@@ -98,17 +103,17 @@ class WasmDriverEngine @Inject constructor() {
      * Duration is computed from (sleepEndMs − sleepStartMs); the DTO's durationMinutes field is ignored.
      * Returns null if the export is absent, the payload has no data, or any error occurs.
      */
-    fun parseSleep(
+    suspend fun parseSleep(
         characteristicUuid: String,
         data: ByteArray,
         driverId: String,
-    ): SleepSession? {
-        val wasm = loadedManifest?.parsing as? ParsingConfig.WasmParsing ?: return null
-        val exportName = wasm.exports.parseSleep ?: return null
-        return try {
+    ): SleepSession? = parseMutex.withLock {
+        val wasm = loadedManifest?.parsing as? ParsingConfig.WasmParsing ?: return@withLock null
+        val exportName = wasm.exports.parseSleep ?: return@withLock null
+        try {
             val jsonStr = callParse(exportName, data)
                 ?.takeIf { it.isNotBlank() && it != "{}" }
-                ?: return null
+                ?: return@withLock null
             val dto = json.decodeFromString<SleepWasmDto>(jsonStr)
             val startInstant = Instant.ofEpochMilli(dto.sleepStartMs)
             // Extend end to cover stage blocks (e.g. AWAKE) that lie past the reported
@@ -133,17 +138,17 @@ class WasmDriverEngine @Inject constructor() {
      * Calls the WASM parseActivity export if present.
      * Returns null if the export is absent, the payload has no data, or any error occurs.
      */
-    fun parseActivity(
+    suspend fun parseActivity(
         characteristicUuid: String,
         data: ByteArray,
         driverId: String,
-    ): Activity? {
-        val wasm = loadedManifest?.parsing as? ParsingConfig.WasmParsing ?: return null
-        val exportName = wasm.exports.parseActivity ?: return null
-        return try {
+    ): Activity? = parseMutex.withLock {
+        val wasm = loadedManifest?.parsing as? ParsingConfig.WasmParsing ?: return@withLock null
+        val exportName = wasm.exports.parseActivity ?: return@withLock null
+        try {
             val jsonStr = callParse(exportName, data)
                 ?.takeIf { it.isNotBlank() && it != "{}" }
-                ?: return null
+                ?: return@withLock null
             val dto = json.decodeFromString<ActivityWasmDto>(jsonStr)
             Activity(
                 startTime = Instant.ofEpochMilli(dto.startTimeMs),

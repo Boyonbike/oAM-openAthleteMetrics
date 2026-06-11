@@ -39,6 +39,12 @@ class RoomActivityRepository @Inject constructor(
         return rowIds.count { it == -1L }
     }
 
+    override suspend fun replaceAllFromDevice(activities: List<Activity>): Int {
+        val entities = activities.map { it.copy(source = DataSource.DEVICE).toEntity() }
+        dao.insertAll(entities)   // insertAll uses OnConflictStrategy.REPLACE
+        return entities.size
+    }
+
     override suspend fun deleteBySource(source: DataSource) = dao.deleteBySource(source)
 
     override suspend fun updateCategory(id: Long, category: UserCategory) =

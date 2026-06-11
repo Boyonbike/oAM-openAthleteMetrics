@@ -23,6 +23,13 @@ interface MetricRepository {
     /** Batch insert from BLE device — skips duplicates; returns count of skipped rows. */
     suspend fun insertAllFromDevice(readings: List<MetricReading>): Int
 
+    /**
+     * Force-replaces readings from a BLE reprocess run. Uses REPLACE for ALL metric types
+     * so corrected driver output overwrites previously stored incorrect records.
+     * Returns count of rows written.
+     */
+    suspend fun replaceAllFromDevice(readings: List<MetricReading>): Int
+
     /** Inserts a reading and forces source = MANUAL and createdAt = now. */
     suspend fun insertManual(reading: MetricReading)
 

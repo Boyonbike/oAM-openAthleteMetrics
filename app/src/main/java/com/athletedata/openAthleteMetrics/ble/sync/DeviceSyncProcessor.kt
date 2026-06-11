@@ -1,6 +1,8 @@
 package com.athletedata.openAthleteMetrics.ble.sync
 
+import androidx.room.withTransaction
 import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
+import com.athletedata.openAthleteMetrics.data.db.AppDatabase
 import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.Device
 import com.athletedata.openAthleteMetrics.data.model.DriverSyncResult
@@ -10,8 +12,6 @@ import com.athletedata.openAthleteMetrics.data.model.SleepSession
 import com.athletedata.openAthleteMetrics.data.model.SyncSession
 import com.athletedata.openAthleteMetrics.data.model.SyncStatus
 import com.athletedata.openAthleteMetrics.data.repository.ActivityRepository
-import org.json.JSONArray
-import java.time.temporal.ChronoUnit
 import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
 import com.athletedata.openAthleteMetrics.data.repository.MetricRepository
 import com.athletedata.openAthleteMetrics.data.repository.RawDeviceDataRepository
@@ -20,10 +20,15 @@ import com.athletedata.openAthleteMetrics.data.repository.SyncSessionRepository
 import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import timber.log.Timber
 
 @Singleton
 class DeviceSyncProcessor @Inject constructor(
+    private val appDatabase: AppDatabase,
     private val metricRepository: MetricRepository,
     private val sleepRepository: SleepRepository,
     private val activityRepository: ActivityRepository,
@@ -33,6 +38,8 @@ class DeviceSyncProcessor @Inject constructor(
     private val driverRegistry: DriverRegistry,
     private val validator: SyncValidator,
 ) {
+
+    private val pruneScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     suspend fun process(result: DriverSyncResult): SyncSummary {
         val driverDisplayName = driverRegistry.allDrivers()
@@ -55,6 +62,11 @@ class DeviceSyncProcessor @Inject constructor(
             )
             deviceRepository.getDeviceByAddress(result.deviceId)!!
         }
+
+        // Log retry intent if the last sync for this device failed (expected after a crash).
+        syncSessionRepository.getLatestSessionForDevice(device.id)
+            ?.takeIf { it.status == SyncStatus.FAILED }
+            ?.let { Timber.i("Retrying after failed sync at ${it.startedAt}") }
 
         // a. Record sync attempt immediately so a mid-sync crash is still visible.
         val syncSessionId = syncSessionRepository.insert(
@@ -80,37 +92,39 @@ class DeviceSyncProcessor @Inject constructor(
             val acceptedSessions = sessionResults
                 .filterIsInstance<ValidationResult.Accepted<SleepSession>>()
                 .map { it.item }
-            val validSessions = acceptedSessions.filter { session ->
-                val startMs = session.sleepStartMs.toEpochMilli()
-                val endMs = session.sleepEndMs.toEpochMilli()
-                val valid = endMs != 0L && endMs > startMs && (endMs - startMs) >= 60_000L
-                if (!valid) {
-                    Timber.w(
-                        "Discarding in-progress or invalid sleep session for ${session.date}: " +
-                        "startMs=$startMs endMs=$endMs"
-                    )
-                }
-                valid
-            }
             val acceptedActivities = activityResults
                 .filterIsInstance<ValidationResult.Accepted<Activity>>()
                 .map { it.item }
 
-            // c-f. Persist accepted data and raw payloads.
-            val readingsSkipped = metricRepository.insertAllFromDevice(acceptedReadings)
-            val mergedSessions = mergeSleepSessions(validSessions)
-            mergedSessions.forEach { sleepRepository.insertOrReplace(it) }
-            val activitiesSkipped = activityRepository.insertAllFromDevice(acceptedActivities)
-            rawDeviceDataRepository.insertAll(result.rawPayloads, syncSessionId)
+            // c-f. Persist accepted data and raw payloads atomically.
+            // For each (driverId, date) group, prepend the existing DB record so the merge
+            // always produces a superset — partial records from prior syncs are never left behind.
+            val sessionsWithExisting = acceptedSessions
+                .groupBy { Pair(it.driverId, it.date) }
+                .flatMap { (key, incoming) ->
+                    val (driverId, date) = key
+                    val existing = if (driverId != null) {
+                        sleepRepository.getByDriverAndDate(driverId, date)
+                    } else null
+                    listOfNotNull(existing) + incoming
+                }
+            val mergedSessions = mergeSleepSessions(sessionsWithExisting)
+            val (readingsSkipped, activitiesSkipped) = appDatabase.withTransaction {
+                val rs = metricRepository.insertAllFromDevice(acceptedReadings)
+                mergedSessions.forEach { sleepRepository.insertOrReplace(it) }
+                val `as` = activityRepository.insertAllFromDevice(acceptedActivities)
+                rawDeviceDataRepository.insertAll(result.rawPayloads, syncSessionId)
+                rs to `as`
+            }
 
             // g. Compute final counts and status (battery readings are not counted — they go to device metadata).
             val readingsAccepted = acceptedReadings.size
             val readingsInserted = readingsAccepted - readingsSkipped
             val healthReadingsTotal = result.metricReadings.count { it.metricType != MetricType.BATTERY }
             val readingsRejected = healthReadingsTotal - readingsAccepted
-            val sessionsAccepted = validSessions.size
+            val sessionsAccepted = acceptedSessions.size
             val sessionsInserted = mergedSessions.size
-            val sessionsSkippedCount = acceptedSessions.size - validSessions.size
+            val sessionsSkippedCount = 0
             val sessionsRejected = result.sleepSessions.size - acceptedSessions.size
             val activitiesAccepted = acceptedActivities.size
             val activitiesInserted = activitiesAccepted - activitiesSkipped
@@ -137,11 +151,25 @@ class DeviceSyncProcessor @Inject constructor(
                 )
             )
 
-            // i. Stamp the device with the sync time and last known battery.
+            // i. Prune stale rows (fire-and-forget — pruning failure is not a sync failure).
+            pruneScope.launch {
+                val now = Instant.now()
+                runCatching {
+                    rawDeviceDataRepository.deleteOlderThan(now.minusMillis(7L * 24 * 60 * 60 * 1000))
+                }.onFailure { Timber.w(it, "raw_device_data pruning failed") }
+                runCatching {
+                    syncSessionRepository.deleteOlderThan(now.minusMillis(90L * 24 * 60 * 60 * 1000))
+                }.onFailure { Timber.w(it, "sync_sessions pruning failed") }
+            }
+
+            // j. Stamp the device with the sync time and last known battery.
+            // Use lastOrNull() (BLE arrival order) rather than maxByOrNull { recordedAt } so that
+            // RTC drift or a future device timestamp cannot promote a stale reading.
+            // Relies on metricReadings being a List that preserves BLE notification order.
             deviceRepository.updateLastSync(result.deviceId, result.syncEndedAt.toEpochMilli())
             result.metricReadings
                 .filter { it.metricType == MetricType.BATTERY }
-                .maxByOrNull { it.recordedAt }
+                .lastOrNull()
                 ?.let { deviceRepository.updateLastBatteryPct(result.deviceId, it.value.toInt()) }
 
             val rejectionReasons = buildList {
@@ -189,40 +217,4 @@ class DeviceSyncProcessor @Inject constructor(
         }
     }
 
-    private fun mergeSleepSessions(sessions: List<SleepSession>): List<SleepSession> {
-        if (sessions.isEmpty()) return sessions
-        return sessions
-            .groupBy { Pair(it.driverId, it.date) }
-            .values
-            .map { group ->
-                val start      = group.minOf { it.sleepStartMs }
-                val sessionEnd = group.maxOf { it.sleepEndMs }
-
-                val allStageObjects = group
-                    .mapNotNull { it.stagesJson }
-                    .flatMap { json ->
-                        runCatching {
-                            val arr = JSONArray(json)
-                            (0 until arr.length()).map { arr.getJSONObject(it) }
-                        }.getOrDefault(emptyList())
-                    }
-                    .sortedBy { it.getLong("startMs") }
-
-                // Extend end to include AWAKE stage blocks that lie past the reported sleepEndMs
-                val stageMaxEndMs = allStageObjects.maxOfOrNull { it.getLong("endMs") } ?: 0L
-                val end = if (stageMaxEndMs > sessionEnd.toEpochMilli())
-                    Instant.ofEpochMilli(stageMaxEndMs)
-                else sessionEnd
-
-                val mergedStagesJson = if (allStageObjects.isEmpty()) null
-                    else JSONArray().also { arr -> allStageObjects.forEach { arr.put(it) } }.toString()
-
-                group.first().copy(
-                    sleepStartMs    = start,
-                    sleepEndMs      = end,
-                    durationMinutes = ChronoUnit.MINUTES.between(start, end).toInt(),
-                    stagesJson      = mergedStagesJson,
-                )
-            }
-    }
 }

@@ -29,4 +29,15 @@ interface RawDeviceDataDao {
 
     @Query("SELECT * FROM raw_device_data WHERE sync_session_id = :syncSessionId")
     suspend fun getForSession(syncSessionId: Long): List<RawDeviceDataEntity>
+
+    @Query(
+        """
+        SELECT rdd.* FROM raw_device_data rdd
+        INNER JOIN sync_sessions ss ON ss.id = rdd.sync_session_id
+        WHERE ss.device_id = :deviceId
+          AND rdd.received_at >= :sinceMs
+        ORDER BY rdd.received_at ASC
+        """
+    )
+    suspend fun getForDeviceAfter(deviceId: Long, sinceMs: Long): List<RawDeviceDataEntity>
 }

@@ -24,4 +24,7 @@ class RoomRawDeviceDataRepository @Inject constructor(
 
     override suspend fun deleteOlderThan(threshold: Instant) =
         dao.deleteOlderThan(threshold.toEpochMilli())
+
+    override suspend fun getForDevice(deviceId: Long, since: Instant): List<RawPayload> =
+        dao.getForDeviceAfter(deviceId, since.toEpochMilli()).map { it.toModel() }
 }

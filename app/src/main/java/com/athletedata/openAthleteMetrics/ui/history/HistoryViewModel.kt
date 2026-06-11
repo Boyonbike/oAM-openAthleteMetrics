@@ -298,7 +298,7 @@ fun metricUnit(key: String): String = when (key) {
     "HRV"       -> "ms"
     "SPO2"      -> "%"
     "STEPS"     -> "steps"
-    "SLEEP"     -> "h"
+    "SLEEP"     -> "hm"
     "WEIGHT"    -> "kg"
     else        -> ""
 }
@@ -310,7 +310,12 @@ fun formatMetricValue(value: Float?, unit: String, questionType: QuestionType?):
         QuestionType.SCALE   -> "${"%.0f".format(value)}/5"
         QuestionType.TEXT    -> "%.1f".format(value)
         null -> when (unit) {
-            "h"     -> "${"%.1f".format(value)} h"
+            "hm"    -> {
+                val totalMin = (value * 60).toInt()
+                val h = totalMin / 60
+                val m = totalMin % 60
+                if (m == 0) "${h}hr" else "${h}hr ${m}min"
+            }
             "steps" -> "%,.0f steps".format(value)
             else    -> "${"%.0f".format(value)}${if (unit.isNotEmpty()) " $unit" else ""}"
         }

@@ -18,7 +18,7 @@ internal data class SleepWasmDto(
     val dateIso: String,
     val sleepStartMs: Long,
     val sleepEndMs: Long,
-    val durationMinutes: Int,
+    val durationMinutes: Int = 0,
     val stagesJson: String? = null,
 )
 

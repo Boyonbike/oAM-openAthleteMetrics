@@ -10,6 +10,8 @@ import com.athletedata.openAthleteMetrics.data.model.SleepSession
 import com.athletedata.openAthleteMetrics.data.model.SyncSession
 import com.athletedata.openAthleteMetrics.data.model.SyncStatus
 import com.athletedata.openAthleteMetrics.data.repository.ActivityRepository
+import org.json.JSONArray
+import java.time.temporal.ChronoUnit
 import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
 import com.athletedata.openAthleteMetrics.data.repository.MetricRepository
 import com.athletedata.openAthleteMetrics.data.repository.RawDeviceDataRepository
@@ -83,7 +85,7 @@ class DeviceSyncProcessor @Inject constructor(
 
             // c-f. Persist accepted data and raw payloads.
             metricRepository.insertAllFromDevice(acceptedReadings)
-            acceptedSessions.forEach { sleepRepository.insert(it) }
+            mergeSleepSessions(acceptedSessions).forEach { sleepRepository.insert(it) }
             activityRepository.insertAll(acceptedActivities)
             rawDeviceDataRepository.insertAll(result.rawPayloads, syncSessionId)
 
@@ -164,5 +166,42 @@ class DeviceSyncProcessor @Inject constructor(
             }
             throw e
         }
+    }
+
+    private fun mergeSleepSessions(sessions: List<SleepSession>): List<SleepSession> {
+        if (sessions.isEmpty()) return sessions
+        return sessions
+            .groupBy { Pair(it.driverId, it.date) }
+            .values
+            .map { group ->
+                val start      = group.minOf { it.sleepStartMs }
+                val sessionEnd = group.maxOf { it.sleepEndMs }
+
+                val allStageObjects = group
+                    .mapNotNull { it.stagesJson }
+                    .flatMap { json ->
+                        runCatching {
+                            val arr = JSONArray(json)
+                            (0 until arr.length()).map { arr.getJSONObject(it) }
+                        }.getOrDefault(emptyList())
+                    }
+                    .sortedBy { it.getLong("startMs") }
+
+                // Extend end to include AWAKE stage blocks that lie past the reported sleepEndMs
+                val stageMaxEndMs = allStageObjects.maxOfOrNull { it.getLong("endMs") } ?: 0L
+                val end = if (stageMaxEndMs > sessionEnd.toEpochMilli())
+                    Instant.ofEpochMilli(stageMaxEndMs)
+                else sessionEnd
+
+                val mergedStagesJson = if (allStageObjects.isEmpty()) null
+                    else JSONArray().also { arr -> allStageObjects.forEach { arr.put(it) } }.toString()
+
+                group.first().copy(
+                    sleepStartMs    = start,
+                    sleepEndMs      = end,
+                    durationMinutes = ChronoUnit.MINUTES.between(start, end).toInt(),
+                    stagesJson      = mergedStagesJson,
+                )
+            }
     }
 }

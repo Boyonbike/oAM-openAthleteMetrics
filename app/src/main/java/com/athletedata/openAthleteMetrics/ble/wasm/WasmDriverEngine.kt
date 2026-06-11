@@ -10,9 +10,11 @@ import com.dylibso.chicory.runtime.Instance
 import com.dylibso.chicory.wasm.ChicoryException
 import com.dylibso.chicory.wasm.Parser
 import kotlinx.serialization.json.Json
+import org.json.JSONArray
 import timber.log.Timber
 import java.time.Instant
 import java.time.LocalDate
+import java.time.temporal.ChronoUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -93,6 +95,7 @@ class WasmDriverEngine @Inject constructor() {
 
     /**
      * Calls the WASM parseSleep export if present.
+     * Duration is computed from (sleepEndMs − sleepStartMs); the DTO's durationMinutes field is ignored.
      * Returns null if the export is absent, the payload has no data, or any error occurs.
      */
     fun parseSleep(
@@ -107,11 +110,15 @@ class WasmDriverEngine @Inject constructor() {
                 ?.takeIf { it.isNotBlank() && it != "{}" }
                 ?: return null
             val dto = json.decodeFromString<SleepWasmDto>(jsonStr)
+            val startInstant = Instant.ofEpochMilli(dto.sleepStartMs)
+            // Extend end to cover stage blocks (e.g. AWAKE) that lie past the reported
+            // sleepEndMs — some drivers truncate sleepEndMs to the last non-AWAKE stage.
+            val endInstant = stageAwareEndInstant(dto.sleepEndMs, dto.stagesJson)
             SleepSession(
                 date = LocalDate.parse(dto.dateIso),
-                sleepStartMs = Instant.ofEpochMilli(dto.sleepStartMs),
-                sleepEndMs = Instant.ofEpochMilli(dto.sleepEndMs),
-                durationMinutes = dto.durationMinutes,
+                sleepStartMs = startInstant,
+                sleepEndMs = endInstant,
+                durationMinutes = ChronoUnit.MINUTES.between(startInstant, endInstant).toInt(),
                 stagesJson = dto.stagesJson,
                 source = DataSource.DEVICE,
                 driverId = driverId,
@@ -192,6 +199,15 @@ class WasmDriverEngine @Inject constructor() {
             }
             null
         }
+    }
+
+    private fun stageAwareEndInstant(reportedEndMs: Long, stagesJson: String?): Instant {
+        if (stagesJson.isNullOrBlank()) return Instant.ofEpochMilli(reportedEndMs)
+        val stageMaxEndMs = try {
+            val arr = JSONArray(stagesJson)
+            (0 until arr.length()).maxOfOrNull { arr.getJSONObject(it).getLong("endMs") }
+        } catch (_: Exception) { null } ?: return Instant.ofEpochMilli(reportedEndMs)
+        return Instant.ofEpochMilli(maxOf(reportedEndMs, stageMaxEndMs))
     }
 
     companion object {

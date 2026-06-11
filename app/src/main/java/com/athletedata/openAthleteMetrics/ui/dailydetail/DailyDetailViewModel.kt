@@ -24,7 +24,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import org.json.JSONObject
+import org.json.JSONArray
 import javax.inject.Inject
 
 @HiltViewModel
@@ -129,15 +129,23 @@ class DailyDetailViewModel @Inject constructor(
     private fun parseSleepStages(json: String?): SleepStages? {
         json ?: return null
         return try {
-            val obj = JSONObject(json)
+            val arr = JSONArray(json)
+            var deepMs = 0L; var lightMs = 0L; var remMs = 0L
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val dur = obj.optLong("endMs") - obj.optLong("startMs")
+                when (obj.optString("stage")) {
+                    "DEEP"  -> deepMs  += dur
+                    "LIGHT" -> lightMs += dur
+                    "REM"   -> remMs   += dur
+                }
+            }
             SleepStages(
-                deepMinutes  = obj.optInt("deep"),
-                lightMinutes = obj.optInt("light"),
-                remMinutes   = obj.optInt("rem"),
+                deepMinutes  = (deepMs  / 60_000L).toInt(),
+                lightMinutes = (lightMs / 60_000L).toInt(),
+                remMinutes   = (remMs   / 60_000L).toInt(),
             )
-        } catch (_: Exception) {
-            null
-        }
+        } catch (_: Exception) { null }
     }
 }
 

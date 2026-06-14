@@ -104,7 +104,7 @@ The driver authoring guide is in [`/docs`](/docs). It covers:
 - Testing against a real or simulated device
 - Submitting a driver to the community library
 
-If you've reverse-engineered a device and want to contribute a driver, open a pull request against the [`/drivers`](/drivers) directory.
+If you've reverse-engineered a device and want to contribute a driver, open a pull request against the [`/Drivers Builds`](/Driver Builds) directory.
 
 ---
 

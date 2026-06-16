@@ -85,7 +85,6 @@ class DailySummaryWorker @AssistedInject constructor(
                 .filter { it.recordedAt.toEpochMilli() in dayStartMs until nightEndMs }
                 .groupBy { it.recordedAt.toEpochMilli() / 300_000L }
                 .values
-                .filter { it.size >= 2 }
                 .map { bucket -> bucket.map { it.bpm }.average() }
                 .minOrNull()
 

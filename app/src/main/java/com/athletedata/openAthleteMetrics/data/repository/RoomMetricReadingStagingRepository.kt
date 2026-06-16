@@ -148,6 +148,16 @@ class RoomMetricReadingStagingRepository @Inject constructor(
             startMs = date.toUtcStartMs(),
             endMs = date.plusDays(1).toUtcStartMs(),
         ) > 0
+
+    override suspend fun getPendingSleepStages(
+        source: DataSource,
+        driverId: String,
+        startMs: Long,
+        endMs: Long,
+    ): List<MetricReading> =
+        dao.getPendingSleepStages(source, driverId, startMs, endMs).map { it.toModel() }
+
+    override suspend fun deleteByIds(ids: List<Long>) = dao.deleteByIds(ids)
 }
 
 private fun LocalDate.toUtcStartMs(): Long =

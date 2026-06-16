@@ -48,7 +48,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SleepStageEntity::class,
     ],
     version = 11,
-    exportSchema = false,
+    exportSchema = true,
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
@@ -308,6 +308,10 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("DROP TABLE IF EXISTS `raw_device_data`")
                 db.execSQL("DROP TABLE IF EXISTS `sync_sessions`")
                 db.execSQL("DROP TABLE IF EXISTS `question_responses`")
+                // These tables did not exist in schema v10. The drops are defensive idempotency
+                // guards for partial-failure recovery — if a previous migration attempt created
+                // any of these tables before failing, this ensures they are cleared before the
+                // clean recreate phase. On a clean v10 database all of these are no-ops.
                 db.execSQL("DROP TABLE IF EXISTS `sleep_stages`")
                 db.execSQL("DROP TABLE IF EXISTS `activities`")
                 db.execSQL("DROP TABLE IF EXISTS `metric_readings`")
@@ -448,6 +452,11 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                     """.trimIndent()
                 )
+                // MIGRATION_7_8 renamed this index from the Room auto-generated name
+                // index_activities_driver_id_start_time to index_activities_dedup. This migration
+                // reverts to the Room auto-generated name because ActivityEntity has no explicit
+                // index name annotation. If index_activities_dedup is ever added to ActivityEntity,
+                // update this comment and write a new migration to rename the index.
                 db.execSQL(
                     "CREATE UNIQUE INDEX IF NOT EXISTS `index_activities_driver_id_start_time` " +
                     "ON `activities` (`driver_id`, `start_time`)"

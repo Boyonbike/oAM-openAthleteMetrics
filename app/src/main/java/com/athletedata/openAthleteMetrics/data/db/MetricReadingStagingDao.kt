@@ -81,6 +81,9 @@ abstract class MetricReadingStagingDao {
     @Query("DELETE FROM metric_readings_staging WHERE source = :source")
     abstract suspend fun deleteBySource(source: DataSource)
 
+    @Query("DELETE FROM metric_readings_staging WHERE id IN (:ids)")
+    abstract suspend fun deleteByIds(ids: List<Long>)
+
     @Query("DELETE FROM metric_readings_staging")
     abstract suspend fun deleteAll()
 
@@ -169,4 +172,22 @@ abstract class MetricReadingStagingDao {
         "WHERE source = :source AND recorded_at >= :startMs AND recorded_at < :endMs"
     )
     abstract suspend fun countSourceDataInRangeOnce(source: DataSource, startMs: Long, endMs: Long): Int
+
+    /** Returns all SLEEP_STAGE rows for a given driver/source within a sync window; used by SleepStagePromoter. */
+    @Query(
+        """
+        SELECT * FROM metric_readings_staging
+        WHERE metric_type = 'SLEEP_STAGE'
+          AND source = :source
+          AND driver_id = :driverId
+          AND recorded_at >= :startMs
+          AND recorded_at < :endMs
+        """
+    )
+    abstract suspend fun getPendingSleepStages(
+        source: DataSource,
+        driverId: String,
+        startMs: Long,
+        endMs: Long,
+    ): List<MetricReadingStagingEntity>
 }

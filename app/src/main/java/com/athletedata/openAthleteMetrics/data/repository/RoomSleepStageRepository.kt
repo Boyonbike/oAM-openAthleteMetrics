@@ -36,4 +36,7 @@ class RoomSleepStageRepository @Inject constructor(
 
     override fun getStagesInRange(startMs: Long, endMs: Long): Flow<List<SleepStageEntity>> =
         dao.getStagesInRange(startMs, endMs)
+
+    override suspend fun insertAllOrIgnore(entities: List<SleepStageEntity>): List<Long> =
+        dao.insertAllOrIgnore(entities)
 }

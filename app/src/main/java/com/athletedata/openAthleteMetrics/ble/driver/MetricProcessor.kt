@@ -3,11 +3,15 @@ package com.athletedata.openAthleteMetrics.ble.driver
 import com.athletedata.openAthleteMetrics.data.model.MetricReading
 
 /**
- * Session-scoped processor that observes each [MetricReading] as it arrives during a sync
- * and computes derived readings (HRV, sleep stages, etc.) once the sync is complete.
+ * Part of the native Kotlin driver scaffolding. This interface is never instantiated
+ * in the current codebase.
  *
- * A new instance is created per sync session via [DeviceDriver.createProcessor].
- * Implementations must be stateful and NOT shared across sessions.
+ * When a native [DeviceDriver] implementation exists and returns a [MetricProcessor]
+ * from [DeviceDriver.createProcessor], the BLE engine will call [onReading] for every
+ * parsed reading during a sync session and [onSyncComplete] at quiescence.
+ *
+ * A new instance is created per sync session. Implementations must be stateful and
+ * NOT shared across sessions.
  */
 interface MetricProcessor {
     /** Called once for every [MetricReading] produced by the driver during a sync. */

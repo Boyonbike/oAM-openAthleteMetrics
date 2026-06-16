@@ -17,6 +17,7 @@ import com.athletedata.openAthleteMetrics.data.repository.MetricReadingStagingRe
 import com.athletedata.openAthleteMetrics.data.repository.RawDeviceDataRepository
 import com.athletedata.openAthleteMetrics.data.repository.SleepRepository
 import com.athletedata.openAthleteMetrics.data.repository.SyncSessionRepository
+import com.athletedata.openAthleteMetrics.worker.SleepStagePromoter
 import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -37,6 +38,8 @@ class DeviceSyncProcessor @Inject constructor(
     private val deviceRepository: DeviceRepository,
     private val driverRegistry: DriverRegistry,
     private val validator: SyncValidator,
+    private val metricRouter: MetricRouter,
+    private val sleepStagePromoter: SleepStagePromoter,
 ) {
 
     private val pruneScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -280,12 +283,11 @@ class DeviceSyncProcessor @Inject constructor(
             .map { it.item }
 
         val mergedSessions = buildMergedSessions(acceptedSessions)
-        val (deviceInsert, activitiesSkipped) =
+        val activitiesSkipped =
             appDatabase.withTransaction {
-                val rs = metricRepository.insertAllFromDevice(acceptedReadings)
+                metricRouter.routeAll(acceptedReadings)
                 mergedSessions.forEach { sleepRepository.insertOrReplace(it) }
-                val as_ = activityRepository.insertAllFromDevice(acceptedActivities)
-                Pair(rs, as_)
+                activityRepository.insertAllFromDevice(acceptedActivities)
             }
 
         val healthReadingsTotal = allMetrics.count { it.metricType != MetricType.BATTERY }
@@ -300,20 +302,20 @@ class DeviceSyncProcessor @Inject constructor(
         val totalAccepted = readingsAccepted + sessionsAccepted + activitiesAccepted
         val totalRejected = readingsRejected + sessionsRejected + activitiesRejected
 
-        if (deviceInsert.accumulatorGuarded > 0) {
-            Timber.w("processFromRaw session=$sessionId: %d accumulator value(s) guarded (incoming < stored)", deviceInsert.accumulatorGuarded)
-        }
-
         val finalStatus = when {
             totalRejected == 0 -> SyncStatus.SUCCESS
             totalAccepted == 0 -> SyncStatus.FAILED
             else -> SyncStatus.PARTIAL
         }
 
-        val genuinelyNew = deviceInsert.newRecordsInserted + deviceInsert.accumulatorUpdates +
-            sessionsInserted + activitiesInserted
+        val genuinelyNew = readingsAccepted + sessionsInserted + activitiesInserted
 
         val syncEndedAt = Instant.now()
+        sleepStagePromoter.promote(
+            driverId = session.driverId,
+            syncWindowStartMs = session.startedAt.toEpochMilli(),
+            syncWindowEndMs = syncEndedAt.toEpochMilli(),
+        )
         syncSessionRepository.update(
             SyncSession(
                 id = sessionId,
@@ -344,21 +346,18 @@ class DeviceSyncProcessor @Inject constructor(
         }
 
         Timber.i(
-            "processFromRaw session=$sessionId: newInserted=%d accumulatorUpdates=%d " +
-            "accumulatorNoChange=%d accumulatorGuarded=%d readingsSkipped=%d | " +
+            "processFromRaw session=$sessionId: readingsAccepted=%d readingsRejected=%d | " +
             "sessions inserted=%d | activities inserted=%d | status=%s",
-            deviceInsert.newRecordsInserted, deviceInsert.accumulatorUpdates,
-            deviceInsert.accumulatorNoChange, deviceInsert.accumulatorGuarded,
-            deviceInsert.readingsSkipped,
+            readingsAccepted, readingsRejected,
             sessionsInserted, activitiesInserted, finalStatus,
         )
 
         return SyncSummary(
-            newRecordsInserted = deviceInsert.newRecordsInserted,
-            accumulatorUpdates = deviceInsert.accumulatorUpdates,
-            accumulatorNoChange = deviceInsert.accumulatorNoChange,
-            accumulatorGuarded = deviceInsert.accumulatorGuarded,
-            readingsSkipped = deviceInsert.readingsSkipped,
+            newRecordsInserted = readingsAccepted,
+            accumulatorUpdates = 0,
+            accumulatorNoChange = 0,
+            accumulatorGuarded = 0,
+            readingsSkipped = 0,
             sessionsInserted = sessionsInserted,
             activitiesInserted = activitiesInserted,
             activitiesSkipped = activitiesSkipped,

@@ -12,6 +12,7 @@ import com.athletedata.openAthleteMetrics.data.repository.RespirationReadingRepo
 import com.athletedata.openAthleteMetrics.data.repository.SkinTempReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.SpO2ReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.StepsReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.DailySummaryRepository
 import com.athletedata.openAthleteMetrics.data.repository.TotalCalorieReadingRepository
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedFactory
@@ -21,6 +22,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
@@ -41,6 +43,7 @@ class MetricDetailViewModel @AssistedInject constructor(
     private val activeCalorieRepo: ActiveCalorieReadingRepository,
     private val totalCalorieRepo: TotalCalorieReadingRepository,
     private val bloodPressureRepo: BloodPressureReadingRepository,
+    private val dailySummaryRepo: DailySummaryRepository,
 ) : ViewModel() {
 
     @AssistedFactory
@@ -164,21 +167,27 @@ class MetricDetailViewModel @AssistedInject constructor(
                 // TODO: render a dual-series (systolic + diastolic) chart as a future enhancement
                 .mapValues { (_, es) -> es.map { it.systolic.toDouble() }.average() }
 
+            MetricType.RHR -> {
+                val from = Instant.ofEpochMilli(startMs).atZone(ZoneOffset.UTC).toLocalDate()
+                val to = Instant.ofEpochMilli(endMs).atZone(ZoneOffset.UTC).toLocalDate().minusDays(1)
+                dailySummaryRepo.getSummariesForRange(from, to)
+                    .first()
+                    .filter { it.restingHrBpm != null }
+                    .associate { it.date to it.restingHrBpm!! }
+            }
+
             else -> emptyMap()
         }
     }
 
     private fun unsupportedMessage(type: MetricType): String? = when (type) {
-        MetricType.RHR ->
-            // TODO: RHR could be sourced from DailySummaryRepository.restingHrBpm in a future pass
-            "Resting heart rate is computed from daily summary data — per-reading history is not available in this view."
         MetricType.BATTERY ->
             // TODO: battery readings are ephemeral; persist to a battery_readings table if historical review is needed
             "Battery level data is not stored for historical review."
         MetricType.SLEEP_STAGE ->
             // TODO: sleep stage data is available via SleepStageRepository; render a stage-timeline chart
             "Sleep stage data is available on the full-day view."
-        MetricType.HR, MetricType.HRV, MetricType.SPO2, MetricType.RESPIRATION,
+        MetricType.HR, MetricType.HRV, MetricType.RHR, MetricType.SPO2, MetricType.RESPIRATION,
         MetricType.SKIN_TEMP, MetricType.STEPS, MetricType.ACTIVE_CALORIES,
         MetricType.TOTAL_CALORIES, MetricType.GLUCOSE, MetricType.BLOOD_PRESSURE -> null
         else ->

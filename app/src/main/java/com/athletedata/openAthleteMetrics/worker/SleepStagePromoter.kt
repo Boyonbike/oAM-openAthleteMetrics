@@ -96,7 +96,9 @@ class SleepStagePromoter @Inject constructor(
                         )
                     )
                     sessionsCreated++
-                    // Re-query to obtain the auto-generated session id.
+
+
+                    ● Good. Now // Re-query to obtain the auto-generated session id.
                     sleepRepository.getByDriverAndDate(driverId, date)!!.id
                 }
             }.getOrElse { e ->

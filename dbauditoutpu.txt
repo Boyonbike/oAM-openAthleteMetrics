@@ -1,0 +1,762 @@
+╭─── Claude Code v2.1.178 ─────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting        │
+│                  Welcome back bob!                 │ started                 │
+│                                                    │ Run /init to create a … │
+│                       ▐▛███▜▌                      │ ─────────────────────── │
+│                      ▝▜█████▛▘                     │ What's new              │
+│                        ▘▘ ▝▝                       │ Added `Tool(param:valu… │
+│   Sonnet 4.6 · Claude Pro ·                        │ Skills in nested `.cla… │
+│   innesmcdonaldracing@outlook.com's Organization   │ Nested `.claude/` dire… │
+│                ~/StudioProjects/OAM                │ /release-notes for more │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+❯ I have an Android athlete tracking app. This is a read-only audit             
+  of the database system. Do not change any files. Report only.                 
+                                                                                
+  PROJECT CONTEXT:                                                              
+  - Package: com.athletedata.openAthleteMetrics                                 
+  - Language: Kotlin                                                            
+  - Architecture: MVVM + Repository, Room, Hilt, Kotlin Coroutines              
+  - Database version: 11                                                        
+  - 21 entities across dedicated time-series tables, staging, and               
+    supporting tables                                                           
+                                                                                
+  SYSTEM BOUNDARY:                                                              
+  Audit these files and responsibilities only:                                  
+  - data/db/ — all entities, DAOs, AppDatabase, TypeConverters                  
+  - data/repository/ — all repository interfaces and implementations            
+  - data/model/ — all plain data classes and enums                              
+  - di/DatabaseModule — Hilt database and datastore bindings                    
+  - worker/DailySummaryWorker — aggregates from dedicated tables                
+    into daily_summary                                                          
+  - seeder/SeederService and SeederViewModel — writes test data                 
+                                                                                
+  Do not audit BLE, driver, or UI files unless they are directly                
+  relevant to a database system issue.                                          
+                                                                                
+  AUDIT CHECKLIST:                                                              
+                                                                                
+  CONSISTENCY — NAMING                                                          
+  - Are entity class names consistent? Convention should be                     
+    [Name]Entity throughout                                                     
+  - Are DAO class names consistent? Convention should be [Name]Dao              
+  - Are repository interface names consistent? Convention should be             
+    [Name]Repository                                                            
+  - Are repository implementation names consistent? Convention should           
+    be Room[Name]Repository                                                     
+  - Are table names consistent? Convention should be snake_case                 
+    matching the entity name                                                    
+  - Are column names consistent across all entities? Check that                 
+    similar concepts use the same column name everywhere                        
+    (e.g. recorded_at vs timestamp vs time_ms)                                  
+  - Are enum stored-value names consistent — do all enums use                   
+    name() or a consistent string representation?                               
+  - Are function names consistent across all DAOs — do similar                  
+    operations use the same naming pattern                                      
+    (e.g. getForDate vs getByDate vs fetchForDate)?                             
+                                                                                
+  CONSISTENCY — PATTERNS                                                        
+  - Do all DAOs follow the same insert strategy pattern — is                    
+    OnConflict.REPLACE vs OnConflict.IGNORE used consistently                   
+    and intentionally across equivalent operations?                             
+  - Do all DAOs expose both Flow<> and suspend variants for queries             
+    where both are needed — flag any DAO that is missing a suspend              
+    variant a ViewModel or Worker needs                                         
+  - Do all repository implementations follow the same pattern for               
+    wrapping DAO calls — consistent use of withContext(Dispatchers.IO)?         
+  - Do all repository implementations handle the same set of                    
+    operations — flag any repository missing insert, insertAll,                 
+    deleteBySource, getReadingsInRange, getLatestReading relative               
+    to the standard contract                                                    
+  - Is date handling consistent — LocalDate vs String vs Long                   
+    used consistently across all entities and queries?                          
+  - Is Instant vs Long used consistently for timestamps across                  
+    all entities?                                                               
+                                                                                
+  CONSISTENCY — ERROR HANDLING                                                  
+  - Are database operations wrapped in try/catch consistently                   
+    across all repository implementations?                                      
+  - Are errors logged consistently — same logging approach used                 
+    everywhere, or a mix of approaches?                                         
+  - Are errors propagated to callers consistently — do all                      
+    repositories use the same pattern for signalling failure                    
+    (sealed Result type, exception rethrow, nullable return)?                   
+  - Does DailySummaryWorker handle partial data correctly — what                
+    happens if some repositories return empty lists for a date?                 
+  - Does SeederService handle insert failures gracefully?                       
+                                                                                
+  CONSISTENCY — COROUTINES                                                      
+  - Are all DAO operations called from the correct dispatcher?                  
+  - Do all suspend repository functions specify or inherit the                  
+    correct coroutine context?                                                  
+  - Does DailySummaryWorker use the correct dispatcher throughout?              
+  - Are any Flow operations transformed on the wrong dispatcher?                
+  - Is there any blocking IO on the main thread?                                
+                                                                                
+  DUPLICATION                                                                   
+  - Is any data transformation logic duplicated across multiple                 
+    repository implementations?                                                 
+  - Is any aggregation logic duplicated between DailySummaryWorker              
+    and any ViewModel?                                                          
+  - Are any TypeConverter functions duplicated or doing redundant               
+    work?                                                                       
+  - Is any date range calculation logic duplicated across DAOs                  
+    or repositories?                                                            
+  - Is any entity-to-model mapping duplicated across files that                 
+    should share a mapper?                                                      
+  - Are any DAO query patterns identical across multiple DAOs                   
+    where a shared base could be used?                                          
+                                                                                
+  DEAD CODE                                                                     
+  - Are there any unused imports in any file in the database system?            
+  - Are there any unused functions in any DAO?                                  
+  - Are there any unused functions in any repository interface                  
+    or implementation?                                                          
+  - Are there any unused fields in any entity?                                  
+  - Are there any unused model classes or enum values?                          
+  - Are there any unused TypeConverter functions?                               
+  - Are there any commented-out code blocks?                                    
+  - Are there any TODO comments that have already been resolved                 
+    by existing code?                                                           
+  - Does AppDatabase contain any registered entities that have                  
+    no corresponding DAO?                                                       
+  - Does DatabaseModule contain any bindings for classes that                   
+    no longer exist?                                                            
+                                                                                
+  ARCHITECTURE                                                                  
+  - Does any ViewModel directly inject a DAO instead of a                       
+    repository? Flag every instance.                                            
+  - Does any repository contain business logic that belongs in                  
+    a use case or worker?                                                       
+  - Does DailySummaryWorker contain logic that belongs in a                     
+    repository?                                                                 
+  - Does SeederService contain logic that belongs in a repository?              
+  - Are all Hilt bindings in DatabaseModule correctly scoped                    
+    (@Singleton where appropriate)?                                             
+  - Is AppDatabase correctly scoped as a singleton?                             
+  - Are there any circular dependencies between repositories?                   
+  - Does any entity contain computed properties that should be                  
+    derived at query time instead?                                              
+                                                                                
+  SCHEMA INTEGRITY                                                              
+  - Are all 21 entities registered in AppDatabase?                              
+  - Do all UNIQUE indexes match the dedup strategy described in                 
+    entity annotations?                                                         
+  - Are all FK relationships correctly annotated and consistent                 
+    with the migration SQL?                                                     
+  - Are all nullable columns correctly annotated as nullable                    
+    in both the entity and the DAO query return types?                          
+  - Is computed_by_version present on HrvReadingEntity and                      
+    SleepStageEntity only — not accidentally added to others?                   
+                                                                                
+  SEEDER SPECIFIC                                                               
+  - Does SeederService correctly inject and use all 10 dedicated                
+    repositories plus SleepStageRepository?                                     
+  - Does clearSeederData() call deleteBySource(SEEDER) on every                 
+    table that receives seeded data in the correct FK-safe order?               
+  - Does the sleep stage seeder produce perfectly contiguous rows               
+    whose duration_minutes sum equals the parent session exactly?               
+  - Is the random seed 42 used consistently throughout?                         
+  - Is progress reporting via StateFlow correct and complete?                   
+                                                                                
+  DAILY SUMMARY WORKER SPECIFIC                                                 
+  - Does DailySummaryWorker read from all required dedicated tables?            
+  - Is the 5-minute bucket resting HR calculation correct and                   
+    does it handle single-reading buckets?                                      
+  - Is steps_active_minutes computed from duration-aware intervals?             
+  - Are all four sleep stage totals computed correctly?                         
+  - Is computed_by_version set on every output row?                             
+  - Is the worker correctly enqueued with REPLACE conflict strategy?            
+                                                                                
+  Produce a structured report:                                                  
+                                                                                
+  PASSED — every area that is correctly and consistently implemented            
+  FAILED — every issue found, with:                                             
+    - File name and line number where possible                                  
+    - Severity: Critical / High / Medium / Low                                  
+    - Description of the problem                                                
+    - Recommended fix                                                           
+                                                                                
+  CROSS-SYSTEM ISSUES — any issues discovered that involve files                
+  outside the database system boundary. Flag the relevant files                 
+  and describe the cross-system concern. Do not fix or audit those              
+  files in depth — note them for the relevant system audit.                     
+                                                                                
+  Do not change any files. Report only.                                         
+
+● I'll conduct a thorough read-only audit of your database system. Let me
+  explore the codebase systematically.
+
+  Searched for 2 patterns (ctrl+o to expand)
+
+● Good. Now let me read all source files systematically — I'll do this in
+  parallel batches.
+
+  Read 4 files (ctrl+o to expand)
+
+● Now reading all entity files in parallel:
+
+  Read 21 files (ctrl+o to expand)
+
+● Now reading all DAO files:
+
+  Read 21 files (ctrl+o to expand)
+
+● Now reading all repository interfaces and implementations:
+
+  Read 44 files (ctrl+o to expand)
+
+● Now reading the model files:
+
+  Read 18 files (ctrl+o to expand)
+
+● I now have a complete picture of all 100+ files in the audit boundary.
+  Compiling the report.
+
+  ---
+  DATABASE SYSTEM AUDIT REPORT
+
+  Scope: data/db/, data/repository/, data/model/, di/DatabaseModule,
+  worker/DailySummaryWorker, seeder/SeederService, seeder/SeederViewModel
+  Database version: 11 · Entities: 21
+
+  ---
+  PASSED
+
+  CONSISTENCY — NAMING
+
+  - All 21 entity class names follow [Name]Entity convention.
+  - All 21 DAO class names follow [Name]Dao convention.
+  - All repository interface names follow [Name]Repository convention.
+  - All Room repository implementations follow Room[Name]Repository convention
+  (exception: DataStoreSettingsRepository — see FAILED #16).
+  - All table names are snake_case and match their entity name.
+  - recorded_at is used as the primary timestamp column name consistently across
+  every dedicated time-series entity (HR, HRV, SpO2, Respiration, SkinTemp,
+  Steps, BloodPressure, Glucose, ActiveCalorie, TotalCalorie,
+  MetricReadingStaging).
+  - All enum types (DataSource, MetricType, SleepStage, SyncStatus,
+  UserCategory) are stored via .name through centralized TypeConverters —
+  consistent.
+
+  CONSISTENCY — PATTERNS
+
+  - All 10 dedicated reading DAOs expose the identical operation set:
+  insert(REPLACE), insertAll(REPLACE), insertAllOrIgnore(IGNORE),
+  deleteBySource, deleteAll, getReadingsInRange (Flow), getReadingsInRangeOnce
+  (suspend), getLatestReading (Flow).
+  - Both Flow and suspend variants exist for every query the Worker or
+  ViewModels need.
+  - OnConflict.REPLACE vs OnConflict.IGNORE split is intentional and consistent:
+  REPLACE for single/known-dedup inserts, IGNORE for batch-from-device
+  (skip-on-collision).
+  - Instant used consistently for all timestamps in dedicated time-series
+  entities.
+  - LocalDate used consistently for date fields in all entity types that carry a
+  date — exception noted below.
+
+  CONSISTENCY — ERROR HANDLING
+
+  - DailySummaryWorker.doWork() is wrapped in a top-level try/catch that logs
+  via Timber and returns Result.retry() — correct fail-safe behaviour.
+  - Repositories that handle errors consistently log with Timber.e() and rethrow
+  (no swallowed exceptions in the repos that do wrap).
+
+  CONSISTENCY — COROUTINES
+
+  - Room generates suspend DAO functions that automatically execute on a
+  background thread via CoroutineDispatcher injection — no explicit
+  withContext(Dispatchers.IO) is needed at the DAO call site, and none is
+  present. Correct.
+  - CoroutineWorker.doWork() is a suspend function; Room DAO calls inside it are
+  safe.
+  - SeederViewModel launches coroutines on Dispatchers.IO — correct for database
+  operations.
+  - All Flow.map {} transformations are applied to Room-emitted Flows; they run
+  in the emission context (background dispatcher). No flow operations on the
+  wrong dispatcher.
+
+  DUPLICATION
+
+  - TypeConverter functions are centralized in Converters.kt with no
+  duplication.
+  - Entity-to-model mappers are co-located with the entity file and not
+  duplicated across other files.
+
+  DEAD CODE
+
+  - No commented-out code blocks found.
+  - No unresolved TODO comments found.
+  - All 21 entities registered in AppDatabase have a corresponding abstract DAO
+  function.
+  - All DatabaseModule bindings correspond to existing interfaces and
+  implementations.
+
+  ARCHITECTURE
+
+  - All Hilt bindings in DatabaseModule are correctly scoped with @Singleton.
+  - AppDatabase is correctly scoped as a singleton via @Provides @Singleton.
+  - No circular dependencies between repositories.
+  - No entity contains computed properties — all fields are stored columns.
+  - DailySummaryWorker writes exclusively via DailySummaryRepository
+  (abstraction layer preserved for writes).
+
+  SCHEMA INTEGRITY
+
+  - All 21 entities are registered in AppDatabase — count confirmed.
+  - All UNIQUE indexes match the dedup strategy described in entity annotations
+  and migration SQL.
+  - All FK relationships are correctly annotated and consistent with the
+  migration SQL:
+    - sync_sessions → devices(id) NO_ACTION
+    - raw_device_data → sync_sessions(id) NO_ACTION
+    - sleep_stages → sleep_sessions(id) CASCADE
+    - question_responses → question_definitions(id) CASCADE
+  - All nullable Kotlin fields are correctly paired with nullable SQL columns.
+  - computed_by_version is present on HrvReadingEntity and SleepStageEntity. It
+  is also present on DailySummaryEntity — this appears intentional (the summary
+  is also a computed artifact); see FAILED #17 for the nuance.
+
+  SEEDER SPECIFIC
+
+  - All 10 dedicated reading repositories plus SleepStageRepository are injected
+  into SeederService. ✓
+  - Sleep stages are deleted before sleep sessions in clearSeederData() —
+  FK-safe order maintained. ✓
+  - Sleep stage contiguity: buildSleepStages() advances a single cursor cur to
+  the next stage's startMs = prev blockEnd, guaranteeing gapless stages. ✓
+  - Random(42L) seed used. ✓
+
+  DAILY SUMMARY WORKER SPECIFIC
+
+  - Worker reads from all 10 required dedicated tables (HR, HRV, SpO2, SkinTemp,
+  Respiration, Steps, ActiveCal, TotalCal, SleepSession, SleepStage). ✓
+  - 5-minute bucket resting HR: groupBy { it.recordedAt.toEpochMilli() / 
+  300_000L } then average() per bucket then minOrNull() — single-reading buckets
+  handled correctly (average of one element = that element). ✓
+  - steps_active_minutes uses zipWithNext on the chronologically-ordered list
+  (DAO orders by recorded_at ASC), computing actual inter-reading interval
+  minutes. ✓
+  - All four sleep stage totals computed: DEEP, LIGHT, REM, AWAKE — covers the
+  complete SleepStage enum. ✓
+  - computedByVersion = 1 is set on every output row. ✓
+  - Worker is enqueued with ExistingWorkPolicy.REPLACE. ✓
+
+  ---
+  FAILED
+
+  ---
+  CRITICAL
+
+  ---
+  FAILED-01
+  File: seeder/SeederService.kt:74–103 · Severity: Critical
+
+  clearSeederData() does not delete from daily_context or question_responses,
+  yet the seeder writes to both in seedDays():
+  - dailyContextRepository.upsert(ctx) → inserts rows into daily_context
+  (line 211)
+  - questionResponseDao.upsertAll(responses) → inserts rows into
+  question_responses (line 213)
+
+  After a clear, both tables retain stale seeder data. The DailyContextEntity
+  docstring at line 17 even reads: "The seeder cleanup path calls 
+  [DailyContextDao.deleteAll] directly" — but the call is missing.
+
+  Recommended fix: Add the following two calls to clearSeederData(), respecting
+  FK order (delete question_responses before relying on FK cascade would do it
+  anyway, but explicit is clearer):
+  questionResponseDao.deleteAll()
+  onProgress(0.78f)  // adjust progress steps accordingly
+  dailyContextDao.deleteAll()  // requires injecting DailyContextDao, or add 
+  deleteAll() to DailyContextRepository
+  DailyContextRepository must also have a deleteAll() method added to its
+  interface and implementation.
+
+  ---
+  FAILED-02
+  File: seeder/SeederService.kt:139–143 · Severity: Critical
+
+  The alreadySeeded guard checks dailyContextRepository.getForDateOnce(date) != 
+  null as one of its three conditions. Because daily_context is never cleared
+  (FAILED-01), after a clear-then-reseed cycle all dates will still have daily
+  context rows. The guard will evaluate to true for every previously-seeded
+  date, causing seedDays() to silently skip all of them. The result is a
+  fully-cleared metrics database that cannot be re-populated — the re-seed
+  completes reporting success but inserts nothing.
+
+  val alreadySeeded = hrReadingRepository.getReadingsInRangeOnce(dayStartMs,
+  dayEndMs).isNotEmpty()
+      || sleepRepository.getSessionForDateOnce(date) != null
+      || dailyContextRepository.getForDateOnce(date) != null  // ← blocks 
+  re-seed after clear
+
+  Recommended fix: Fix FAILED-01 first (clear daily_context on
+  clearSeederData()). No guard logic change is needed once the table is properly
+  cleared.
+
+  ---
+  HIGH
+
+  ---
+  FAILED-03
+  File: Multiple repository files · Severity: High
+
+  Error handling is completely absent from 10 of the 15 Room repository
+  implementations. The other five wrap write operations in try/catch { 
+  Timber.e(); throw }. The inconsistency means database failures in the
+  unguarded repos propagate silently as unlogged exceptions.
+
+  Repositories with no try/catch anywhere:
+  - RoomHrReadingRepository
+  - RoomHrvReadingRepository
+  - RoomSpO2ReadingRepository
+  - RoomRespirationReadingRepository
+  - RoomSkinTempReadingRepository
+  - RoomStepsReadingRepository
+  - RoomBloodPressureReadingRepository
+  - RoomGlucoseReadingRepository
+  - RoomActiveCalorieReadingRepository
+  - RoomTotalCalorieReadingRepository
+  - RoomSleepStageRepository
+  - RoomDeviceRepository
+  - RoomSyncSessionRepository
+  - RoomRawDeviceDataRepository
+  - RoomQuestionRepository
+
+  Repositories with try/catch on writes: RoomMetricReadingStagingRepository,
+  RoomSleepRepository, RoomDailySummaryRepository, RoomDailyContextRepository,
+  RoomActivityRepository (partial).
+
+  Recommended fix: Either apply try/catch { Timber.e(e, "..."); throw e }
+  uniformly to all write operations in all repositories, or adopt a consistent
+  Result<T> wrapper at the repository boundary and let callers handle the error
+  sealed type.
+
+  ---
+  FAILED-04
+  File: seeder/SeederService.kt:10–17, 66–68, 118, 213 · Severity: High
+
+  SeederService directly injects QuestionDefinitionDao and QuestionResponseDao,
+  bypassing the QuestionRepository abstraction layer. Every other entity in the
+  seeder is accessed via its repository.
+
+  private val questionDefinitionDao: QuestionDefinitionDao,
+  private val questionResponseDao: QuestionResponseDao,
+
+  The root cause is two missing methods on QuestionRepository:
+  1. suspend fun getLifestyleQuestionsOnce(): List<QuestionDefinition> — the
+  interface only exposes a Flow variant, but the seeder needs a one-shot read.
+  2. suspend fun upsertAllResponses(entities: List<QuestionResponseEntity>) — no
+  batch response insert exists.
+
+  Recommended fix: Add getLifestyleQuestionsOnce() and upsertAllResponses() to
+  QuestionRepository and RoomQuestionRepository, then replace the DAO injections
+  in SeederService with the repository.
+
+  ---
+  FAILED-05
+  File: data/db/SleepStageDao.kt:28–48 · Severity: High
+
+  SleepStageDao contains two methods with identical SQL that are functionally
+  interchangeable — one of them is dead code:
+
+  // Line 28–30
+  @Query("SELECT * FROM sleep_stages WHERE start_ms >= :startMs AND start_ms <
+  :endMs ORDER BY start_ms ASC")
+  fun getReadingsInRange(startMs: Long, endMs: Long):
+  Flow<List<SleepStageEntity>>
+
+  // Line 46–48 — identical SQL, identical return type
+  @Query("SELECT * FROM sleep_stages WHERE start_ms >= :startMs AND start_ms <
+  :endMs ORDER BY start_ms ASC")
+  fun getStagesInRange(startMs: Long, endMs: Long): Flow<List<SleepStageEntity>>
+
+  SleepStageRepository exposes both as separate interface methods, and
+  RoomSleepStageRepository delegates both to the respective DAO methods. One
+  method is dead code; the other is the canonical one.
+
+  Recommended fix: Remove getStagesInRange from SleepStageDao,
+  SleepStageRepository, and RoomSleepStageRepository. Update any callers to use
+  getReadingsInRange.
+
+  ---
+  FAILED-06
+  File: data/db/QuestionResponseEntity.kt:29 · Severity: High
+
+  QuestionResponseEntity.date is stored as String, not LocalDate:
+
+  val date: String,   // QuestionResponseEntity line 29
+
+  Every other entity that carries a date field uses LocalDate with the
+  registered TypeConverter (Converters.fromLocalDate / toLocalDate). The
+  QuestionResponse model class (line 6, QuestionResponse.kt) also uses String
+  for date.
+
+  This means:
+  - No type-safe date handling in queries — dates are compared as raw strings.
+  - Callers must manually call .toString() on LocalDate before passing to DAO
+  queries (done in RoomQuestionRepository lines 37, 44, 75, 82, 83 — five call
+  sites).
+  - No compile-time protection against malformed date strings.
+
+  Recommended fix: Change QuestionResponseEntity.date and QuestionResponse.date
+  to LocalDate. Update the DAO queries to accept LocalDate parameters (Room will
+  use the TypeConverter automatically). Remove the .toString() calls in
+  RoomQuestionRepository.
+
+  ---
+  MEDIUM
+
+  ---
+  FAILED-07
+  File: data/db/DeviceEntity.kt:23–27, data/db/RawDeviceDataEntity.kt:30,
+  data/db/QuestionResponseEntity.kt:30 · Severity: Medium
+
+  Three entities store timestamps as raw Long (epoch-ms) rather than Instant,
+  inconsistent with all other time-series entities:
+
+  ┌────────────────────────┬────────────────────────┬───────┬───────────┐
+  │         Entity         │         Field          │ Type  │ Should Be │
+  ├────────────────────────┼────────────────────────┼───────┼───────────┤
+  │ DeviceEntity           │ lastSeenMs, lastSyncMs │ Long? │ Instant?  │
+  ├────────────────────────┼────────────────────────┼───────┼───────────┤
+  │ RawDeviceDataEntity    │ receivedAt             │ Long  │ Instant   │
+  ├────────────────────────┼────────────────────────┼───────┼───────────┤
+  │ QuestionResponseEntity │ recordedAt             │ Long  │ Instant   │
+  └────────────────────────┴────────────────────────┴───────┴───────────┘
+
+  The Instant ↔ Long TypeConverter is registered at the database level, so
+  changing these to Instant would eliminate all manual .toEpochMilli()
+  conversions scattered through the repository and DAO layers.
+
+  Recommended fix: Change the three fields to Instant / Instant?. Remove the
+  manual .toEpochMilli() conversions from RoomSyncSessionRepository,
+  RoomRawDeviceDataRepository, and RoomQuestionRepository.
+
+  ---
+  FAILED-08
+  File: data/repository/RoomMetricReadingStagingRepository.kt:163,
+  data/repository/RoomActivityRepository.kt:119 · Severity: Medium
+
+  LocalDate.toUtcStartMs() is defined as a private extension function in two
+  files with identical bodies:
+
+  // RoomMetricReadingStagingRepository.kt:163
+  private fun LocalDate.toUtcStartMs(): Long =
+      atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+
+  // RoomActivityRepository.kt:119 — identical
+  private fun LocalDate.toUtcStartMs(): Long =
+      atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+
+  Additionally, the same UTC-epoch-ms calculation is inlined in:
+  - DailySummaryWorker.kt:65–66
+  - SeederService.kt:136–137
+  - RoomHrReadingRepository.kt:33–34
+
+  Five separate implementations of the same logic.
+
+  Recommended fix: Extract to an internal utility file (e.g.,
+  data/db/DateUtils.kt) as an internal extension function, and replace all five
+  inline copies with a reference.
+
+  ---
+  FAILED-09
+  File: data/repository/RoomActivityRepository.kt:73–84 · Severity: Medium
+
+  fixDurationIfNeeded() is business logic (data correction) embedded in a
+  repository implementation:
+
+  private fun fixDurationIfNeeded(activity: Activity): Activity {
+      val derivedMinutes = ((...endTime - ...startTime) / 60_000L).toInt()
+      return if (abs(derivedMinutes - activity.durationMinutes) > 2) { ... }
+  }
+
+  Repositories should be data access abstractions, not data correctors. This
+  correction should either live in the BLE driver layer (before writing to the
+  domain model) or in a use case.
+
+  Recommended fix: Move fixDurationIfNeeded() to the BLE driver or a
+  SyncActivityUseCase. RoomActivityRepository.insertAllFromDevice() should
+  receive already-validated data.
+
+  ---
+  FAILED-10
+  File: data/db/SyncSessionDao.kt:17–18 · Severity: Medium
+
+  SyncSessionDao.update() is annotated @Insert(onConflict = REPLACE) but named
+  update. This is semantically confusing: an @Insert(REPLACE) deletes and
+  re-inserts the row (resetting the ROWID internally), which is different from
+  an @Update.
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun update(entity: SyncSessionEntity)    // misleading: this is 
+  @Insert, not @Update
+
+  Recommended fix: Rename to upsert() to match the naming convention used for
+  @Insert(REPLACE) in DailySummaryDao, DailyContextDao, and QuestionResponseDao,
+  OR change the annotation to @Update.
+
+  ---
+  FAILED-11
+  File: worker/DailySummaryWorker.kt:66–88 · Severity: Medium
+
+  The resting HR window and morning HRV window are both anchored to UTC, not the
+  user's local timezone:
+
+  val nightEndMs     = date.atTime(6,
+  0).toInstant(ZoneOffset.UTC).toEpochMilli()   // midnight–06:00 UTC
+  val morningStartMs = date.atTime(5,
+  0).toInstant(ZoneOffset.UTC).toEpochMilli()   // from 05:00 UTC
+
+  For a user in UTC+10, "midnight UTC" is 10:00 AM local time. The resting HR
+  window (00:00–06:00 UTC) would capture afternoon readings, not overnight
+  resting readings. The "morning HRV" (from 05:00 UTC) would capture the midday
+  HRV, not the post-wake reading.
+
+  Recommended fix: Use the device's local timezone (or a persisted user
+  timezone) for these time boundary calculations. ZoneId.systemDefault() would
+  be appropriate for a local-only Android app, or store a userTimezone in
+  DataStore and retrieve it before computing boundaries.
+
+  ---
+  FAILED-12
+  File: seeder/SeederService.kt:107–220 · Severity: Medium
+
+  seedDays() has no try/catch around individual repository calls. A failure
+  partway through (e.g., a Room SQLiteConstraintException on
+  sleepRepository.insert()) will propagate to SeederViewModel, which catches it
+  and displays SeederState.Error. However, the database will be left in a
+  partially-seeded state — some days fully written, some partially written, some
+  not at all. There is no rollback, no cleanup, and no indication of which
+  dates were affected.
+
+  Recommended fix: Wrap the entire seedDays() call in a database transaction
+  where possible, or at minimum add per-day try/catch and log/skip failures
+  individually so that one bad date doesn't abort the entire run.
+
+  ---
+  LOW
+
+  ---
+  FAILED-13
+  File: seeder/SeederService.kt:107–220 · Severity: Low
+
+  seedDays() emits no progress updates during the bulk 10-metric insertion phase
+  (lines 178–190), leaving the reported progress stuck at 0.65f for the entire
+  duration of inserting potentially thousands of rows across 10 tables:
+
+  if (hrEntities.isNotEmpty()) hrReadingRepository.insertAll(hrEntities)
+  onProgress(0.65f)
+  if (hrvEntities.isNotEmpty()) hrvReadingRepository.insertAll(hrvEntities)
+  if (spo2Entities.isNotEmpty()) spo2ReadingRepository.insertAll(spo2Entities)
+  // ... 8 more inserts, then:
+  onProgress(0.75f)
+
+  Recommended fix: Emit one onProgress increment per metric type insertion (10
+  increments between 0.65f and 0.75f).
+
+  ---
+  FAILED-14
+  File: data/repository/DataStoreSettingsRepository.kt:14 · Severity: Low
+
+  DataStoreSettingsRepository is the only repository implementation that does
+  not follow the Room[Name]Repository naming convention. The name communicates
+  the backing technology (DataStore) rather than the abstraction layer, which is
+  the correct intent — but it creates a naming inconsistency in the module.
+
+  Recommended fix: No change required if the divergence is intentional. If
+  naming uniformity is desired, rename to DataStore[Name]Repository as a
+  project-wide convention for non-Room implementations.
+
+  ---
+  FAILED-15
+  File: di/DatabaseModule.kt:168–185 · Severity: Low
+
+  The RoomDatabase.Callback.onOpen() performs synchronous SQL queries on
+  whatever thread opens the database:
+
+  .addCallback(object : RoomDatabase.Callback() {
+      override fun onOpen(db: SupportSQLiteDatabase) {
+          val cursor = db.query("SELECT COUNT(*) FROM question_definitions ...")
+          ...
+          db.execSQL("INSERT OR IGNORE INTO question_definitions ...")
+      }
+  })
+
+  If any code path triggers the first database open on the main thread (possible
+  during app startup before Hilt lazy injection is fully established), this
+  blocks the main thread with IO operations. Room itself documents that the
+  database is opened lazily, but the callback's threading is the caller's
+  responsibility.
+
+  Recommended fix: Move the lifestyle question seeding to a separate coroutine
+  launched in the Application class or a StartupWorker, using the
+  QuestionDefinitionDao.count() method already available.
+
+  ---
+  FAILED-16
+  File: data/db/DailySummaryEntity.kt:65, worker/DailySummaryWorker.kt:181 ·
+  Severity: Low
+
+  The audit checklist specifies that computed_by_version should be present on
+  HrvReadingEntity and SleepStageEntity only. It is also present on
+  DailySummaryEntity (the pre-computed aggregate table) and is set to 1 by the
+  worker. This is semantically correct and intentional for the summary table,
+  but the field's presence there is undocumented relative to the checklist
+  expectation.
+
+  Recommended fix: Add a brief inline comment to
+  DailySummaryEntity.computedByVersion (and to the checklist if it is a living
+  document) clarifying that the field applies to any computed artifact table,
+  not only to raw reading tables.
+
+  ---
+  CROSS-SYSTEM ISSUES
+
+  ---
+  CROSS-01 — BLE/Worker boundary
+  File: worker/DailySummaryWorker.kt:41–80
+
+  DailySummaryWorker injects 10 DAOs directly (bypassing repositories for
+  reads). The worker's docstring documents this as intentional ("to avoid Flow
+  overhead"). However, the pattern creates a dual access path: repositories for
+  writes, DAOs for reads. If a DAO's query logic changes (e.g., table renamed,
+  filter added), the worker would not benefit from any repository-level
+  abstraction. This is flagged for the BLE/Worker architecture audit, not the
+  database system audit.
+
+  ---
+  CROSS-02 — Product/Worker gap
+  File: worker/DailySummaryWorker.kt:71–80
+
+  DailySummaryWorker does not read from BloodPressureReadingDao or
+  GlucoseReadingDao. The DailySummary entity and model have no corresponding
+  aggregate fields for blood pressure or glucose. If blood pressure or glucose
+  summary fields are added to the daily summary in a future migration, the
+  worker will need to be updated. Flag for the product/feature audit to confirm
+  this omission is a deliberate scope decision.
+
+  ---
+  CROSS-03 — BLE driver layer
+  File: data/repository/RoomActivityRepository.kt:40–84
+
+  insertAllFromDevice() contains drift-match deduplication logic (±30-second
+  window) and a fixDurationIfNeeded() corrector. These are driver-level data
+  quality concerns — they assume knowledge of BLE device sync behaviour (drift,
+  duration mismatches) that belongs in the BLE processor layer, not in the
+  repository. Flag for the BLE system audit to evaluate whether this logic
+  should move to DeviceSyncProcessor or a dedicated use case.
+
+  ---
+  End of report.
+
+✻ Baked for 9m 12s
+
+❯ write this to a output file in the docs folder                                
+  ⎿  You've hit your session limit · resets 11pm (Europe/London)
+     /upgrade to increase your usage limit.
+
+✻ Crunched for 0s

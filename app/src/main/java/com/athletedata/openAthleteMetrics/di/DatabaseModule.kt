@@ -4,36 +4,69 @@ import android.content.Context
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.athletedata.openAthleteMetrics.data.db.ActiveCalorieReadingDao
 import com.athletedata.openAthleteMetrics.data.db.ActivityDao
 import com.athletedata.openAthleteMetrics.data.db.AppDatabase
 import com.athletedata.openAthleteMetrics.data.db.AppDatabase.Companion.LIFESTYLE_SEEDS
+import com.athletedata.openAthleteMetrics.data.db.BloodPressureReadingDao
 import com.athletedata.openAthleteMetrics.data.db.DailyContextDao
 import com.athletedata.openAthleteMetrics.data.db.DailySummaryDao
 import com.athletedata.openAthleteMetrics.data.db.DeviceDao
-import com.athletedata.openAthleteMetrics.data.db.MetricReadingDao
+import com.athletedata.openAthleteMetrics.data.db.GlucoseReadingDao
+import com.athletedata.openAthleteMetrics.data.db.HrReadingDao
+import com.athletedata.openAthleteMetrics.data.db.HrvReadingDao
+import com.athletedata.openAthleteMetrics.data.db.MetricReadingStagingDao
 import com.athletedata.openAthleteMetrics.data.db.QuestionDefinitionDao
 import com.athletedata.openAthleteMetrics.data.db.QuestionResponseDao
 import com.athletedata.openAthleteMetrics.data.db.RawDeviceDataDao
+import com.athletedata.openAthleteMetrics.data.db.RespirationReadingDao
+import com.athletedata.openAthleteMetrics.data.db.SkinTempReadingDao
 import com.athletedata.openAthleteMetrics.data.db.SleepSessionDao
+import com.athletedata.openAthleteMetrics.data.db.SleepStageDao
+import com.athletedata.openAthleteMetrics.data.db.SpO2ReadingDao
+import com.athletedata.openAthleteMetrics.data.db.StepsReadingDao
 import com.athletedata.openAthleteMetrics.data.db.SyncSessionDao
+import com.athletedata.openAthleteMetrics.data.db.TotalCalorieReadingDao
+import com.athletedata.openAthleteMetrics.data.repository.ActiveCalorieReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.ActivityRepository
+import com.athletedata.openAthleteMetrics.data.repository.BloodPressureReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailyContextRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailySummaryRepository
 import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
-import com.athletedata.openAthleteMetrics.data.repository.MetricRepository
+import com.athletedata.openAthleteMetrics.data.repository.GlucoseReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.HrReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.HrvReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.MetricReadingStagingRepository
 import com.athletedata.openAthleteMetrics.data.repository.QuestionRepository
 import com.athletedata.openAthleteMetrics.data.repository.RawDeviceDataRepository
+import com.athletedata.openAthleteMetrics.data.repository.RespirationReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.RoomActiveCalorieReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.RoomActivityRepository
+import com.athletedata.openAthleteMetrics.data.repository.RoomBloodPressureReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.RoomDailyContextRepository
 import com.athletedata.openAthleteMetrics.data.repository.RoomDailySummaryRepository
 import com.athletedata.openAthleteMetrics.data.repository.RoomDeviceRepository
-import com.athletedata.openAthleteMetrics.data.repository.RoomMetricRepository
+import com.athletedata.openAthleteMetrics.data.repository.RoomGlucoseReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.RoomHrReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.RoomHrvReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.RoomMetricReadingStagingRepository
 import com.athletedata.openAthleteMetrics.data.repository.RoomQuestionRepository
 import com.athletedata.openAthleteMetrics.data.repository.RoomRawDeviceDataRepository
+import com.athletedata.openAthleteMetrics.data.repository.RoomRespirationReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.RoomSkinTempReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.RoomSleepRepository
+import com.athletedata.openAthleteMetrics.data.repository.RoomSleepStageRepository
+import com.athletedata.openAthleteMetrics.data.repository.RoomSpO2ReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.RoomStepsReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.RoomSyncSessionRepository
+import com.athletedata.openAthleteMetrics.data.repository.RoomTotalCalorieReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.SkinTempReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.SleepRepository
+import com.athletedata.openAthleteMetrics.data.repository.SleepStageRepository
+import com.athletedata.openAthleteMetrics.data.repository.SpO2ReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.StepsReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.SyncSessionRepository
+import com.athletedata.openAthleteMetrics.data.repository.TotalCalorieReadingRepository
 import dagger.Binds
 import dagger.Module
 import dagger.Provides
@@ -49,7 +82,7 @@ abstract class DatabaseModule {
     // ── Repository bindings ───────────────────────────────────────────────────
 
     @Binds @Singleton
-    abstract fun bindMetricRepository(impl: RoomMetricRepository): MetricRepository
+    abstract fun bindMetricReadingStagingRepository(impl: RoomMetricReadingStagingRepository): MetricReadingStagingRepository
 
     @Binds @Singleton
     abstract fun bindSleepRepository(impl: RoomSleepRepository): SleepRepository
@@ -75,6 +108,39 @@ abstract class DatabaseModule {
     @Binds @Singleton
     abstract fun bindRawDeviceDataRepository(impl: RoomRawDeviceDataRepository): RawDeviceDataRepository
 
+    @Binds @Singleton
+    abstract fun bindHrReadingRepository(impl: RoomHrReadingRepository): HrReadingRepository
+
+    @Binds @Singleton
+    abstract fun bindHrvReadingRepository(impl: RoomHrvReadingRepository): HrvReadingRepository
+
+    @Binds @Singleton
+    abstract fun bindSpO2ReadingRepository(impl: RoomSpO2ReadingRepository): SpO2ReadingRepository
+
+    @Binds @Singleton
+    abstract fun bindRespirationReadingRepository(impl: RoomRespirationReadingRepository): RespirationReadingRepository
+
+    @Binds @Singleton
+    abstract fun bindSkinTempReadingRepository(impl: RoomSkinTempReadingRepository): SkinTempReadingRepository
+
+    @Binds @Singleton
+    abstract fun bindStepsReadingRepository(impl: RoomStepsReadingRepository): StepsReadingRepository
+
+    @Binds @Singleton
+    abstract fun bindBloodPressureReadingRepository(impl: RoomBloodPressureReadingRepository): BloodPressureReadingRepository
+
+    @Binds @Singleton
+    abstract fun bindGlucoseReadingRepository(impl: RoomGlucoseReadingRepository): GlucoseReadingRepository
+
+    @Binds @Singleton
+    abstract fun bindActiveCalorieReadingRepository(impl: RoomActiveCalorieReadingRepository): ActiveCalorieReadingRepository
+
+    @Binds @Singleton
+    abstract fun bindTotalCalorieReadingRepository(impl: RoomTotalCalorieReadingRepository): TotalCalorieReadingRepository
+
+    @Binds @Singleton
+    abstract fun bindSleepStageRepository(impl: RoomSleepStageRepository): SleepStageRepository
+
     companion object {
 
         // ── Database & DAO providers ──────────────────────────────────────────
@@ -88,8 +154,17 @@ abstract class DatabaseModule {
             AppDatabase::class.java,
             AppDatabase.DATABASE_NAME,
         )
-            .addMigrations(AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4, AppDatabase.MIGRATION_4_5, AppDatabase.MIGRATION_5_6, AppDatabase.MIGRATION_6_7, AppDatabase.MIGRATION_7_8, AppDatabase.MIGRATION_8_9, AppDatabase.MIGRATION_9_10)
-            .fallbackToDestructiveMigration()
+            .addMigrations(
+                AppDatabase.MIGRATION_2_3,
+                AppDatabase.MIGRATION_3_4,
+                AppDatabase.MIGRATION_4_5,
+                AppDatabase.MIGRATION_5_6,
+                AppDatabase.MIGRATION_6_7,
+                AppDatabase.MIGRATION_7_8,
+                AppDatabase.MIGRATION_8_9,
+                AppDatabase.MIGRATION_9_10,
+                AppDatabase.MIGRATION_10_11,
+            )
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onOpen(db: SupportSQLiteDatabase) {
                     super.onOpen(db)
@@ -111,7 +186,7 @@ abstract class DatabaseModule {
             .build()
 
         @Provides @Singleton
-        fun provideMetricReadingDao(db: AppDatabase): MetricReadingDao = db.metricReadingDao()
+        fun provideMetricReadingStagingDao(db: AppDatabase): MetricReadingStagingDao = db.metricReadingStagingDao()
 
         @Provides @Singleton
         fun provideSleepSessionDao(db: AppDatabase): SleepSessionDao = db.sleepSessionDao()
@@ -141,5 +216,38 @@ abstract class DatabaseModule {
 
         @Provides @Singleton
         fun provideRawDeviceDataDao(db: AppDatabase): RawDeviceDataDao = db.rawDeviceDataDao()
+
+        @Provides @Singleton
+        fun provideHrReadingDao(db: AppDatabase): HrReadingDao = db.hrReadingDao()
+
+        @Provides @Singleton
+        fun provideHrvReadingDao(db: AppDatabase): HrvReadingDao = db.hrvReadingDao()
+
+        @Provides @Singleton
+        fun provideSpO2ReadingDao(db: AppDatabase): SpO2ReadingDao = db.spO2ReadingDao()
+
+        @Provides @Singleton
+        fun provideRespirationReadingDao(db: AppDatabase): RespirationReadingDao = db.respirationReadingDao()
+
+        @Provides @Singleton
+        fun provideSkinTempReadingDao(db: AppDatabase): SkinTempReadingDao = db.skinTempReadingDao()
+
+        @Provides @Singleton
+        fun provideStepsReadingDao(db: AppDatabase): StepsReadingDao = db.stepsReadingDao()
+
+        @Provides @Singleton
+        fun provideBloodPressureReadingDao(db: AppDatabase): BloodPressureReadingDao = db.bloodPressureReadingDao()
+
+        @Provides @Singleton
+        fun provideGlucoseReadingDao(db: AppDatabase): GlucoseReadingDao = db.glucoseReadingDao()
+
+        @Provides @Singleton
+        fun provideActiveCalorieReadingDao(db: AppDatabase): ActiveCalorieReadingDao = db.activeCalorieReadingDao()
+
+        @Provides @Singleton
+        fun provideTotalCalorieReadingDao(db: AppDatabase): TotalCalorieReadingDao = db.totalCalorieReadingDao()
+
+        @Provides @Singleton
+        fun provideSleepStageDao(db: AppDatabase): SleepStageDao = db.sleepStageDao()
     }
 }

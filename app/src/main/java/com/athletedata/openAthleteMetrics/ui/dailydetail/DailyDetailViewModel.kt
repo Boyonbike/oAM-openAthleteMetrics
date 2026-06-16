@@ -9,13 +9,11 @@ import com.athletedata.openAthleteMetrics.data.model.QuestionCategory
 import com.athletedata.openAthleteMetrics.data.model.QuestionDefinition
 import com.athletedata.openAthleteMetrics.data.model.QuestionResponse
 import com.athletedata.openAthleteMetrics.data.model.QuestionType
-import com.athletedata.openAthleteMetrics.data.model.SleepSession
 import com.athletedata.openAthleteMetrics.data.model.UserCategory
 import com.athletedata.openAthleteMetrics.data.repository.ActivityRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailyContextRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailySummaryRepository
 import com.athletedata.openAthleteMetrics.data.repository.QuestionRepository
-import com.athletedata.openAthleteMetrics.data.repository.SleepRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -24,7 +22,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import org.json.JSONArray
 import javax.inject.Inject
 
 @HiltViewModel
@@ -32,7 +29,6 @@ class DailyDetailViewModel @Inject constructor(
     private val globalAppState: GlobalAppState,
     private val summaryRepo: DailySummaryRepository,
     private val contextRepo: DailyContextRepository,
-    private val sleepRepo: SleepRepository,
     private val activityRepo: ActivityRepository,
     private val questionRepo: QuestionRepository,
 ) : ViewModel() {
@@ -55,17 +51,16 @@ class DailyDetailViewModel @Inject constructor(
             combine(
                 summaryRepo.getSummaryForDate(date),
                 contextRepo.getForDate(date),
-                sleepRepo.getSessionForDate(date),
                 activityRepo.getActivitiesForDate(date),
                 questionsFlow,
-            ) { summary, context, sleep, activities, questions ->
+            ) { summary, context, activities, questions ->
                 DailyDetailUiState.Success(
                     date = date,
                     summary = summary,
                     context = context,
                     activities = activities.map { it.toUiItem() },
                     questionGroups = buildQuestionGroups(questions.responses, questions.definitions),
-                    sleep = buildSleepUiItem(summary, sleep),
+                    sleep = buildSleepUiItem(summary),
                 ) as DailyDetailUiState
             }.catch { e ->
                 emit(DailyDetailUiState.Error(e.message ?: "Unknown error"))
@@ -90,11 +85,18 @@ class DailyDetailViewModel @Inject constructor(
         notes = notes,
     )
 
-    private fun buildSleepUiItem(summary: DailySummary?, session: SleepSession?): SleepUiItem? {
+    private fun buildSleepUiItem(summary: DailySummary?): SleepUiItem? {
         val minutes = summary?.sleepMinutes ?: return null
+        val stages = if (summary.sleepDeepMinutes != null || summary.sleepLightMinutes != null || summary.sleepRemMinutes != null) {
+            SleepStages(
+                deepMinutes  = summary.sleepDeepMinutes  ?: 0,
+                lightMinutes = summary.sleepLightMinutes ?: 0,
+                remMinutes   = summary.sleepRemMinutes   ?: 0,
+            )
+        } else null
         return SleepUiItem(
             formattedDuration = formatDuration(minutes),
-            stages = session?.let { parseSleepStages(it.stagesJson) },
+            stages = stages,
         )
     }
 
@@ -126,27 +128,6 @@ class DailyDetailViewModel @Inject constructor(
         QuestionType.TEXT    -> value
     }
 
-    private fun parseSleepStages(json: String?): SleepStages? {
-        json ?: return null
-        return try {
-            val arr = JSONArray(json)
-            var deepMs = 0L; var lightMs = 0L; var remMs = 0L
-            for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
-                val dur = obj.optLong("endMs") - obj.optLong("startMs")
-                when (obj.optString("stage")) {
-                    "DEEP"  -> deepMs  += dur
-                    "LIGHT" -> lightMs += dur
-                    "REM"   -> remMs   += dur
-                }
-            }
-            SleepStages(
-                deepMinutes  = (deepMs  / 60_000L).toInt(),
-                lightMinutes = (lightMs / 60_000L).toInt(),
-                remMinutes   = (remMs   / 60_000L).toInt(),
-            )
-        } catch (_: Exception) { null }
-    }
 }
 
 private fun formatDuration(minutes: Int): String {

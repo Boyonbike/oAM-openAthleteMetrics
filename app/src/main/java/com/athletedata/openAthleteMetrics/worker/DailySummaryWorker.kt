@@ -8,11 +8,19 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
-import com.athletedata.openAthleteMetrics.data.db.MetricReadingDao
+import com.athletedata.openAthleteMetrics.data.db.ActiveCalorieReadingDao
+import com.athletedata.openAthleteMetrics.data.db.HrReadingDao
+import com.athletedata.openAthleteMetrics.data.db.HrvReadingDao
+import com.athletedata.openAthleteMetrics.data.db.RespirationReadingDao
+import com.athletedata.openAthleteMetrics.data.db.SkinTempReadingDao
 import com.athletedata.openAthleteMetrics.data.db.SleepSessionDao
+import com.athletedata.openAthleteMetrics.data.db.SleepStageDao
+import com.athletedata.openAthleteMetrics.data.db.SpO2ReadingDao
+import com.athletedata.openAthleteMetrics.data.db.StepsReadingDao
+import com.athletedata.openAthleteMetrics.data.db.TotalCalorieReadingDao
 import com.athletedata.openAthleteMetrics.data.model.DailySummary
 import com.athletedata.openAthleteMetrics.data.model.DataSource
-import com.athletedata.openAthleteMetrics.data.model.MetricType
+import com.athletedata.openAthleteMetrics.data.model.SleepStage
 import com.athletedata.openAthleteMetrics.data.repository.DailySummaryRepository
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -24,20 +32,26 @@ import java.time.ZoneOffset
 /**
  * Aggregates one day's worth of raw readings into a [DailySummary] row.
  *
- * Triggered by repository insert methods after any write to metric_readings
- * or sleep_sessions. Enqueued with REPLACE strategy so re-runs for the same
- * date are safe and idempotent.
+ * Triggered after any write to the typed time-series tables or sleep_sessions.
+ * Enqueued with REPLACE strategy so re-runs for the same date are idempotent.
  *
- * Uses DAOs directly (not repositories) for reads to avoid Flow overhead;
- * writes via [DailySummaryRepository.upsert] to stay on the correct abstraction
- * layer for writes.
+ * Uses DAOs directly for reads to avoid Flow overhead; writes via
+ * [DailySummaryRepository.upsert] to stay on the correct abstraction layer.
  */
 @HiltWorker
 class DailySummaryWorker @AssistedInject constructor(
     @Assisted context: Context,
     @Assisted workerParams: WorkerParameters,
-    private val metricReadingDao: MetricReadingDao,
+    private val hrReadingDao: HrReadingDao,
+    private val hrvReadingDao: HrvReadingDao,
+    private val spo2ReadingDao: SpO2ReadingDao,
+    private val skinTempReadingDao: SkinTempReadingDao,
+    private val respirationReadingDao: RespirationReadingDao,
+    private val stepsReadingDao: StepsReadingDao,
+    private val activeCalorieReadingDao: ActiveCalorieReadingDao,
+    private val totalCalorieReadingDao: TotalCalorieReadingDao,
     private val sleepSessionDao: SleepSessionDao,
+    private val sleepStageDao: SleepStageDao,
     private val dailySummaryRepository: DailySummaryRepository,
 ) : CoroutineWorker(context, workerParams) {
 
@@ -48,77 +62,126 @@ class DailySummaryWorker @AssistedInject constructor(
             val date = LocalDate.parse(dateStr)
 
             // ── Time boundaries ───────────────────────────────────────────────
-            val dayStartMs = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
-            val dayEndMs   = date.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
-            // Overnight window for resting HR (00:00–06:00 UTC)
+            val dayStartMs     = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+            val dayEndMs       = date.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
             val nightEndMs     = date.atTime(6, 0).toInstant(ZoneOffset.UTC).toEpochMilli()
-            // Morning window for first HRV reading (after 05:00 UTC)
             val morningStartMs = date.atTime(5, 0).toInstant(ZoneOffset.UTC).toEpochMilli()
 
             // ── Fetch raw readings ────────────────────────────────────────────
-            val hrReadings    = metricReadingDao.getReadingsInRangeOnce(MetricType.HR,    dayStartMs, dayEndMs)
-            val hrvReadings   = metricReadingDao.getReadingsInRangeOnce(MetricType.HRV,   dayStartMs, dayEndMs)
-            val spo2Readings  = metricReadingDao.getReadingsInRangeOnce(MetricType.SPO2,  dayStartMs, dayEndMs)
-            val stepsReadings = metricReadingDao.getReadingsInRangeOnce(MetricType.STEPS, dayStartMs, dayEndMs)
-            val sleepSession  = sleepSessionDao.getSessionForDateOnce(date)
+            val hrReadings          = hrReadingDao.getReadingsInRangeOnce(dayStartMs, dayEndMs)
+            val hrvReadings         = hrvReadingDao.getReadingsInRangeOnce(dayStartMs, dayEndMs)
+            val spo2Readings        = spo2ReadingDao.getReadingsInRangeOnce(dayStartMs, dayEndMs)
+            val skinTempReadings    = skinTempReadingDao.getReadingsInRangeOnce(dayStartMs, dayEndMs)
+            val respirationReadings = respirationReadingDao.getReadingsInRangeOnce(dayStartMs, dayEndMs)
+            val stepsReadings       = stepsReadingDao.getReadingsInRangeOnce(dayStartMs, dayEndMs)
+            val activeCalReadings   = activeCalorieReadingDao.getReadingsInRangeOnce(dayStartMs, dayEndMs)
+            val totalCalReadings    = totalCalorieReadingDao.getReadingsInRangeOnce(dayStartMs, dayEndMs)
+            val session             = sleepSessionDao.getSessionForDateOnce(date)
+            val stages              = if (session != null) sleepStageDao.getStagesForSessionOnce(session.id) else emptyList()
 
-            // ── Compute aggregates ────────────────────────────────────────────
-
-            // Mean HR across all readings for the day
-            val avgHrBpm = hrReadings.averageOrNull { it.value }
-
-            // Resting HR: minimum value in the overnight window (00:00–06:00 UTC).
-            // Approximates the "lowest 5-minute HR window" for seeder-density data
-            // (one reading per 5 min); a sliding-window average can replace this
-            // when real device data provides higher-frequency readings.
+            // ── HR ────────────────────────────────────────────────────────────
+            val avgHrBpm     = hrReadings.averageOrNull { it.bpm.toDouble() }
             val restingHrBpm = hrReadings
-                .filter { it.recordedAt.toEpochMilli() < nightEndMs }
-                .minByOrNull { it.value }
-                ?.value
+                .filter { it.recordedAt.toEpochMilli() in dayStartMs until nightEndMs }
+                .groupBy { it.recordedAt.toEpochMilli() / 300_000L }
+                .values
+                .filter { it.size >= 2 }
+                .map { bucket -> bucket.map { it.bpm }.average() }
+                .minOrNull()
 
-            // Mean HRV across all readings for the day
-            val avgHrvMs = hrvReadings.averageOrNull { it.value }
-
-            // First HRV reading at or after 05:00 UTC (proxy for wake-time HRV)
+            // ── HRV ───────────────────────────────────────────────────────────
+            val avgHrvMs     = hrvReadings.averageOrNull { it.rmssdMs }
             val morningHrvMs = hrvReadings
                 .filter { it.recordedAt.toEpochMilli() >= morningStartMs }
                 .minByOrNull { it.recordedAt }
-                ?.value
+                ?.rmssdMs
+            val hrvMinMs     = hrvReadings.minByOrNull { it.rmssdMs }?.rmssdMs
+            val hrvMaxMs     = hrvReadings.maxByOrNull { it.rmssdMs }?.rmssdMs
 
-            // Mean SpO₂ across overnight readings
-            val avgSpo2Pct = spo2Readings.averageOrNull { it.value }
+            // ── SpO2 ──────────────────────────────────────────────────────────
+            val avgSpo2Pct  = spo2Readings.averageOrNull { it.percentage }
+            val spo2MinPct  = spo2Readings.minByOrNull { it.percentage }?.percentage
+            val spo2MaxPct  = spo2Readings.maxByOrNull { it.percentage }?.percentage
 
-            // Steps: the seeder writes one cumulative total per day; take the last value
-            val steps = stepsReadings.maxByOrNull { it.recordedAt }?.value?.toInt()
+            // ── Skin temperature ──────────────────────────────────────────────
+            val skinTempAvgC = skinTempReadings.averageOrNull { it.celsius }
+            val skinTempMinC = skinTempReadings.minByOrNull { it.celsius }?.celsius
+            val skinTempMaxC = skinTempReadings.maxByOrNull { it.celsius }?.celsius
 
-            // Sleep duration from the sleep session for this night
-            val sleepMinutes = sleepSession?.durationMinutes
+            // ── Respiration ───────────────────────────────────────────────────
+            val respirationAvg = respirationReadings.averageOrNull { it.breathsPerMinute }
 
-            // ── Determine dominant source ─────────────────────────────────────
-            // Most common source among all metric readings; fall back to the sleep
-            // session's source, then MANUAL if there are no readings at all.
-            val allReadings = hrReadings + hrvReadings + spo2Readings + stepsReadings
-            val dominantSource = allReadings
-                .groupingBy { it.source }
+            // ── Steps ─────────────────────────────────────────────────────────
+            val steps = stepsReadings.maxByOrNull { it.recordedAt }?.cumulativeSteps
+            val stepsActiveMinutes = stepsReadings
+                .takeIf { it.size >= 2 }
+                ?.zipWithNext { a, b ->
+                    val stepDelta = b.cumulativeSteps - a.cumulativeSteps
+                    val intervalMinutes = (b.recordedAt.toEpochMilli() - a.recordedAt.toEpochMilli()) / 60_000L
+                    if (stepDelta > 500 && intervalMinutes > 0) intervalMinutes.coerceAtMost(60L) else 0L
+                }
+                ?.sum()
+                ?.toInt()
+
+            // ── Calories ──────────────────────────────────────────────────────
+            val activeCalories = activeCalReadings
+                .sumOf { it.calories }
+                .takeIf { activeCalReadings.isNotEmpty() }
+            val totalCalories = totalCalReadings.maxByOrNull { it.recordedAt }?.calories
+
+            // ── Sleep ─────────────────────────────────────────────────────────
+            val sleepMinutes      = session?.durationMinutes
+            val sleepDeepMinutes  = stages.filter { it.stage == SleepStage.DEEP  }.sumOf { it.durationMinutes }.takeIf { stages.isNotEmpty() }
+            val sleepLightMinutes = stages.filter { it.stage == SleepStage.LIGHT }.sumOf { it.durationMinutes }.takeIf { stages.isNotEmpty() }
+            val sleepRemMinutes   = stages.filter { it.stage == SleepStage.REM   }.sumOf { it.durationMinutes }.takeIf { stages.isNotEmpty() }
+            val sleepAwakeMinutes = stages.filter { it.stage == SleepStage.AWAKE }.sumOf { it.durationMinutes }.takeIf { stages.isNotEmpty() }
+
+            // ── Dominant source ───────────────────────────────────────────────
+            val allSources = hrReadings.map { it.source } +
+                hrvReadings.map { it.source } +
+                spo2Readings.map { it.source } +
+                skinTempReadings.map { it.source } +
+                respirationReadings.map { it.source } +
+                stepsReadings.map { it.source } +
+                activeCalReadings.map { it.source } +
+                totalCalReadings.map { it.source }
+            val dominantSource = allSources
+                .groupingBy { it }
                 .eachCount()
                 .maxByOrNull { it.value }
                 ?.key
-                ?: sleepSession?.source
+                ?: session?.source
                 ?: DataSource.MANUAL
 
             // ── Write summary ─────────────────────────────────────────────────
             dailySummaryRepository.upsert(
                 DailySummary(
-                    date = date,
-                    avgHrBpm = avgHrBpm,
-                    restingHrBpm = restingHrBpm,
-                    avgHrvMs = avgHrvMs,
-                    morningHrvMs = morningHrvMs,
-                    avgSpo2Pct = avgSpo2Pct,
-                    steps = steps,
-                    sleepMinutes = sleepMinutes,
-                    source = dominantSource,
-                    computedAt = Instant.now(),
+                    date               = date,
+                    avgHrBpm           = avgHrBpm,
+                    restingHrBpm       = restingHrBpm,
+                    avgHrvMs           = avgHrvMs,
+                    morningHrvMs       = morningHrvMs,
+                    hrvMinMs           = hrvMinMs,
+                    hrvMaxMs           = hrvMaxMs,
+                    avgSpo2Pct         = avgSpo2Pct,
+                    spo2MinPct         = spo2MinPct,
+                    spo2MaxPct         = spo2MaxPct,
+                    skinTempAvgC       = skinTempAvgC,
+                    skinTempMinC       = skinTempMinC,
+                    skinTempMaxC       = skinTempMaxC,
+                    respirationAvg     = respirationAvg,
+                    steps              = steps,
+                    stepsActiveMinutes = stepsActiveMinutes,
+                    activeCalories     = activeCalories,
+                    totalCalories      = totalCalories,
+                    sleepMinutes       = sleepMinutes,
+                    sleepDeepMinutes   = sleepDeepMinutes,
+                    sleepLightMinutes  = sleepLightMinutes,
+                    sleepRemMinutes    = sleepRemMinutes,
+                    sleepAwakeMinutes  = sleepAwakeMinutes,
+                    computedByVersion  = 1,
+                    source             = dominantSource,
+                    computedAt         = Instant.now(),
                 )
             )
 
@@ -130,7 +193,6 @@ class DailySummaryWorker @AssistedInject constructor(
     }
 
     companion object {
-        /** Input data key for the ISO date string (YYYY-MM-DD). */
         const val KEY_DATE = "date"
     }
 }
@@ -140,12 +202,6 @@ class DailySummaryWorker @AssistedInject constructor(
  *
  * REPLACE means if a job for the same date is already queued or running it
  * is cancelled and replaced — safe because the worker is fully idempotent.
- *
- * Called at the end of every repository method that writes to metric_readings
- * or sleep_sessions. The [workManager] parameter is injected by Hilt into the
- * calling repository rather than obtained from context here, so there is no
- * risk of double-initialisation before [AthleteDataApplication] sets up the
- * custom [Configuration.Provider].
  */
 fun enqueueSummaryWorker(date: LocalDate, workManager: WorkManager) {
     val request = OneTimeWorkRequestBuilder<DailySummaryWorker>()
@@ -160,6 +216,5 @@ fun enqueueSummaryWorker(date: LocalDate, workManager: WorkManager) {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-/** Returns the average of [selector] over the list, or null if the list is empty. */
 private fun <T> List<T>.averageOrNull(selector: (T) -> Double): Double? =
     takeIf { isNotEmpty() }?.map(selector)?.average()

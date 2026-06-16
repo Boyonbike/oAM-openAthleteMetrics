@@ -12,7 +12,6 @@ enum class MetricType {
     STEPS,            // step count
     SLEEP_STAGE,      // sleep stage marker (value maps to SleepStage ordinal)
     BATTERY,          // device battery level (%)
-    RESPIRATORY_RATE, // breaths per minute
     SKIN_TEMP,        // skin surface temperature (°C)
     BODY_TEMP,        // core body temperature (°C)
     TEMP_DEVIATION,   // deviation from baseline temperature (°C)
@@ -23,6 +22,17 @@ enum class MetricType {
     CALORIES,         // total calories burned (kcal)
     ACTIVE_CALORIES,  // active (non-basal) calories burned (kcal)
     BASAL_CALORIES,   // basal metabolic rate calories (kcal)
+    /**
+     * Canonical value for respiratory rate (breaths per minute). Routes to the dedicated
+     * respiration_readings table via BleEngine.routeReading().
+     *
+     * Driver authors: if your driver previously emitted [RESPIRATORY_RATE] (removed),
+     * update your supportedMetrics and metric type output to use RESPIRATION instead.
+     */
+    RESPIRATION,
+    TOTAL_CALORIES,   // full-day calorie expenditure including resting metabolic rate (kcal)
+    BLOOD_PRESSURE,   // blood pressure; value = systolic (mmHg), diastolic encoded in metaJson["diastolic"]
+    GLUCOSE,          // blood glucose; value in units described by the unit field (mmol or mg_dl)
     ;
 
     companion object {

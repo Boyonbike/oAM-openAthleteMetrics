@@ -3,6 +3,7 @@ package com.athletedata.openAthleteMetrics.data.db
 import androidx.room.TypeConverter
 import com.athletedata.openAthleteMetrics.data.model.DataSource
 import com.athletedata.openAthleteMetrics.data.model.MetricType
+import com.athletedata.openAthleteMetrics.data.model.SleepStage
 import com.athletedata.openAthleteMetrics.data.model.SyncStatus
 import com.athletedata.openAthleteMetrics.data.model.UserCategory
 import java.time.Instant
@@ -63,4 +64,12 @@ class Converters {
 
     @TypeConverter
     fun toSyncStatus(value: String): SyncStatus = SyncStatus.valueOf(value)
+
+    // ── SleepStage ↔ String ───────────────────────────────────────────────────
+
+    @TypeConverter
+    fun fromSleepStage(stage: SleepStage): String = stage.name
+
+    @TypeConverter
+    fun toSleepStage(value: String): SleepStage = SleepStage.valueOf(value)
 }

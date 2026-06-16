@@ -25,9 +25,35 @@ class SeederViewModel @Inject constructor(
     private val _state = MutableStateFlow<SeederState>(SeederState.Idle)
     val state: StateFlow<SeederState> = _state.asStateFlow()
 
-    fun seedNinetyDays() = seed(90)
+    fun seedThirtyDays() {
+        if (_state.value is SeederState.Running) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _state.value = SeederState.Running(0f)
+            try {
+                seederService.seedThirtyDays { progress ->
+                    _state.value = SeederState.Running(progress)
+                }
+                _state.value = SeederState.Done
+            } catch (e: Exception) {
+                _state.value = SeederState.Error(e.message ?: "Unknown error")
+            }
+        }
+    }
 
-    fun seedToday() = seed(1)
+    fun seedToday() {
+        if (_state.value is SeederState.Running) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _state.value = SeederState.Running(0f)
+            try {
+                seederService.seedToday { progress ->
+                    _state.value = SeederState.Running(progress)
+                }
+                _state.value = SeederState.Done
+            } catch (e: Exception) {
+                _state.value = SeederState.Error(e.message ?: "Unknown error")
+            }
+        }
+    }
 
     fun clearSeederData() {
         if (_state.value is SeederState.Running) return
@@ -46,20 +72,5 @@ class SeederViewModel @Inject constructor(
 
     fun resetState() {
         if (_state.value !is SeederState.Running) _state.value = SeederState.Idle
-    }
-
-    private fun seed(days: Int) {
-        if (_state.value is SeederState.Running) return
-        viewModelScope.launch(Dispatchers.IO) {
-            _state.value = SeederState.Running(0f)
-            try {
-                seederService.seedDays(days) { progress ->
-                    _state.value = SeederState.Running(progress)
-                }
-                _state.value = SeederState.Done
-            } catch (e: Exception) {
-                _state.value = SeederState.Error(e.message ?: "Unknown error")
-            }
-        }
     }
 }

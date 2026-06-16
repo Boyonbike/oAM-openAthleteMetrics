@@ -143,7 +143,6 @@ class WasmDriverEngine @Inject constructor() {
                 sleepStartMs = startInstant,
                 sleepEndMs = endInstant,
                 durationMinutes = ChronoUnit.MINUTES.between(startInstant, endInstant).toInt(),
-                stagesJson = dto.stagesJson,
                 source = DataSource.DEVICE,
                 driverId = driverId,
             )

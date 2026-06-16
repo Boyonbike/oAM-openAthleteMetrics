@@ -12,9 +12,8 @@ import java.time.LocalDate
 /**
  * Room entity for the `sleep_sessions` table.
  *
- * One row per sleep session (typically one per night). The [stagesJson]
- * column holds a JSON array of stage blocks rather than individual rows,
- * keeping dashboard queries simple.
+ * One row per sleep session (typically one per night). Stage data is now
+ * stored in the dedicated `sleep_stages` table rather than as a JSON blob.
  */
 @Entity(
     tableName = "sleep_sessions",
@@ -30,8 +29,6 @@ data class SleepSessionEntity(
     val sleepEndMs: Instant,
     @ColumnInfo(name = "duration_minutes")
     val durationMinutes: Int,
-    @ColumnInfo(name = "stages_json")
-    val stagesJson: String? = null,
     val source: DataSource,
     @ColumnInfo(name = "driver_id")
     val driverId: String? = null,
@@ -45,7 +42,6 @@ fun SleepSessionEntity.toModel() = SleepSession(
     sleepStartMs = sleepStartMs,
     sleepEndMs = sleepEndMs,
     durationMinutes = durationMinutes,
-    stagesJson = stagesJson,
     source = source,
     driverId = driverId,
 )
@@ -56,7 +52,6 @@ fun SleepSession.toEntity() = SleepSessionEntity(
     sleepStartMs = sleepStartMs,
     sleepEndMs = sleepEndMs,
     durationMinutes = durationMinutes,
-    stagesJson = stagesJson,
     source = source,
     driverId = driverId,
 )

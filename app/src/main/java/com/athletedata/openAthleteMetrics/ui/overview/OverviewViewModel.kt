@@ -12,7 +12,7 @@ import com.athletedata.openAthleteMetrics.data.model.QuestionType
 import com.athletedata.openAthleteMetrics.data.repository.ActivityRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailyContextRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailySummaryRepository
-import com.athletedata.openAthleteMetrics.data.repository.MetricRepository
+import com.athletedata.openAthleteMetrics.data.repository.HrReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.QuestionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -79,7 +79,7 @@ class OverviewViewModel @Inject constructor(
     private val globalAppState: GlobalAppState,
     private val summaryRepo: DailySummaryRepository,
     private val contextRepo: DailyContextRepository,
-    private val metricRepo: MetricRepository,
+    private val hrReadingRepo: HrReadingRepository,
     private val questionRepo: QuestionRepository,
     private val activityRepo: ActivityRepository,
 ) : ViewModel() {
@@ -96,7 +96,7 @@ class OverviewViewModel @Inject constructor(
                 summaryRepo.getSummaryForDate(date.minusDays(1)),
                 summaryRepo.getSummariesForRange(sparklineFrom, date),
                 contextRepo.getForDate(date),
-                metricRepo.hasSeederDataForDate(date),
+                hrReadingRepo.hasSeederDataForDate(date),
             ) { today, yesterday, sparklineList, context, hasSeeder ->
                 CoreBundle(today, yesterday, sparklineList, context, hasSeeder)
             }

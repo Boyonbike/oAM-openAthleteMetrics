@@ -12,8 +12,8 @@ import java.time.LocalDate
  * Room entity for the `daily_summary` table.
  *
  * Pre-computed roll-up written by DailySummaryWorker after any write to
- * metric_readings or sleep_sessions. Primary key is the ISO date string
- * so the worker can upsert with [OnConflictStrategy.REPLACE] safely.
+ * the dedicated time-series tables or sleep_sessions. Primary key is the
+ * ISO date string so the worker can upsert with [OnConflictStrategy.REPLACE] safely.
  */
 @Entity(tableName = "daily_summary")
 data class DailySummaryEntity(
@@ -32,6 +32,38 @@ data class DailySummaryEntity(
     val steps: Int? = null,
     @ColumnInfo(name = "sleep_minutes")
     val sleepMinutes: Int? = null,
+    @ColumnInfo(name = "sleep_deep_minutes")
+    val sleepDeepMinutes: Int? = null,
+    @ColumnInfo(name = "sleep_light_minutes")
+    val sleepLightMinutes: Int? = null,
+    @ColumnInfo(name = "sleep_rem_minutes")
+    val sleepRemMinutes: Int? = null,
+    @ColumnInfo(name = "sleep_awake_minutes")
+    val sleepAwakeMinutes: Int? = null,
+    @ColumnInfo(name = "skin_temp_avg_c")
+    val skinTempAvgC: Double? = null,
+    @ColumnInfo(name = "skin_temp_min_c")
+    val skinTempMinC: Double? = null,
+    @ColumnInfo(name = "skin_temp_max_c")
+    val skinTempMaxC: Double? = null,
+    @ColumnInfo(name = "respiration_avg")
+    val respirationAvg: Double? = null,
+    @ColumnInfo(name = "hrv_min_ms")
+    val hrvMinMs: Double? = null,
+    @ColumnInfo(name = "hrv_max_ms")
+    val hrvMaxMs: Double? = null,
+    @ColumnInfo(name = "spo2_min_pct")
+    val spo2MinPct: Double? = null,
+    @ColumnInfo(name = "spo2_max_pct")
+    val spo2MaxPct: Double? = null,
+    @ColumnInfo(name = "steps_active_minutes")
+    val stepsActiveMinutes: Int? = null,
+    @ColumnInfo(name = "total_calories")
+    val totalCalories: Double? = null,
+    @ColumnInfo(name = "active_calories")
+    val activeCalories: Double? = null,
+    @ColumnInfo(name = "computed_by_version", defaultValue = "0")
+    val computedByVersion: Int = 0,
     val source: DataSource,
     @ColumnInfo(name = "computed_at")
     val computedAt: Instant,
@@ -48,6 +80,22 @@ fun DailySummaryEntity.toModel() = DailySummary(
     avgSpo2Pct = avgSpo2Pct,
     steps = steps,
     sleepMinutes = sleepMinutes,
+    sleepDeepMinutes = sleepDeepMinutes,
+    sleepLightMinutes = sleepLightMinutes,
+    sleepRemMinutes = sleepRemMinutes,
+    sleepAwakeMinutes = sleepAwakeMinutes,
+    skinTempAvgC = skinTempAvgC,
+    skinTempMinC = skinTempMinC,
+    skinTempMaxC = skinTempMaxC,
+    respirationAvg = respirationAvg,
+    hrvMinMs = hrvMinMs,
+    hrvMaxMs = hrvMaxMs,
+    spo2MinPct = spo2MinPct,
+    spo2MaxPct = spo2MaxPct,
+    stepsActiveMinutes = stepsActiveMinutes,
+    totalCalories = totalCalories,
+    activeCalories = activeCalories,
+    computedByVersion = computedByVersion,
     source = source,
     computedAt = computedAt,
 )
@@ -61,6 +109,22 @@ fun DailySummary.toEntity() = DailySummaryEntity(
     avgSpo2Pct = avgSpo2Pct,
     steps = steps,
     sleepMinutes = sleepMinutes,
+    sleepDeepMinutes = sleepDeepMinutes,
+    sleepLightMinutes = sleepLightMinutes,
+    sleepRemMinutes = sleepRemMinutes,
+    sleepAwakeMinutes = sleepAwakeMinutes,
+    skinTempAvgC = skinTempAvgC,
+    skinTempMinC = skinTempMinC,
+    skinTempMaxC = skinTempMaxC,
+    respirationAvg = respirationAvg,
+    hrvMinMs = hrvMinMs,
+    hrvMaxMs = hrvMaxMs,
+    spo2MinPct = spo2MinPct,
+    spo2MaxPct = spo2MaxPct,
+    stepsActiveMinutes = stepsActiveMinutes,
+    totalCalories = totalCalories,
+    activeCalories = activeCalories,
+    computedByVersion = computedByVersion,
     source = source,
     computedAt = computedAt,
 )

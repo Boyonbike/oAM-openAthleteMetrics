@@ -9,7 +9,7 @@ import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.data.model.ReprocessSummary
 import com.athletedata.openAthleteMetrics.data.model.SleepSession
 import com.athletedata.openAthleteMetrics.data.repository.ActivityRepository
-import com.athletedata.openAthleteMetrics.data.repository.MetricRepository
+import com.athletedata.openAthleteMetrics.data.repository.MetricReadingStagingRepository
 import com.athletedata.openAthleteMetrics.data.repository.RawDeviceDataRepository
 import com.athletedata.openAthleteMetrics.data.repository.SleepRepository
 import com.athletedata.openAthleteMetrics.worker.enqueueSummaryWorker
@@ -23,7 +23,7 @@ import javax.inject.Singleton
 class DeviceReprocessor @Inject constructor(
     private val driverRegistry: DriverRegistry,
     private val rawDeviceDataRepository: RawDeviceDataRepository,
-    private val metricRepository: MetricRepository,
+    private val metricRepository: MetricReadingStagingRepository,
     private val sleepRepository: SleepRepository,
     private val activityRepository: ActivityRepository,
     private val validator: SyncValidator,

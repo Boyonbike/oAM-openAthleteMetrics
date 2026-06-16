@@ -175,8 +175,11 @@ private fun WearableSection(summary: DailySummary?, sleep: SleepUiItem?) {
         SectionHeader("Device data")
         Spacer(Modifier.height(0.dp))
         if (hasData) {
+            // TODO: intraday HR graph — read HrReadingRepository.getReadingsInRange() for this day
+            //       and render a line chart showing HR over time (5-min buckets seeded; finer for device).
             summary?.avgHrBpm?.let { MetricCard("Heart Rate", "%.0f".format(it), "bpm") }
             summary?.restingHrBpm?.let { MetricCard("Resting HR", "%.0f".format(it), "bpm") }
+            // TODO: HRV curve — read HrvReadingRepository.getReadingsInRange() and plot rMSSD over the day.
             summary?.morningHrvMs?.let { MetricCard("HRV", "%.0f".format(it), "ms") }
             summary?.avgSpo2Pct?.let { MetricCard("SpO2", "%.1f".format(it), "%") }
             summary?.steps?.let { MetricCard("Steps", it.toString(), "steps") }
@@ -250,6 +253,8 @@ private fun SleepCard(sleep: SleepUiItem) {
                     style = TypographyMeta,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                // TODO: sleep stage timeline — read SleepStageRepository.getStagesForSession()
+                //       and render a horizontal bar chart partitioned into DEEP/LIGHT/REM/AWAKE blocks.
             }
         }
     }

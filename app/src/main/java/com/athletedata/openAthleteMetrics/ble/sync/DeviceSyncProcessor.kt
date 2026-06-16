@@ -13,7 +13,7 @@ import com.athletedata.openAthleteMetrics.data.model.SyncSession
 import com.athletedata.openAthleteMetrics.data.model.SyncStatus
 import com.athletedata.openAthleteMetrics.data.repository.ActivityRepository
 import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
-import com.athletedata.openAthleteMetrics.data.repository.MetricRepository
+import com.athletedata.openAthleteMetrics.data.repository.MetricReadingStagingRepository
 import com.athletedata.openAthleteMetrics.data.repository.RawDeviceDataRepository
 import com.athletedata.openAthleteMetrics.data.repository.SleepRepository
 import com.athletedata.openAthleteMetrics.data.repository.SyncSessionRepository
@@ -29,7 +29,7 @@ import timber.log.Timber
 @Singleton
 class DeviceSyncProcessor @Inject constructor(
     private val appDatabase: AppDatabase,
-    private val metricRepository: MetricRepository,
+    private val metricRepository: MetricReadingStagingRepository,
     private val sleepRepository: SleepRepository,
     private val activityRepository: ActivityRepository,
     private val syncSessionRepository: SyncSessionRepository,

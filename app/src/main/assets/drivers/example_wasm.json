@@ -3,7 +3,7 @@
   "displayName": "Polar H10",
   "version": "1.0.0",
   "author": "Open Athlete Metrics",
-  "supportedMetrics": ["HR", "HRV", "RESPIRATORY_RATE"],
+  "supportedMetrics": ["HR", "HRV", "RESPIRATION"],
 
   "ble": {
     "matchByName": "Polar H10",

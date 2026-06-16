@@ -1,24 +1,42 @@
 package com.athletedata.openAthleteMetrics.seeder
 
 import androidx.work.WorkManager
+import com.athletedata.openAthleteMetrics.data.db.ActiveCalorieReadingEntity
+import com.athletedata.openAthleteMetrics.data.db.BloodPressureReadingEntity
+import com.athletedata.openAthleteMetrics.data.db.GlucoseReadingEntity
+import com.athletedata.openAthleteMetrics.data.db.HrReadingEntity
+import com.athletedata.openAthleteMetrics.data.db.HrvReadingEntity
 import com.athletedata.openAthleteMetrics.data.db.QuestionDefinitionDao
 import com.athletedata.openAthleteMetrics.data.db.QuestionDefinitionEntity
 import com.athletedata.openAthleteMetrics.data.db.QuestionResponseDao
 import com.athletedata.openAthleteMetrics.data.db.QuestionResponseEntity
+import com.athletedata.openAthleteMetrics.data.db.RespirationReadingEntity
+import com.athletedata.openAthleteMetrics.data.db.SkinTempReadingEntity
+import com.athletedata.openAthleteMetrics.data.db.SleepStageEntity
+import com.athletedata.openAthleteMetrics.data.db.SpO2ReadingEntity
+import com.athletedata.openAthleteMetrics.data.db.StepsReadingEntity
+import com.athletedata.openAthleteMetrics.data.db.TotalCalorieReadingEntity
 import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.DailyContext
 import com.athletedata.openAthleteMetrics.data.model.DataSource
-import com.athletedata.openAthleteMetrics.data.model.MetricReading
-import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.data.model.SleepSession
 import com.athletedata.openAthleteMetrics.data.model.SleepStage
+import com.athletedata.openAthleteMetrics.data.repository.ActiveCalorieReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.ActivityRepository
+import com.athletedata.openAthleteMetrics.data.repository.BloodPressureReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailyContextRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailySummaryRepository
-import com.athletedata.openAthleteMetrics.data.repository.MetricRepository
+import com.athletedata.openAthleteMetrics.data.repository.GlucoseReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.HrReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.HrvReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.RespirationReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.SkinTempReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.SleepRepository
+import com.athletedata.openAthleteMetrics.data.repository.SleepStageRepository
+import com.athletedata.openAthleteMetrics.data.repository.SpO2ReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.StepsReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.TotalCalorieReadingRepository
 import com.athletedata.openAthleteMetrics.worker.enqueueSummaryWorker
-import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
 import java.time.LocalDate
@@ -30,8 +48,18 @@ import kotlin.math.roundToInt
 
 @Singleton
 class SeederService @Inject constructor(
-    private val metricRepository: MetricRepository,
+    private val hrReadingRepository: HrReadingRepository,
+    private val hrvReadingRepository: HrvReadingRepository,
+    private val spo2ReadingRepository: SpO2ReadingRepository,
+    private val skinTempReadingRepository: SkinTempReadingRepository,
+    private val respirationReadingRepository: RespirationReadingRepository,
+    private val stepsReadingRepository: StepsReadingRepository,
+    private val activeCalorieReadingRepository: ActiveCalorieReadingRepository,
+    private val totalCalorieReadingRepository: TotalCalorieReadingRepository,
+    private val bloodPressureReadingRepository: BloodPressureReadingRepository,
+    private val glucoseReadingRepository: GlucoseReadingRepository,
     private val sleepRepository: SleepRepository,
+    private val sleepStageRepository: SleepStageRepository,
     private val dailyContextRepository: DailyContextRepository,
     private val dailySummaryRepository: DailySummaryRepository,
     private val activityRepository: ActivityRepository,
@@ -39,11 +67,45 @@ class SeederService @Inject constructor(
     private val questionResponseDao: QuestionResponseDao,
     private val workManager: WorkManager,
 ) {
-    // A new Random(42) is created at the start of each seed call to guarantee
-    // that every call to seedDays(N) produces identical output.
+    suspend fun seedThirtyDays(onProgress: (Float) -> Unit) = seedDays(30, onProgress)
 
-    suspend fun seedDays(days: Int, onProgress: (Float) -> Unit) {
-        val rng = Random(42L)
+    suspend fun seedToday(onProgress: (Float) -> Unit) = seedDays(1, onProgress)
+
+    suspend fun clearSeederData(onProgress: (Float) -> Unit) {
+        hrReadingRepository.deleteBySource(DataSource.SEEDER)
+        onProgress(0.10f)
+        hrvReadingRepository.deleteBySource(DataSource.SEEDER)
+        onProgress(0.20f)
+        spo2ReadingRepository.deleteBySource(DataSource.SEEDER)
+        onProgress(0.30f)
+        skinTempReadingRepository.deleteBySource(DataSource.SEEDER)
+        onProgress(0.40f)
+        respirationReadingRepository.deleteBySource(DataSource.SEEDER)
+        onProgress(0.50f)
+        stepsReadingRepository.deleteBySource(DataSource.SEEDER)
+        onProgress(0.55f)
+        activeCalorieReadingRepository.deleteBySource(DataSource.SEEDER)
+        onProgress(0.60f)
+        totalCalorieReadingRepository.deleteBySource(DataSource.SEEDER)
+        onProgress(0.63f)
+        bloodPressureReadingRepository.deleteBySource(DataSource.SEEDER)
+        onProgress(0.66f)
+        glucoseReadingRepository.deleteBySource(DataSource.SEEDER)
+        onProgress(0.70f)
+        sleepStageRepository.deleteBySource(DataSource.SEEDER)
+        onProgress(0.75f)
+        sleepRepository.deleteBySource(DataSource.SEEDER)
+        onProgress(0.80f)
+        activityRepository.deleteBySource(DataSource.SEEDER)
+        onProgress(0.90f)
+        dailySummaryRepository.deleteAll()
+        onProgress(1.00f)
+    }
+
+    // ── Core orchestration ────────────────────────────────────────────────────
+
+    private suspend fun seedDays(days: Int, onProgress: (Float) -> Unit) {
+        val rng   = Random(42L)
         val today = LocalDate.now()
         val dates = (days - 1 downTo 0).map { today.minusDays(it.toLong()) }
 
@@ -55,71 +117,105 @@ class SeederService @Inject constructor(
 
         val lifestyleDefinitions = questionDefinitionDao.getLifestyleOnce()
 
-        val readings   = mutableListOf<MetricReading>()
-        val sessions   = mutableListOf<SleepSession>()
-        val contexts   = mutableListOf<DailyContext>()
-        val responses  = mutableListOf<QuestionResponseEntity>()
-        val activities = mutableListOf<Activity>()
+        val hrEntities          = mutableListOf<HrReadingEntity>()
+        val hrvEntities         = mutableListOf<HrvReadingEntity>()
+        val spo2Entities        = mutableListOf<SpO2ReadingEntity>()
+        val skinTempEntities    = mutableListOf<SkinTempReadingEntity>()
+        val respirationEntities = mutableListOf<RespirationReadingEntity>()
+        val stepsEntities       = mutableListOf<StepsReadingEntity>()
+        val activeCalEntities   = mutableListOf<ActiveCalorieReadingEntity>()
+        val totalCalEntities    = mutableListOf<TotalCalorieReadingEntity>()
+        val bpEntities          = mutableListOf<BloodPressureReadingEntity>()
+        val glucoseEntities     = mutableListOf<GlucoseReadingEntity>()
+        val contexts            = mutableListOf<DailyContext>()
+        val responses           = mutableListOf<QuestionResponseEntity>()
+        val activities          = mutableListOf<Activity>()
+        val seededDates         = mutableListOf<LocalDate>()
 
         for ((idx, date) in dates.withIndex()) {
-            val alreadySeeded = metricRepository.hasSeederReadingsForDateOnce(date)
+            val dayStartMs = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+            val dayEndMs   = date.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+
+            val alreadySeeded = hrReadingRepository.getReadingsInRangeOnce(dayStartMs, dayEndMs).isNotEmpty()
                 || sleepRepository.getSessionForDateOnce(date) != null
                 || dailyContextRepository.getForDateOnce(date) != null
 
             if (!alreadySeeded) {
-                readings += generateHr(date, date in workoutDays, rng)
-                readings += generateHrv(date, rng)
-                readings += generateSpo2(date, date in dipNights, rng)
-                readings += generateSteps(date, date in workoutDays, rng)
-                sessions += generateSleepSession(date, sleepMins.getValue(date), rng)
+                val hasWorkout      = date in workoutDays
+                val workoutStartMin = if (hasWorkout) rng.nextInt(12 * 60) + 7 * 60 else -1
+                val workoutEndMin   = if (hasWorkout) workoutStartMin + rng.nextInt(31) + 30 else -1
 
-                // morningHrv is extracted here so it can be shared with question response generation.
-                val weeklyAdj = weeklyHrvAdjustment(date)
+                hrEntities          += generateHr(date, workoutStartMin, workoutEndMin, rng)
+                hrvEntities         += generateHrv(date, rng)
+                spo2Entities        += generateSpo2(date, date in dipNights, rng)
+                skinTempEntities    += generateSkinTemp(date, rng)
+                respirationEntities += generateRespiration(date, workoutStartMin, workoutEndMin, rng)
+                stepsEntities       += generateSteps(date, hasWorkout, rng)
+                generateActiveCalories(date, hasWorkout, workoutStartMin, workoutEndMin, rng)
+                    ?.let { activeCalEntities += it }
+                totalCalEntities    += generateTotalCalories(date, hasWorkout, rng)
+                bpEntities          += generateBloodPressure(date, rng)
+                glucoseEntities     += generateGlucose(date, rng)
+
+                val weeklyAdj  = weeklyHrvAdjustment(date)
                 val morningHrv = (60.0 + weeklyAdj + rng.nextGaussian() * 5.0).coerceIn(20.0, 100.0)
 
                 contexts += generateDailyContext(
-                    date, date in illnessDays, weights.getValue(date), sleepMins.getValue(date), morningHrv, rng
+                    date, date in illnessDays, weights.getValue(date),
+                    sleepMins.getValue(date), morningHrv, rng,
                 )
                 if (lifestyleDefinitions.isNotEmpty()) {
                     responses += generateQuestionResponses(
-                        date, morningHrv, sleepMins.getValue(date), rng, lifestyleDefinitions
+                        date, morningHrv, sleepMins.getValue(date), rng, lifestyleDefinitions,
                     )
                 }
-                activities += generateActivity(date, date in workoutDays, rng)
+                activities += generateActivity(date, hasWorkout, rng)
+                seededDates += date
             }
-            onProgress(idx.toFloat() / dates.size * 0.70f)
+            onProgress(idx.toFloat() / dates.size * 0.60f)
         }
 
-        if (readings.isNotEmpty()) metricRepository.insertAll(readings)
-        onProgress(0.78f)
+        if (hrEntities.isNotEmpty())          hrReadingRepository.insertAll(hrEntities)
+        onProgress(0.65f)
+        if (hrvEntities.isNotEmpty())         hrvReadingRepository.insertAll(hrvEntities)
+        if (spo2Entities.isNotEmpty())        spo2ReadingRepository.insertAll(spo2Entities)
+        if (skinTempEntities.isNotEmpty())    skinTempReadingRepository.insertAll(skinTempEntities)
+        if (respirationEntities.isNotEmpty()) respirationReadingRepository.insertAll(respirationEntities)
+        if (stepsEntities.isNotEmpty())       stepsReadingRepository.insertAll(stepsEntities)
+        if (activeCalEntities.isNotEmpty())   activeCalorieReadingRepository.insertAll(activeCalEntities)
+        if (totalCalEntities.isNotEmpty())    totalCalorieReadingRepository.insertAll(totalCalEntities)
+        if (bpEntities.isNotEmpty())          bloodPressureReadingRepository.insertAll(bpEntities)
+        if (glucoseEntities.isNotEmpty())     glucoseReadingRepository.insertAll(glucoseEntities)
+        onProgress(0.75f)
 
-        for (session in sessions) sleepRepository.insert(session)
+        for (date in seededDates) {
+            val durationMins = sleepMins.getValue(date)
+            val wakeHour  = rng.nextInt(3) + 6
+            val endMs     = date.atTime(wakeHour, 0).toInstant(ZoneOffset.UTC).toEpochMilli()
+            val startMs   = endMs - durationMins * 60_000L
+            val session   = SleepSession(
+                date            = date,
+                sleepStartMs    = Instant.ofEpochMilli(startMs),
+                sleepEndMs      = Instant.ofEpochMilli(endMs),
+                durationMinutes = durationMins,
+                source          = DataSource.SEEDER,
+            )
+            sleepRepository.insert(session)
+            val inserted = sleepRepository.getSessionForDateOnce(date)
+            if (inserted != null) {
+                sleepStageRepository.insertAll(buildSleepStages(inserted.id, startMs, endMs, rng))
+            }
+        }
         onProgress(0.85f)
 
         for (ctx in contexts) dailyContextRepository.upsert(ctx)
         onProgress(0.90f)
-
         if (responses.isNotEmpty()) questionResponseDao.upsertAll(responses)
         onProgress(0.93f)
-
         if (activities.isNotEmpty()) activityRepository.insertAll(activities)
         onProgress(0.95f)
 
-        val seededDates = (readings.map {
-            it.recordedAt.atZone(ZoneOffset.UTC).toLocalDate()
-        } + sessions.map { it.date }).distinct()
         seededDates.forEach { enqueueSummaryWorker(it, workManager) }
-        onProgress(1.00f)
-    }
-
-    suspend fun clearSeederData(onProgress: (Float) -> Unit) {
-        metricRepository.deleteBySource(DataSource.SEEDER)
-        onProgress(0.25f)
-        sleepRepository.deleteBySource(DataSource.SEEDER)
-        onProgress(0.50f)
-        activityRepository.deleteBySource(DataSource.SEEDER)
-        onProgress(0.75f)
-        dailySummaryRepository.deleteAll()
         onProgress(1.00f)
     }
 
@@ -130,7 +226,7 @@ class SeederService @Inject constructor(
         var i = 0
         while (i < dates.size) {
             val weekEnd = minOf(i + 7, dates.size)
-            val count = rng.nextInt(2) + 1
+            val count   = rng.nextInt(2) + 1
             val indices = (i until weekEnd).toMutableList()
             repeat(minOf(count, indices.size)) {
                 val pick = rng.nextInt(indices.size)
@@ -175,34 +271,37 @@ class SeederService @Inject constructor(
 
     // ── HR ────────────────────────────────────────────────────────────────────
 
-    private fun generateHr(date: LocalDate, hasWorkout: Boolean, rng: Random): List<MetricReading> {
+    private fun generateHr(
+        date: LocalDate,
+        workoutStartMin: Int,
+        workoutEndMin: Int,
+        rng: Random,
+    ): List<HrReadingEntity> {
         val dayStartMs = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
-        val workoutStartMin = if (hasWorkout) rng.nextInt(12 * 60) + 7 * 60 else -1
-        val workoutEndMin   = if (hasWorkout) workoutStartMin + rng.nextInt(31) + 30 else -1
-        val now = Instant.now()
+        val now        = Instant.now()
+        val hasWorkout = workoutStartMin >= 0
 
         return (0 until 24 * 60 step 5).map { min ->
-            val hour = min / 60
+            val hour      = min / 60
             val inWorkout = hasWorkout && min in workoutStartMin until workoutEndMin
             val base = when {
-                inWorkout -> rng.nextDouble() * 35.0 + 130.0
-                hour in 0..5 || hour >= 22 -> rng.nextDouble() * 14.0 + 48.0
-                else -> rng.nextDouble() * 20.0 + 60.0
+                inWorkout                        -> rng.nextDouble() * 35.0 + 130.0
+                hour in 0..5 || hour >= 22       -> rng.nextDouble() * 14.0 + 48.0
+                else                             -> rng.nextDouble() * 20.0 + 60.0
             }
-            MetricReading(
-                metricType = MetricType.HR,
-                value      = (base + rng.nextGaussian() * 3.0).coerceIn(30.0, 220.0),
-                unit       = "bpm",
+            val bpm = (base + rng.nextGaussian() * 3.0).coerceIn(30.0, 220.0).roundToInt()
+            HrReadingEntity(
                 recordedAt = Instant.ofEpochMilli(dayStartMs + min * 60_000L),
                 createdAt  = now,
                 source     = DataSource.SEEDER,
+                bpm        = bpm,
             )
         }
     }
 
     // ── HRV ───────────────────────────────────────────────────────────────────
 
-    private fun generateHrv(date: LocalDate, rng: Random): List<MetricReading> {
+    private fun generateHrv(date: LocalDate, rng: Random): List<HrvReadingEntity> {
         val dayStartMs = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
         val weeklyAdj  = weeklyHrvAdjustment(date)
         val now        = Instant.now()
@@ -215,24 +314,28 @@ class SeederService @Inject constructor(
                 in 16..20 ->  0.0
                 else      ->  5.0
             }
-            val hrv = (60.0 + weeklyAdj + circadianAdj + rng.nextGaussian() * 5.0)
-                .coerceIn(20.0, 100.0)
-            MetricReading(
-                metricType = MetricType.HRV,
-                value      = hrv,
-                unit       = "ms",
-                recordedAt = Instant.ofEpochMilli(dayStartMs + hour * 3_600_000L),
-                createdAt  = now,
-                source     = DataSource.SEEDER,
+            val rmssd = (60.0 + weeklyAdj + circadianAdj + rng.nextGaussian() * 5.0)
+                .coerceIn(45.0, 75.0)
+            HrvReadingEntity(
+                recordedAt        = Instant.ofEpochMilli(dayStartMs + hour * 3_600_000L),
+                createdAt         = now,
+                source            = DataSource.SEEDER,
+                confidence        = 0.8f,
+                rmssdMs           = rmssd,
+                computedByVersion = 1,
             )
         }
     }
 
     // ── SpO2 ──────────────────────────────────────────────────────────────────
 
-    private fun generateSpo2(date: LocalDate, isDipNight: Boolean, rng: Random): List<MetricReading> {
+    private fun generateSpo2(
+        date: LocalDate,
+        isDipNight: Boolean,
+        rng: Random,
+    ): List<SpO2ReadingEntity> {
         val dayStartMs = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
-        val now = Instant.now()
+        val now        = Instant.now()
 
         return listOf(0, 1, 2, 3, 4, 5, 6, 7, 22, 23).map { hour ->
             val base = if (isDipNight && hour in 2..4) {
@@ -240,79 +343,261 @@ class SeederService @Inject constructor(
             } else {
                 rng.nextDouble() * 4.0 + 95.0
             }
-            MetricReading(
-                metricType = MetricType.SPO2,
-                value      = (base + rng.nextGaussian() * 0.5).coerceIn(88.0, 100.0),
-                unit       = "%",
+            SpO2ReadingEntity(
                 recordedAt = Instant.ofEpochMilli(dayStartMs + hour * 3_600_000L),
                 createdAt  = now,
                 source     = DataSource.SEEDER,
+                percentage = (base + rng.nextGaussian() * 0.5).coerceIn(88.0, 100.0),
+            )
+        }
+    }
+
+    // ── Skin temperature ──────────────────────────────────────────────────────
+
+    private fun generateSkinTemp(date: LocalDate, rng: Random): List<SkinTempReadingEntity> {
+        val dayStartMs = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val now        = Instant.now()
+        val count      = rng.nextInt(5) + 4  // 4–8 readings
+
+        // Pick distinct hours, then sort to get natural order
+        val hours = (0 until 24).toMutableList()
+        val pickedHours = (0 until count).map {
+            val idx = rng.nextInt(hours.size)
+            hours.removeAt(idx)
+        }.sorted()
+
+        return pickedHours.map { hour ->
+            val overnightBias = if (hour in 0..6 || hour >= 22) -0.5 else 0.0
+            val celsius = (rng.nextDouble() * 2.5 + 34.0 + overnightBias + rng.nextGaussian() * 0.2)
+                .coerceIn(33.0, 37.5)
+            SkinTempReadingEntity(
+                recordedAt = Instant.ofEpochMilli(dayStartMs + hour * 3_600_000L),
+                createdAt  = now,
+                source     = DataSource.SEEDER,
+                celsius    = celsius,
+            )
+        }
+    }
+
+    // ── Respiration ───────────────────────────────────────────────────────────
+
+    private fun generateRespiration(
+        date: LocalDate,
+        workoutStartMin: Int,
+        workoutEndMin: Int,
+        rng: Random,
+    ): List<RespirationReadingEntity> {
+        val dayStartMs = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val now        = Instant.now()
+        val hasWorkout = workoutStartMin >= 0
+
+        return (0 until 24).map { hour ->
+            val minOfHour = hour * 60
+            val inWorkout = hasWorkout && minOfHour in workoutStartMin until workoutEndMin
+            val base = if (inWorkout) {
+                rng.nextDouble() * 4.0 + 16.0  // 16–20 during workout
+            } else {
+                rng.nextDouble() * 6.0 + 12.0  // 12–18 normally
+            }
+            RespirationReadingEntity(
+                recordedAt       = Instant.ofEpochMilli(dayStartMs + hour * 3_600_000L),
+                createdAt        = now,
+                source           = DataSource.SEEDER,
+                breathsPerMinute = (base + rng.nextGaussian() * 0.5).coerceIn(8.0, 30.0),
             )
         }
     }
 
     // ── Steps ─────────────────────────────────────────────────────────────────
 
-    private fun generateSteps(date: LocalDate, hasWorkout: Boolean, rng: Random): List<MetricReading> {
-        val base = when {
-            hasWorkout -> rng.nextDouble() * 6_000.0 + 8_000.0
-            date.dayOfWeek.value >= 6 -> rng.nextDouble() * 6_000.0 + 4_000.0
-            else -> rng.nextDouble() * 6_000.0 + 6_000.0
+    private fun generateSteps(
+        date: LocalDate,
+        hasWorkout: Boolean,
+        rng: Random,
+    ): List<StepsReadingEntity> {
+        val dayStartMs = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val now        = Instant.now()
+
+        val target = when {
+            hasWorkout                       -> (rng.nextDouble() * 6_000.0 + 8_000.0).toInt()
+            date.dayOfWeek.value >= 6        -> (rng.nextDouble() * 6_000.0 + 4_000.0).toInt()
+            else                             -> (rng.nextDouble() * 6_000.0 + 6_000.0).toInt()
         }
+
+        // Waking hours 06:00–22:00 → 16 hourly readings
+        val wakingHours = (6..21).toList()
+        // Distribute steps with noise, then normalise to target
+        val rawDeltas = wakingHours.map { (rng.nextDouble() * 2.0 + 0.5) }
+        val sum       = rawDeltas.sum()
+        val deltas    = rawDeltas.map { ((it / sum) * target).toInt() }
+
+        // Fix rounding drift on the last bucket
+        val remainder = target - deltas.dropLast(1).sum()
+        val adjusted  = deltas.dropLast(1) + remainder.coerceAtLeast(0)
+
+        var cumulative = 0
+        return wakingHours.zip(adjusted).map { (hour, delta) ->
+            cumulative += delta
+            StepsReadingEntity(
+                recordedAt      = Instant.ofEpochMilli(dayStartMs + hour * 3_600_000L),
+                createdAt       = now,
+                source          = DataSource.SEEDER,
+                cumulativeSteps = cumulative,
+            )
+        }
+    }
+
+    // ── Active calories ───────────────────────────────────────────────────────
+
+    private fun generateActiveCalories(
+        date: LocalDate,
+        hasWorkout: Boolean,
+        workoutStartMin: Int,
+        workoutEndMin: Int,
+        rng: Random,
+    ): ActiveCalorieReadingEntity? {
+        if (!hasWorkout) return null
+        val dayStartMs   = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val midpointMs   = dayStartMs + ((workoutStartMin + workoutEndMin) / 2) * 60_000L
+        return ActiveCalorieReadingEntity(
+            recordedAt = Instant.ofEpochMilli(midpointMs),
+            createdAt  = Instant.now(),
+            source     = DataSource.SEEDER,
+            calories   = rng.nextDouble() * 400.0 + 200.0,  // 200–600
+        )
+    }
+
+    // ── Total calories ────────────────────────────────────────────────────────
+
+    private fun generateTotalCalories(
+        date: LocalDate,
+        hasWorkout: Boolean,
+        rng: Random,
+    ): TotalCalorieReadingEntity {
+        val base = if (hasWorkout) {
+            rng.nextDouble() * 800.0 + 2_400.0   // 2400–3200 on workout days
+        } else {
+            rng.nextDouble() * 600.0 + 1_800.0   // 1800–2400 on rest days
+        }
+        return TotalCalorieReadingEntity(
+            recordedAt = date.atTime(23, 59).toInstant(ZoneOffset.UTC),
+            createdAt  = Instant.now(),
+            source     = DataSource.SEEDER,
+            calories   = base,
+        )
+    }
+
+    // ── Blood pressure & glucose ──────────────────────────────────────────────
+
+    private fun generateBloodPressure(date: LocalDate, rng: Random): List<BloodPressureReadingEntity> {
+        val recordedAt = date.atTime(6 + rng.nextInt(3), rng.nextInt(60)).toInstant(ZoneOffset.UTC)
+        val systolic   = rng.nextInt(21) + 110
+        val diastolic  = ((systolic - 110) * 0.5 + 65 + rng.nextGaussian() * 2).roundToInt().coerceIn(65, 85)
         return listOf(
-            MetricReading(
-                metricType = MetricType.STEPS,
-                value      = (base + rng.nextGaussian() * 500.0).coerceIn(1_000.0, 25_000.0),
-                unit       = "steps",
-                recordedAt = date.atTime(23, 59).toInstant(ZoneOffset.UTC),
+            BloodPressureReadingEntity(
+                recordedAt = recordedAt,
                 createdAt  = Instant.now(),
                 source     = DataSource.SEEDER,
+                driverId   = null,
+                confidence = null,
+                systolic   = systolic,
+                diastolic  = diastolic,
             )
         )
     }
 
-    // ── Sleep session ─────────────────────────────────────────────────────────
-
-    private fun generateSleepSession(date: LocalDate, durationMinutes: Int, rng: Random): SleepSession {
-        val wakeHour = rng.nextInt(3) + 6
-        val endMs    = date.atTime(wakeHour, 0).toInstant(ZoneOffset.UTC).toEpochMilli()
-        val startMs  = endMs - durationMinutes * 60_000L
-        return SleepSession(
-            date           = date,
-            sleepStartMs   = Instant.ofEpochMilli(startMs),
-            sleepEndMs     = Instant.ofEpochMilli(endMs),
-            durationMinutes = durationMinutes,
-            stagesJson     = buildStagesJson(startMs, endMs),
-            source         = DataSource.SEEDER,
-        )
+    private fun generateGlucose(date: LocalDate, rng: Random): List<GlucoseReadingEntity> {
+        val now = Instant.now()
+        val windows = listOf(6, 8, 12, 18)
+        return windows.mapIndexed { idx, startHour ->
+            val recordedAt = date.atTime(startHour, rng.nextInt(60)).toInstant(ZoneOffset.UTC)
+            val value = if (idx == 0) {
+                4.0 + rng.nextDouble() * 1.5   // fasting: 4.0–5.5 mmol
+            } else {
+                5.5 + rng.nextDouble() * 2.5   // post-meal: 5.5–8.0 mmol
+            }
+            GlucoseReadingEntity(
+                recordedAt = recordedAt,
+                createdAt  = now,
+                source     = DataSource.SEEDER,
+                driverId   = null,
+                confidence = null,
+                value      = value,
+                unit       = "mmol",
+            )
+        }
     }
 
-    private fun buildStagesJson(startMs: Long, endMs: Long): String {
+    // ── Sleep stages ──────────────────────────────────────────────────────────
+
+    private fun buildSleepStages(
+        sessionId: Long,
+        startMs: Long,
+        endMs: Long,
+        @Suppress("UNUSED_PARAMETER") rng: Random,
+    ): List<SleepStageEntity> {
         // Each 90-min cycle: LIGHT(15%) → DEEP(20%) → LIGHT(15%) → REM(25%) → LIGHT(20%) → AWAKE(5%)
-        val cycleMs = 90 * 60_000L
+        val cycleMs      = 90 * 60_000L
         val cyclePattern = listOf(
-            SleepStage.LIGHT to 0.15,
-            SleepStage.DEEP  to 0.20,
-            SleepStage.LIGHT to 0.15,
-            SleepStage.REM   to 0.25,
-            SleepStage.LIGHT to 0.20,
-            SleepStage.AWAKE to 0.05,
+            SleepStage.LIGHT  to 0.15,
+            SleepStage.DEEP   to 0.20,
+            SleepStage.LIGHT  to 0.15,
+            SleepStage.REM    to 0.25,
+            SleepStage.LIGHT  to 0.20,
+            SleepStage.AWAKE  to 0.05,
         )
-        val arr = JSONArray()
-        var cur = startMs
+        val sessionMinutes = ((endMs - startMs) / 60_000L).toInt()
+        val stages = mutableListOf<SleepStageEntity>()
+        var cur    = startMs
+
         while (cur < endMs) {
-            for ((stage, proportion) in cyclePattern) {
+            val cycleEnd    = minOf(cur + cycleMs, endMs)
+            val isFullCycle = cycleEnd - cur == cycleMs
+            var cycleUsed   = 0
+
+            for ((i, pair) in cyclePattern.withIndex()) {
+                val (stage, proportion) = pair
                 if (cur >= endMs) break
-                val blockEnd = minOf(cur + (cycleMs * proportion).toLong(), endMs)
-                arr.put(JSONObject().apply {
-                    put("stage",   stage.name)
-                    put("startMs", cur)
-                    put("endMs",   blockEnd)
-                })
+                val isLastInPattern = i == cyclePattern.lastIndex
+                val blockEnd = if (isLastInPattern && isFullCycle) {
+                    cycleEnd
+                } else {
+                    minOf(cur + (cycleMs * proportion).toLong(), endMs)
+                }
+                // For the last stage of a complete cycle, absorb sub-minute remainder so
+                // the cycle's duration_minutes sum equals exactly 90.
+                val durationMins = if (isLastInPattern && isFullCycle) {
+                    90 - cycleUsed
+                } else {
+                    ((blockEnd - cur) / 60_000L).toInt()
+                }
+                if (durationMins > 0) {
+                    stages += SleepStageEntity(
+                        sessionId         = sessionId,
+                        stage             = stage,
+                        startMs           = cur,
+                        endMs             = blockEnd,
+                        durationMinutes   = durationMins,
+                        source            = DataSource.SEEDER,
+                        computedByVersion = 1,
+                    )
+                    cycleUsed += durationMins
+                }
                 cur = blockEnd
             }
         }
-        return arr.toString()
+
+        // Safety net: the last partial cycle may still have truncation error; absorb it
+        // so the total duration_minutes always exactly matches the session.
+        if (stages.isNotEmpty()) {
+            val surplus = stages.sumOf { it.durationMinutes } - sessionMinutes
+            if (surplus != 0) {
+                val last = stages.removeLast()
+                stages += last.copy(durationMinutes = last.durationMinutes - surplus)
+            }
+        }
+
+        return stages
     }
 
     // ── Daily context ─────────────────────────────────────────────────────────
@@ -410,32 +695,30 @@ class SeederService @Inject constructor(
     private fun generateActivity(date: LocalDate, isWorkout: Boolean, rng: Random): Activity {
         val dayStartMs = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
         return if (isWorkout) {
-            val deviceNames = listOf("Outdoor Run", "Cycling", "Strength Training", "Swimming")
-            val deviceName = deviceNames[rng.nextInt(deviceNames.size)]
-            val durationMinutes = rng.nextInt(31) + 30   // 30–60 min
-            val startHour = rng.nextInt(12) + 7           // 7 am – 6 pm
-            val startMs = dayStartMs + startHour * 3_600_000L
+            val deviceNames     = listOf("Outdoor Run", "Cycling", "Strength Training", "Swimming")
+            val durationMinutes = rng.nextInt(31) + 30
+            val startHour       = rng.nextInt(12) + 7
+            val startMs         = dayStartMs + startHour * 3_600_000L
             Activity(
-                startTime = Instant.ofEpochMilli(startMs),
-                endTime = Instant.ofEpochMilli(startMs + durationMinutes * 60_000L),
+                startTime       = Instant.ofEpochMilli(startMs),
+                endTime         = Instant.ofEpochMilli(startMs + durationMinutes * 60_000L),
                 durationMinutes = durationMinutes,
-                deviceName = deviceName,
-                source = DataSource.SEEDER,
-                avgHrBpm = (rng.nextDouble() * 30.0 + 130.0),
+                deviceName      = deviceNames[rng.nextInt(deviceNames.size)],
+                source          = DataSource.SEEDER,
+                avgHrBpm        = rng.nextDouble() * 30.0 + 130.0,
             )
         } else {
-            val deviceNames = listOf("Walking", "Daily Walk", "Commute Walk")
-            val deviceName = deviceNames[rng.nextInt(deviceNames.size)]
-            val durationMinutes = rng.nextInt(21) + 10   // 10–30 min
-            val startHour = rng.nextInt(8) + 8            // 8 am – 3 pm
-            val startMs = dayStartMs + startHour * 3_600_000L
+            val deviceNames     = listOf("Walking", "Daily Walk", "Commute Walk")
+            val durationMinutes = rng.nextInt(21) + 10
+            val startHour       = rng.nextInt(8) + 8
+            val startMs         = dayStartMs + startHour * 3_600_000L
             Activity(
-                startTime = Instant.ofEpochMilli(startMs),
-                endTime = Instant.ofEpochMilli(startMs + durationMinutes * 60_000L),
+                startTime       = Instant.ofEpochMilli(startMs),
+                endTime         = Instant.ofEpochMilli(startMs + durationMinutes * 60_000L),
                 durationMinutes = durationMinutes,
-                deviceName = deviceName,
-                source = DataSource.SEEDER,
-                avgHrBpm = (rng.nextDouble() * 20.0 + 75.0),
+                deviceName      = deviceNames[rng.nextInt(deviceNames.size)],
+                source          = DataSource.SEEDER,
+                avgHrBpm        = rng.nextDouble() * 20.0 + 75.0,
             )
         }
     }

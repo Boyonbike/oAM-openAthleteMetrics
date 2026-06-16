@@ -146,6 +146,24 @@ fun DashboardScreen(
                         )
                     }
                 }
+                if (uiState.hasSeederData) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = MaterialTheme.shapes.medium,
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                    ) {
+                        Text(
+                            text = "Demo data — clear via Settings › Developer › Clear seeder data",
+                            style = TypographyMeta,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
                 MetricCardGrid(
                     summary = uiState.summaryForDate,
                     yesterdaySummary = uiState.yesterdaySummary,

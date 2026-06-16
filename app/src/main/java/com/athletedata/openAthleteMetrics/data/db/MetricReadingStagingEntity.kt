@@ -10,20 +10,21 @@ import com.athletedata.openAthleteMetrics.data.model.MetricType
 import java.time.Instant
 
 /**
- * Room entity for the `metric_readings` table.
+ * Room entity for the `metric_readings_staging` table.
  *
- * Every sensor value from every source — device, manual, or seeder — lands
- * here. The composite index on (metric_type, recorded_at) covers the most
- * common access pattern: "all HR readings for a time range."
+ * Landing zone for unknown metric types reported by JSON manifest drivers
+ * that do not have a dedicated typed table yet. All previously-flat
+ * metric_readings rows land here until they are promoted to their own
+ * dedicated table in a future migration.
  */
 @Entity(
-    tableName = "metric_readings",
+    tableName = "metric_readings_staging",
     indices = [
         Index(value = ["metric_type", "recorded_at"], orders = [Index.Order.ASC, Index.Order.DESC]),
         Index(value = ["driver_id", "metric_type", "recorded_at"], unique = true),
     ],
 )
-data class MetricReadingEntity(
+data class MetricReadingStagingEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
     @ColumnInfo(name = "metric_type")
@@ -44,7 +45,7 @@ data class MetricReadingEntity(
 
 // ── Mappers ──────────────────────────────────────────────────────────────────
 
-fun MetricReadingEntity.toModel() = MetricReading(
+fun MetricReadingStagingEntity.toModel() = MetricReading(
     id = id,
     metricType = metricType,
     value = value,
@@ -57,7 +58,7 @@ fun MetricReadingEntity.toModel() = MetricReading(
     metaJson = metaJson,
 )
 
-fun MetricReading.toEntity() = MetricReadingEntity(
+fun MetricReading.toStagingEntity() = MetricReadingStagingEntity(
     id = id,
     metricType = metricType,
     value = value,

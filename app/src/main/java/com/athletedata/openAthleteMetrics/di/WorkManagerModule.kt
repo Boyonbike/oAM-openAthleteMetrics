@@ -24,7 +24,7 @@ object WorkManagerModule {
 
     /**
      * Provides the app-scoped [WorkManager] instance.
-     * Injected into [RoomMetricRepository] and [RoomSleepRepository] so they
+     * Injected into [RoomMetricReadingStagingRepository] and [RoomSleepRepository] so they
      * can call [enqueueSummaryWorker] after writes.
      */
     @Provides

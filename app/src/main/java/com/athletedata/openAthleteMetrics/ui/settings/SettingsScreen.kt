@@ -213,7 +213,7 @@ fun SettingsScreen(
                 Spacer(Modifier.height(8.dp))
                 SeederSection(
                     state = seederState,
-                    onSeedNinetyDays = seederViewModel::seedNinetyDays,
+                    onSeedThirtyDays = seederViewModel::seedThirtyDays,
                     onSeedToday = seederViewModel::seedToday,
                     onClearData = seederViewModel::clearSeederData,
                     onDismissResult = seederViewModel::resetState,
@@ -290,7 +290,7 @@ private fun DangerSection(
 @Composable
 private fun SeederSection(
     state: SeederState,
-    onSeedNinetyDays: () -> Unit,
+    onSeedThirtyDays: () -> Unit,
     onSeedToday: () -> Unit,
     onClearData: () -> Unit,
     onDismissResult: () -> Unit,
@@ -299,10 +299,10 @@ private fun SeederSection(
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(
-            onClick  = onSeedNinetyDays,
+            onClick  = onSeedThirtyDays,
             enabled  = !isRunning,
             modifier = Modifier.fillMaxWidth(),
-        ) { Text("Seed 90 days of data") }
+        ) { Text("Seed 30 days of data") }
 
         OutlinedButton(
             onClick  = onSeedToday,

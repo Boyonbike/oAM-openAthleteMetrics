@@ -15,9 +15,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.ui.dailydetail.DailyDetailScreen
 import com.athletedata.openAthleteMetrics.ui.devices.DevicesScreen
 import com.athletedata.openAthleteMetrics.ui.history.HistoryScreen
+import com.athletedata.openAthleteMetrics.ui.metric.MetricDetailScreen
 import com.athletedata.openAthleteMetrics.ui.overview.DashboardScreen
 import com.athletedata.openAthleteMetrics.ui.questions.QuestionsScreen
 import com.athletedata.openAthleteMetrics.ui.settings.SettingsScreen
@@ -27,6 +29,14 @@ enum class Page(val label: String) {
     DASHBOARD("Dashboard"),
     QUESTIONS("Questions"),
     HISTORY("History"),
+}
+
+// Maps dashboard metric-card string keys to MetricType. "SLEEP" is a special case because the
+// dashboard uses a short key while the enum value is SLEEP_STAGE. Unknown keys (e.g. "WEIGHT")
+// return null and fall through to the History pager.
+private fun parseMetricKey(key: String): MetricType? = when (key) {
+    "SLEEP" -> MetricType.SLEEP_STAGE
+    else -> MetricType.entries.find { it.name == key }
 }
 
 // ── Nav graph ─────────────────────────────────────────────────────────────────
@@ -44,6 +54,8 @@ fun AppNavGraph(modifier: Modifier = Modifier) {
     var showSettings by remember { mutableStateOf(false) }
     var showDevices by remember { mutableStateOf(false) }
     var showDailyDetail by remember { mutableStateOf(false) }
+    var showMetricDetail by remember { mutableStateOf(false) }
+    var pendingMetricType by remember { mutableStateOf<MetricType?>(null) }
     var pendingQuestionsDate by remember { mutableStateOf<String?>(null) }
     var pendingQuestionsTab by remember { mutableStateOf<String?>(null) }
     var pendingHistoryMetricKey by remember { mutableStateOf<String?>(null) }
@@ -79,9 +91,15 @@ fun AppNavGraph(modifier: Modifier = Modifier) {
                             coroutineScope.launch { pagerState.animateScrollToPage(Page.QUESTIONS.ordinal) }
                         },
                         onNavigateToHistory = { metricKey, dateStr ->
-                            pendingHistoryMetricKey = metricKey
-                            pendingHistoryDateString = dateStr
-                            coroutineScope.launch { pagerState.animateScrollToPage(Page.HISTORY.ordinal) }
+                            val mt = parseMetricKey(metricKey)
+                            if (mt != null) {
+                                pendingMetricType = mt
+                                showMetricDetail = true
+                            } else {
+                                pendingHistoryMetricKey = metricKey
+                                pendingHistoryDateString = dateStr
+                                coroutineScope.launch { pagerState.animateScrollToPage(Page.HISTORY.ordinal) }
+                            }
                         },
                         onNavigateToHistoryDirect = {
                             coroutineScope.launch { pagerState.animateScrollToPage(Page.HISTORY.ordinal) }
@@ -128,6 +146,13 @@ fun AppNavGraph(modifier: Modifier = Modifier) {
 
             if (showDailyDetail) {
                 DailyDetailScreen(onBack = { showDailyDetail = false })
+            }
+
+            if (showMetricDetail && pendingMetricType != null) {
+                MetricDetailScreen(
+                    metricType = pendingMetricType!!,
+                    onBack = { showMetricDetail = false },
+                )
             }
 
             BottomNavBar(

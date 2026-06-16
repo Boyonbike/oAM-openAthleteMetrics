@@ -13,29 +13,29 @@ import timber.log.Timber
 import java.time.Instant
 
 @Dao
-abstract class MetricReadingDao {
+abstract class MetricReadingStagingDao {
 
     // ── Writes ────────────────────────────────────────────────────────────────
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    abstract suspend fun insert(entity: MetricReadingEntity)
+    abstract suspend fun insert(entity: MetricReadingStagingEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    abstract suspend fun insertAll(entities: List<MetricReadingEntity>)
+    abstract suspend fun insertAll(entities: List<MetricReadingStagingEntity>)
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    abstract suspend fun insertAllOrIgnore(entities: List<MetricReadingEntity>): List<Long>
+    abstract suspend fun insertAllOrIgnore(entities: List<MetricReadingStagingEntity>): List<Long>
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    protected abstract suspend fun insertOrIgnore(entity: MetricReadingEntity): Long
+    protected abstract suspend fun insertOrIgnore(entity: MetricReadingStagingEntity): Long
 
     /** Upserts a single accumulator reading; latest daily total always wins. */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    abstract suspend fun upsert(entity: MetricReadingEntity)
+    abstract suspend fun upsert(entity: MetricReadingStagingEntity)
 
     /** Batch upserts accumulator readings; latest daily total always wins for each row. */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    abstract suspend fun upsertAll(entities: List<MetricReadingEntity>)
+    abstract suspend fun upsertAll(entities: List<MetricReadingStagingEntity>)
 
     enum class AccumulatorWriteOutcome { INSERTED, UPDATED, NO_CHANGE, GUARDED }
 
@@ -47,7 +47,7 @@ abstract class MetricReadingDao {
      * - GUARDED: incoming value is lower than stored — kept existing, wrote nothing.
      */
     @Transaction
-    open suspend fun upsertAccumulator(reading: MetricReadingEntity): AccumulatorWriteOutcome {
+    open suspend fun upsertAccumulator(reading: MetricReadingStagingEntity): AccumulatorWriteOutcome {
         val existing = getByDriverTypeAndDate(reading.driverId, reading.metricType, reading.recordedAt)
         return when {
             existing == null -> {
@@ -75,13 +75,13 @@ abstract class MetricReadingDao {
     }
 
     @Delete
-    abstract suspend fun delete(entity: MetricReadingEntity)
+    abstract suspend fun delete(entity: MetricReadingStagingEntity)
 
     /** Deletes all readings from a specific source; used for seeder cleanup. */
-    @Query("DELETE FROM metric_readings WHERE source = :source")
+    @Query("DELETE FROM metric_readings_staging WHERE source = :source")
     abstract suspend fun deleteBySource(source: DataSource)
 
-    @Query("DELETE FROM metric_readings")
+    @Query("DELETE FROM metric_readings_staging")
     abstract suspend fun deleteAll()
 
     // ── Reads ─────────────────────────────────────────────────────────────────
@@ -89,7 +89,7 @@ abstract class MetricReadingDao {
     /** Exact-key lookup by the accumulator dedup index; returns null if no row exists. */
     @Query(
         """
-        SELECT * FROM metric_readings
+        SELECT * FROM metric_readings_staging
         WHERE driver_id IS :driverId
           AND metric_type = :metricType
           AND recorded_at = :recordedAt
@@ -100,7 +100,7 @@ abstract class MetricReadingDao {
         driverId: String?,
         metricType: MetricType,
         recordedAt: Instant,
-    ): MetricReadingEntity?
+    ): MetricReadingStagingEntity?
 
     /**
      * Returns readings of [metricType] in the half-open interval
@@ -112,7 +112,7 @@ abstract class MetricReadingDao {
      */
     @Query(
         """
-        SELECT * FROM metric_readings
+        SELECT * FROM metric_readings_staging
         WHERE metric_type = :metricType
           AND recorded_at >= :startMs
           AND recorded_at < :endMs
@@ -123,18 +123,18 @@ abstract class MetricReadingDao {
         metricType: MetricType,
         startMs: Long,
         endMs: Long,
-    ): Flow<List<MetricReadingEntity>>
+    ): Flow<List<MetricReadingStagingEntity>>
 
     /** Most recent reading of [metricType], or null if none exists. */
     @Query(
         """
-        SELECT * FROM metric_readings
+        SELECT * FROM metric_readings_staging
         WHERE metric_type = :metricType
         ORDER BY recorded_at DESC
         LIMIT 1
         """
     )
-    abstract fun getLatestReading(metricType: MetricType): Flow<MetricReadingEntity?>
+    abstract fun getLatestReading(metricType: MetricType): Flow<MetricReadingStagingEntity?>
 
     /**
      * One-shot (non-Flow) read of all readings for a date range; used by
@@ -143,7 +143,7 @@ abstract class MetricReadingDao {
      */
     @Query(
         """
-        SELECT * FROM metric_readings
+        SELECT * FROM metric_readings_staging
         WHERE metric_type = :metricType
           AND recorded_at >= :startMs
           AND recorded_at < :endMs
@@ -154,18 +154,18 @@ abstract class MetricReadingDao {
         metricType: MetricType,
         startMs: Long,
         endMs: Long,
-    ): List<MetricReadingEntity>
+    ): List<MetricReadingStagingEntity>
 
     /** Row count for a given [source] in a time window; used for the seeder banner. */
     @Query(
-        "SELECT COUNT(*) FROM metric_readings " +
+        "SELECT COUNT(*) FROM metric_readings_staging " +
         "WHERE source = :source AND recorded_at >= :startMs AND recorded_at < :endMs"
     )
     abstract fun countSourceDataInRange(source: DataSource, startMs: Long, endMs: Long): Flow<Int>
 
     /** One-shot row count; used by the seeder to check for existing data before re-seeding. */
     @Query(
-        "SELECT COUNT(*) FROM metric_readings " +
+        "SELECT COUNT(*) FROM metric_readings_staging " +
         "WHERE source = :source AND recorded_at >= :startMs AND recorded_at < :endMs"
     )
     abstract suspend fun countSourceDataInRangeOnce(source: DataSource, startMs: Long, endMs: Long): Int

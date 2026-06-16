@@ -27,9 +27,37 @@ import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.data.model.RawPayload
 import com.athletedata.openAthleteMetrics.data.model.SleepSession
+import androidx.work.WorkManager
+import com.athletedata.openAthleteMetrics.ble.driver.DeviceDriver
+import com.athletedata.openAthleteMetrics.ble.driver.MetricProcessor
+import com.athletedata.openAthleteMetrics.data.db.ActiveCalorieReadingEntity
+import com.athletedata.openAthleteMetrics.data.db.BloodPressureReadingEntity
+import com.athletedata.openAthleteMetrics.data.db.GlucoseReadingEntity
+import com.athletedata.openAthleteMetrics.data.db.HrReadingEntity
+import com.athletedata.openAthleteMetrics.data.db.HrvReadingEntity
+import com.athletedata.openAthleteMetrics.data.db.RespirationReadingEntity
+import com.athletedata.openAthleteMetrics.data.db.SkinTempReadingEntity
+import com.athletedata.openAthleteMetrics.data.db.SpO2ReadingEntity
+import com.athletedata.openAthleteMetrics.data.db.StepsReadingEntity
+import com.athletedata.openAthleteMetrics.data.db.TotalCalorieReadingEntity
+import com.athletedata.openAthleteMetrics.data.repository.ActiveCalorieReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.BloodPressureReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
+import com.athletedata.openAthleteMetrics.data.repository.GlucoseReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.HrReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.HrvReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.MetricReadingStagingRepository
 import com.athletedata.openAthleteMetrics.data.repository.RawDeviceDataRepository
+import com.athletedata.openAthleteMetrics.data.repository.RespirationReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.SkinTempReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.SpO2ReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.StepsReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.TotalCalorieReadingRepository
+import com.athletedata.openAthleteMetrics.worker.enqueueSummaryWorker
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.time.LocalDate
+import java.time.ZoneOffset
+import org.json.JSONObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -56,6 +84,18 @@ class BleEngine @Inject constructor(
     private val syncProcessor: DeviceSyncProcessor,
     private val deviceRepository: DeviceRepository,
     private val rawDeviceDataRepository: RawDeviceDataRepository,
+    private val hrReadingRepository: HrReadingRepository,
+    private val hrvReadingRepository: HrvReadingRepository,
+    private val spo2ReadingRepository: SpO2ReadingRepository,
+    private val respirationReadingRepository: RespirationReadingRepository,
+    private val skinTempReadingRepository: SkinTempReadingRepository,
+    private val stepsReadingRepository: StepsReadingRepository,
+    private val activeCalorieReadingRepository: ActiveCalorieReadingRepository,
+    private val totalCalorieReadingRepository: TotalCalorieReadingRepository,
+    private val bloodPressureReadingRepository: BloodPressureReadingRepository,
+    private val glucoseReadingRepository: GlucoseReadingRepository,
+    private val stagingRepository: MetricReadingStagingRepository,
+    private val workManager: WorkManager,
 ) {
     companion object {
         private const val CCCD_UUID = "00002902-0000-1000-8000-00805f9b34fb"
@@ -64,6 +104,17 @@ class BleEngine @Inject constructor(
         private const val MAX_RETRIES = 3
         private const val STREAM_QUIESCENCE_MS = 3_000L
         private const val SILENT_SYNC_TIMEOUT_MS = 15_000L
+
+        // MetricTypes that have a dedicated typed table. Readings for these types are routed
+        // directly by routeReading() and are NOT added to pendingMetrics, so they do not
+        // flow through DeviceSyncProcessor into metric_readings_staging.
+        private val DEDICATED_METRIC_TYPES = setOf(
+            MetricType.HR, MetricType.HRV, MetricType.SPO2,
+            MetricType.RESPIRATION, MetricType.SKIN_TEMP, MetricType.STEPS,
+            MetricType.ACTIVE_CALORIES, MetricType.TOTAL_CALORIES,
+            MetricType.BLOOD_PRESSURE, MetricType.GLUCOSE,
+            MetricType.SLEEP_STAGE,
+        )
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -81,6 +132,15 @@ class BleEngine @Inject constructor(
     // connection and on disconnect. Raw packets are persisted against this ID immediately on
     // arrival so they survive process death (Fix 18).
     @Volatile private var currentSyncSessionId: Long? = null
+
+    // Processor supplied by a native DeviceDriver implementation. Always null for WASM-based
+    // drivers (WasmDriverManifest is a data class and does not implement DeviceDriver).
+    // Reset to null on each fresh connect and on disconnect.
+    @Volatile private var currentProcessor: MetricProcessor? = null
+
+    // Dates that received at least one new reading this sync. Populated by routeReading();
+    // snapshotted and cleared at quiescence to enqueue DailySummaryWorker.
+    private val affectedDates = mutableSetOf<LocalDate>()
 
     private var negotiatedMtu: Int = 23  // Android stack default; updated in onMtuChanged
     private val reassemblyBuffers = mutableMapOf<String, ByteArray>()
@@ -240,6 +300,8 @@ class BleEngine @Inject constructor(
         synchronized(pendingSleep) { pendingSleep.clear(); seenSleepStartMs.clear() }
         synchronized(pendingActivities) { pendingActivities.clear() }
         currentSyncSessionId = null
+        currentProcessor = null
+        synchronized(affectedDates) { affectedDates.clear() }
         reassemblyBuffers.clear()
         scope.launch { @Suppress("MissingPermission") activeGatt?.disconnect() }
         // activeManifest / activeDeviceAddress are cleared by gattCallback
@@ -302,9 +364,13 @@ class BleEngine @Inject constructor(
         val sleep    = driverRegistry.parseSleep(manifest, characteristicUuid, accumulated)
         val activity = driverRegistry.parseActivity(manifest, characteristicUuid, accumulated)
 
-        synchronized(pendingMetrics) {
-            readings.forEach { reading ->
-                pendingMetrics[Pair(reading.metricType, reading.recordedAt.toEpochMilli())] = reading
+        for (reading in readings) {
+            currentProcessor?.onReading(reading)
+            routeReading(reading)
+            if (reading.metricType !in DEDICATED_METRIC_TYPES) {
+                synchronized(pendingMetrics) {
+                    pendingMetrics[Pair(reading.metricType, reading.recordedAt.toEpochMilli())] = reading
+                }
             }
         }
         synchronized(pendingSleep) {
@@ -346,6 +412,14 @@ class BleEngine @Inject constructor(
                 if (_connectionState.value is BleConnectionState.Connected) {
                     isQuiescent = true
                     _connectionState.value = BleConnectionState.Connected(address, manifest.displayName, count, true)
+                    val derived = currentProcessor?.onSyncComplete() ?: emptyList()
+                    if (derived.isNotEmpty()) {
+                        withContext(Dispatchers.IO) { derived.forEach { routeReading(it) } }
+                    }
+                    val datesToProcess = synchronized(affectedDates) {
+                        affectedDates.toSet().also { affectedDates.clear() }
+                    }
+                    datesToProcess.forEach { enqueueSummaryWorker(it, workManager) }
                 }
             }
         }
@@ -453,6 +527,8 @@ class BleEngine @Inject constructor(
             isQuiescent = false
             quiescenceJob?.cancel()
             quiescenceJob = null
+            currentProcessor = (activeManifest as? DeviceDriver)?.createProcessor()
+            synchronized(affectedDates) { affectedDates.clear() }
         } else {
             val existingCount = synchronized(pendingMetrics) { pendingMetrics.size }
             Timber.i("Reconnect: accumulator has $existingCount existing readings — duplicates from re-stream will be discarded in memory")
@@ -761,6 +837,126 @@ class BleEngine @Inject constructor(
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * Routes a [MetricReading] to the appropriate typed repository.
+     *
+     * Known metric types → their dedicated table (hr_readings, hrv_readings, etc.).
+     * [MetricType.SLEEP_STAGE] → metric_readings_staging with a pending_sleep_stage flag.
+     *   TODO: a post-processor must group pending sleep stage readings into SleepSession +
+     *   SleepStage rows once a complete night is available.
+     * [MetricType.BLOOD_PRESSURE] → blood_pressure_readings when metaJson["diastolic"] is
+     *   present and parseable; falls back to metric_readings_staging otherwise.
+     * All other types → metric_readings_staging (catch-all for unknown metrics).
+     *
+     * Also records the reading's UTC date in [affectedDates] for DailySummaryWorker scheduling.
+     * Must be called from an IO dispatcher context.
+     */
+    private suspend fun routeReading(reading: MetricReading) {
+        when (reading.metricType) {
+            MetricType.HR -> hrReadingRepository.insert(
+                HrReadingEntity(
+                    recordedAt = reading.recordedAt, createdAt = reading.createdAt,
+                    source = reading.source, driverId = reading.driverId,
+                    confidence = reading.confidence, metaJson = reading.metaJson,
+                    bpm = reading.value.toInt(),
+                )
+            )
+            MetricType.HRV -> hrvReadingRepository.insert(
+                HrvReadingEntity(
+                    recordedAt = reading.recordedAt, createdAt = reading.createdAt,
+                    source = reading.source, driverId = reading.driverId,
+                    confidence = reading.confidence, metaJson = reading.metaJson,
+                    rmssdMs = reading.value,
+                    computedByVersion = 1,
+                )
+            )
+            MetricType.SPO2 -> spo2ReadingRepository.insert(
+                SpO2ReadingEntity(
+                    recordedAt = reading.recordedAt, createdAt = reading.createdAt,
+                    source = reading.source, driverId = reading.driverId,
+                    confidence = reading.confidence, metaJson = reading.metaJson,
+                    percentage = reading.value,
+                )
+            )
+            MetricType.RESPIRATION -> respirationReadingRepository.insert(
+                RespirationReadingEntity(
+                    recordedAt = reading.recordedAt, createdAt = reading.createdAt,
+                    source = reading.source, driverId = reading.driverId,
+                    confidence = reading.confidence, metaJson = reading.metaJson,
+                    breathsPerMinute = reading.value,
+                )
+            )
+            MetricType.SKIN_TEMP -> skinTempReadingRepository.insert(
+                SkinTempReadingEntity(
+                    recordedAt = reading.recordedAt, createdAt = reading.createdAt,
+                    source = reading.source, driverId = reading.driverId,
+                    confidence = reading.confidence, metaJson = reading.metaJson,
+                    celsius = reading.value,
+                )
+            )
+            MetricType.STEPS -> stepsReadingRepository.insert(
+                StepsReadingEntity(
+                    recordedAt = reading.recordedAt, createdAt = reading.createdAt,
+                    source = reading.source, driverId = reading.driverId,
+                    confidence = reading.confidence, metaJson = reading.metaJson,
+                    cumulativeSteps = reading.value.toInt(),
+                )
+            )
+            MetricType.ACTIVE_CALORIES -> activeCalorieReadingRepository.insert(
+                ActiveCalorieReadingEntity(
+                    recordedAt = reading.recordedAt, createdAt = reading.createdAt,
+                    source = reading.source, driverId = reading.driverId,
+                    confidence = reading.confidence, metaJson = reading.metaJson,
+                    calories = reading.value,
+                )
+            )
+            MetricType.TOTAL_CALORIES -> totalCalorieReadingRepository.insert(
+                TotalCalorieReadingEntity(
+                    recordedAt = reading.recordedAt, createdAt = reading.createdAt,
+                    source = reading.source, driverId = reading.driverId,
+                    confidence = reading.confidence, metaJson = reading.metaJson,
+                    calories = reading.value,
+                )
+            )
+            MetricType.BLOOD_PRESSURE -> {
+                val diastolic = runCatching {
+                    JSONObject(reading.metaJson ?: "").getInt("diastolic")
+                }.getOrNull()
+                if (diastolic != null) {
+                    bloodPressureReadingRepository.insert(
+                        BloodPressureReadingEntity(
+                            recordedAt = reading.recordedAt, createdAt = reading.createdAt,
+                            source = reading.source, driverId = reading.driverId,
+                            confidence = reading.confidence, metaJson = reading.metaJson,
+                            systolic = reading.value.toInt(),
+                            diastolic = diastolic,
+                        )
+                    )
+                } else {
+                    Timber.w("BleEngine: BLOOD_PRESSURE reading missing diastolic in metaJson — falling back to staging")
+                    stagingRepository.insert(reading)
+                }
+            }
+            MetricType.GLUCOSE -> glucoseReadingRepository.insert(
+                GlucoseReadingEntity(
+                    recordedAt = reading.recordedAt, createdAt = reading.createdAt,
+                    source = reading.source, driverId = reading.driverId,
+                    confidence = reading.confidence, metaJson = reading.metaJson,
+                    value = reading.value,
+                    unit = reading.unit,
+                )
+            )
+            MetricType.SLEEP_STAGE -> {
+                // TODO: a post-processor must group these readings into SleepSession + SleepStage
+                // rows once a complete night is available. The flag allows them to be queried.
+                stagingRepository.insert(reading.copy(metaJson = """{"pending_sleep_stage": true}"""))
+            }
+            else -> stagingRepository.insert(reading)
+        }
+        val date = reading.recordedAt.atZone(ZoneOffset.UTC).toLocalDate()
+        synchronized(affectedDates) { affectedDates.add(date) }
+    }
 
     private fun findCharacteristic(uuid: String): BluetoothGattCharacteristic? =
         activeGatt?.services

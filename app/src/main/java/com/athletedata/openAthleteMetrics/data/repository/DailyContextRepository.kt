@@ -26,4 +26,7 @@ interface DailyContextRepository {
 
     /** One-shot read; used by the seeder to check for existing data before re-seeding. */
     suspend fun getForDateOnce(date: LocalDate): DailyContext?
+
+    /** Deletes all daily context rows; used by the seeder cleanup. */
+    suspend fun deleteAll()
 }

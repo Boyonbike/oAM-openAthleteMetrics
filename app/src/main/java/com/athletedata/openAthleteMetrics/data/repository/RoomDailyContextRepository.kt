@@ -33,4 +33,13 @@ class RoomDailyContextRepository @Inject constructor(
 
     override suspend fun getForDateOnce(date: LocalDate): DailyContext? =
         dao.getContextForDateOnce(date)?.toModel()
+
+    override suspend fun deleteAll() {
+        try {
+            dao.deleteAll()
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to delete all daily contexts")
+            throw e
+        }
+    }
 }

@@ -99,6 +99,10 @@ class SeederService @Inject constructor(
         activityRepository.deleteBySource(DataSource.SEEDER)
         onProgress(0.90f)
         dailySummaryRepository.deleteAll()
+        onProgress(0.93f)
+        questionResponseDao.deleteAll()
+        onProgress(0.97f)
+        dailyContextRepository.deleteAll()
         onProgress(1.00f)
     }
 

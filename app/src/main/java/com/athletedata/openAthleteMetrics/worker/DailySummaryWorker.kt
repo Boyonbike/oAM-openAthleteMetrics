@@ -27,7 +27,7 @@ import dagger.assisted.AssistedInject
 import timber.log.Timber
 import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneOffset
+import java.time.ZoneId
 
 /**
  * Aggregates one day's worth of raw readings into a [DailySummary] row.
@@ -62,10 +62,11 @@ class DailySummaryWorker @AssistedInject constructor(
             val date = LocalDate.parse(dateStr)
 
             // ── Time boundaries ───────────────────────────────────────────────
-            val dayStartMs     = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
-            val dayEndMs       = date.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
-            val nightEndMs     = date.atTime(6, 0).toInstant(ZoneOffset.UTC).toEpochMilli()
-            val morningStartMs = date.atTime(5, 0).toInstant(ZoneOffset.UTC).toEpochMilli()
+            val zone           = ZoneId.systemDefault()
+            val dayStartMs     = date.atStartOfDay(zone).toInstant().toEpochMilli()
+            val dayEndMs       = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+            val nightEndMs     = date.atTime(6, 0).atZone(zone).toInstant().toEpochMilli()
+            val morningStartMs = date.atTime(5, 0).atZone(zone).toInstant().toEpochMilli()
 
             // ── Fetch raw readings ────────────────────────────────────────────
             val hrReadings          = hrReadingDao.getReadingsInRangeOnce(dayStartMs, dayEndMs)

@@ -336,10 +336,11 @@ private fun SeederSection(
         }
 
         val statusText = when (state) {
-            is SeederState.Idle    -> "Idle"
-            is SeederState.Running -> null  // shown inline via progress above
-            is SeederState.Done    -> "Done"
-            is SeederState.Error   -> "Error: ${state.message}"
+            is SeederState.Idle           -> "Idle"
+            is SeederState.Running        -> null  // shown inline via progress above
+            is SeederState.Done           -> "Done"
+            is SeederState.PartialSuccess -> "Partial: ${state.failedDates.size} day(s) failed"
+            is SeederState.Error          -> "Error: ${state.message}"
         }
         if (statusText != null) {
             Text(
@@ -353,7 +354,7 @@ private fun SeederSection(
             )
         }
 
-        if (state is SeederState.Done || state is SeederState.Error) {
+        if (state is SeederState.Done || state is SeederState.PartialSuccess || state is SeederState.Error) {
             TextButton(onClick = onDismissResult) { Text("Dismiss") }
         }
     }

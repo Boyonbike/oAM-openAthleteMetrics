@@ -24,7 +24,9 @@ enum class MetricType {
     BASAL_CALORIES,   // basal metabolic rate calories (kcal)
     /**
      * Canonical value for respiratory rate (breaths per minute). Routes to the dedicated
-     * respiration_readings table via BleEngine.routeReading().
+     * respiration_readings table via [com.athletedata.openAthleteMetrics.ble.sync.MetricRouter.route].
+     * (BleEngine.routeReading() is the entry point but contains no routing logic of its own —
+     * it delegates entirely to MetricRouter and tracks affected dates for DailySummaryWorker.)
      *
      * Driver authors: if your driver previously emitted [RESPIRATORY_RATE] (removed),
      * update your supportedMetrics and metric type output to use RESPIRATION instead.

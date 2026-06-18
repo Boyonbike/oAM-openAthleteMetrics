@@ -1,5 +1,6 @@
 package com.athletedata.openAthleteMetrics.data.repository
 
+import com.athletedata.openAthleteMetrics.data.db.QuestionResponseEntity
 import com.athletedata.openAthleteMetrics.data.model.QuestionDefinition
 import com.athletedata.openAthleteMetrics.data.model.QuestionResponse
 import com.athletedata.openAthleteMetrics.data.model.QuestionType
@@ -21,4 +22,7 @@ interface QuestionRepository {
     suspend fun updateCustomQuestion(id: Long, name: String, type: QuestionType)
     suspend fun clearResponse(questionId: Long, date: LocalDate)
     fun getResponsesForRange(questionId: Long, from: LocalDate, to: LocalDate): Flow<List<QuestionResponse>>
+    suspend fun getLifestyleQuestionsOnce(): List<QuestionDefinition>
+    suspend fun upsertAllResponses(entities: List<QuestionResponseEntity>)
+    suspend fun deleteAllResponses()
 }

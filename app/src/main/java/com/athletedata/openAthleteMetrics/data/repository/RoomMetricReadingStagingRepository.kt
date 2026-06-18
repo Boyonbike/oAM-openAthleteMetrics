@@ -4,6 +4,7 @@ import androidx.work.WorkManager
 import com.athletedata.openAthleteMetrics.data.db.MetricReadingStagingDao
 import com.athletedata.openAthleteMetrics.data.db.toModel
 import com.athletedata.openAthleteMetrics.data.db.toStagingEntity
+import com.athletedata.openAthleteMetrics.data.db.toUtcStartMs
 import com.athletedata.openAthleteMetrics.data.model.DataSource
 import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import com.athletedata.openAthleteMetrics.data.model.MetricType
@@ -159,9 +160,6 @@ class RoomMetricReadingStagingRepository @Inject constructor(
 
     override suspend fun deleteByIds(ids: List<Long>) = dao.deleteByIds(ids)
 }
-
-private fun LocalDate.toUtcStartMs(): Long =
-    atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
 
 private fun Instant.toLocalDate(): LocalDate =
     atZone(ZoneOffset.UTC).toLocalDate()

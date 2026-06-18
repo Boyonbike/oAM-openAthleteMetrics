@@ -22,6 +22,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *       blood_pressure, glucose, active_cal, total_cal, sleep_stages); removed stages_json from
  *       sleep_sessions; added new columns to daily_summary; renamed metric_readings to
  *       metric_readings_staging
+ *  12 — QuestionResponseEntity.date re-typed from String to LocalDate in Kotlin; no SQLite schema
+ *       change (TypeConverter stores LocalDate as ISO-8601 TEXT, identical to prior storage)
  */
 @Database(
     entities = [
@@ -47,7 +49,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TotalCalorieReadingEntity::class,
         SleepStageEntity::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -781,6 +783,15 @@ abstract class AppDatabase : RoomDatabase() {
                         arrayOf(seed.name, seed.type, if (seed.isStarred) 1 else 0, seed.sortOrder),
                     )
                 }
+            }
+        }
+
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // No-op: QuestionResponseEntity.date was re-typed from String to LocalDate in
+                // Kotlin. The TypeConverter stores LocalDate as ISO-8601 TEXT ("YYYY-MM-DD"),
+                // which is exactly the format the old String field already used. The SQLite
+                // column definition stays `TEXT NOT NULL` — no data rewriting is required.
             }
         }
     }

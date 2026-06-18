@@ -4,7 +4,10 @@ import com.athletedata.openAthleteMetrics.ble.wasm.WasmDriverEngine
 import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import com.athletedata.openAthleteMetrics.data.model.SleepSession
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import timber.log.Timber
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -15,29 +18,34 @@ class DriverRegistry @Inject constructor(
     private val wasmEngine: WasmDriverEngine,
 ) {
     private val _drivers = CopyOnWriteArrayList<WasmDriverManifest>()
-    private var wasmLoadedId: String? = null
-    private val _failedDriverIds = mutableSetOf<String>()
+    @Volatile private var wasmLoadedId: String? = null
+    private val _failedDriverIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private val wasmMutex = Mutex()
 
-    fun initialiseDrivers() {
+    suspend fun initialiseDrivers() {
         driverStorage.loadAllDrivers().forEach { register(it) }
         Timber.d("DriverRegistry: loaded ${_drivers.size} driver(s)")
     }
 
-    fun register(manifest: WasmDriverManifest) {
+    suspend fun register(manifest: WasmDriverManifest) {
         _drivers.removeIf { it.id == manifest.id }
         _drivers.add(manifest)
         _failedDriverIds.remove(manifest.id)
-        if (wasmLoadedId == manifest.id) {
-            wasmEngine.unload()
-            wasmLoadedId = null
+        wasmMutex.withLock {
+            if (wasmLoadedId == manifest.id) {
+                wasmEngine.unload()
+                wasmLoadedId = null
+            }
         }
     }
 
-    fun unregister(driverId: String) {
+    suspend fun unregister(driverId: String) {
         _drivers.removeIf { it.id == driverId }
-        if (wasmLoadedId == driverId) {
-            wasmEngine.unload()
-            wasmLoadedId = null
+        wasmMutex.withLock {
+            if (wasmLoadedId == driverId) {
+                wasmEngine.unload()
+                wasmLoadedId = null
+            }
         }
     }
 
@@ -92,16 +100,17 @@ class DriverRegistry @Inject constructor(
         return wasmEngine.parseActivity(characteristicUuid, data, manifest.id)
     }
 
-    private suspend fun ensureWasmLoaded(manifest: WasmDriverManifest): Boolean {
-        if (wasmLoadedId == manifest.id) return true
-        if (manifest.id in _failedDriverIds) return false
-        return if (wasmEngine.load(manifest)) {
-            wasmLoadedId = manifest.id
-            true
-        } else {
-            Timber.e("DriverRegistry: WASM load failed for driver '${manifest.id}'")
-            _failedDriverIds.add(manifest.id)
-            false
+    private suspend fun ensureWasmLoaded(manifest: WasmDriverManifest): Boolean =
+        wasmMutex.withLock {
+            if (wasmLoadedId == manifest.id) return@withLock true
+            if (manifest.id in _failedDriverIds) return@withLock false
+            if (wasmEngine.load(manifest)) {
+                wasmLoadedId = manifest.id
+                true
+            } else {
+                Timber.e("DriverRegistry: WASM load failed for driver '${manifest.id}'")
+                _failedDriverIds.add(manifest.id)
+                false
+            }
         }
-    }
 }

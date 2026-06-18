@@ -44,7 +44,6 @@ class ManifestValidator {
                     errors += "parsing.exports.parseMetrics must not be blank"
                 }
             }
-            else -> errors += "unsupported parsing mode '${parsing::class.simpleName}' — only 'wasm' is implemented"
         }
 
         return errors

@@ -18,6 +18,9 @@ interface QuestionDefinitionDao {
     @Query("SELECT COUNT(*) FROM question_definitions")
     suspend fun count(): Int
 
+    @Query("SELECT COUNT(*) FROM question_definitions WHERE category = 'LIFESTYLE'")
+    suspend fun countLifestyle(): Int
+
     @Query("SELECT MAX(sort_order) FROM question_definitions WHERE category = 'CUSTOM'")
     suspend fun maxCustomSortOrder(): Int?
 

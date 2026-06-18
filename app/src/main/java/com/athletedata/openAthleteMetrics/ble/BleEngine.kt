@@ -16,24 +16,25 @@ import android.content.Context
 import android.os.Build
 import android.os.ParcelUuid
 import androidx.annotation.RequiresApi
+import androidx.work.WorkManager
+import com.athletedata.openAthleteMetrics.ble.driver.DeviceDriver
 import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
+import com.athletedata.openAthleteMetrics.ble.driver.MetricProcessor
 import com.athletedata.openAthleteMetrics.ble.driver.SyncCommand
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
 import com.athletedata.openAthleteMetrics.ble.sync.DeviceSyncProcessor
 import com.athletedata.openAthleteMetrics.ble.sync.MetricRouter
 import com.athletedata.openAthleteMetrics.ble.sync.SyncSummary
+import com.athletedata.openAthleteMetrics.ble.sync.SyncValidator
+import com.athletedata.openAthleteMetrics.ble.sync.ValidationResult
 import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.DriverSyncResult
 import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.data.model.RawPayload
 import com.athletedata.openAthleteMetrics.data.model.SleepSession
-import androidx.work.WorkManager
-import com.athletedata.openAthleteMetrics.ble.driver.DeviceDriver
-import com.athletedata.openAthleteMetrics.ble.driver.MetricProcessor
 import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
 import com.athletedata.openAthleteMetrics.data.repository.RawDeviceDataRepository
-import com.athletedata.openAthleteMetrics.worker.SleepStagePromoter
 import com.athletedata.openAthleteMetrics.worker.enqueueSummaryWorker
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.LocalDate
@@ -50,6 +51,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.time.Instant
@@ -62,11 +64,11 @@ class BleEngine @Inject constructor(
     @param:ApplicationContext val context: Context,
     private val driverRegistry: DriverRegistry,
     private val syncProcessor: DeviceSyncProcessor,
+    private val validator: SyncValidator,
     private val deviceRepository: DeviceRepository,
     private val rawDeviceDataRepository: RawDeviceDataRepository,
     private val metricRouter: MetricRouter,
     private val workManager: WorkManager,
-    private val sleepStagePromoter: SleepStagePromoter,
 ) {
     companion object {
         private const val CCCD_UUID = "00002902-0000-1000-8000-00805f9b34fb"
@@ -195,8 +197,13 @@ class BleEngine @Inject constructor(
             _connectionState.value = BleConnectionState.Error("Bluetooth is disabled")
             return
         }
-        val device = adapter.getRemoteDevice(bleAddress)
-        connect(device, manifest, resetRetries = true)
+        try {
+            val device = adapter.getRemoteDevice(bleAddress)
+            connect(device, manifest, resetRetries = true)
+        } catch (e: SecurityException) {
+            Timber.w(e, "BLE permission revoked during connectToDevice")
+            _connectionState.value = BleConnectionState.Error("Bluetooth permission denied")
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -242,7 +249,13 @@ class BleEngine @Inject constructor(
             .build()
 
         _connectionState.value = BleConnectionState.Scanning
-        scanner.startScan(filters.takeIf { it.isNotEmpty() }, settings, scanCallback)
+        try {
+            scanner.startScan(filters.takeIf { it.isNotEmpty() }, settings, scanCallback)
+        } catch (e: SecurityException) {
+            Timber.w(e, "BLE permission revoked during startScan")
+            _connectionState.value = BleConnectionState.Error("Bluetooth permission denied")
+            return
+        }
 
         scanTimeoutJob = scope.launch {
             delay(SCAN_TIMEOUT_MS)
@@ -292,6 +305,10 @@ class BleEngine @Inject constructor(
         }
     }
 
+    fun shutdown() {
+        scope.cancel()
+    }
+
     /**
      * Reassembly strategy: "short-packet terminal"
      *
@@ -335,13 +352,21 @@ class BleEngine @Inject constructor(
         val sleep    = driverRegistry.parseSleep(manifest, characteristicUuid, accumulated)
         val activity = driverRegistry.parseActivity(manifest, characteristicUuid, accumulated)
 
-        for (reading in readings) {
-            currentProcessor?.onReading(reading)
-            routeReading(reading)
-            if (reading.metricType !in DEDICATED_METRIC_TYPES) {
-                synchronized(pendingMetrics) {
-                    pendingMetrics[Pair(reading.metricType, reading.recordedAt.toEpochMilli())] = reading
+        val readingResults = validator.validateReadings(readings)
+        for (result in readingResults) {
+            when (result) {
+                is ValidationResult.Accepted -> {
+                    val reading = result.item
+                    currentProcessor?.onReading(reading)
+                    routeReading(reading)
+                    if (reading.metricType !in DEDICATED_METRIC_TYPES) {
+                        synchronized(pendingMetrics) {
+                            pendingMetrics[Pair(reading.metricType, reading.recordedAt.toEpochMilli())] = reading
+                        }
+                    }
                 }
+                is ValidationResult.Rejected ->
+                    Timber.w("handleNotification: dropped ${result.item.metricType} — ${result.reason}")
             }
         }
         synchronized(pendingSleep) {
@@ -386,19 +411,6 @@ class BleEngine @Inject constructor(
                     val derived = currentProcessor?.onSyncComplete() ?: emptyList()
                     if (derived.isNotEmpty()) {
                         withContext(Dispatchers.IO) { derived.forEach { routeReading(it) } }
-                    }
-                    val promotionResult = withContext(Dispatchers.IO) {
-                        sleepStagePromoter.promote(
-                            driverId = manifest.id,
-                            syncWindowStartMs = syncStartedAt.toEpochMilli(),
-                            syncWindowEndMs = Instant.now().toEpochMilli(),
-                        )
-                    }
-                    if (promotionResult.errors.isNotEmpty()) {
-                        promotionResult.errors.forEach { Timber.w("SleepStagePromoter: $it") }
-                    }
-                    synchronized(affectedDates) {
-                        promotionResult.datesProcessed.forEach { affectedDates.add(it) }
                     }
                     val datesToProcess = synchronized(affectedDates) {
                         affectedDates.toSet().also { affectedDates.clear() }
@@ -600,6 +612,14 @@ class BleEngine @Inject constructor(
             status: Int,
         ) {
             scope.launch {
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    Timber.w(
+                        "BleEngine: CCCD write failed for characteristic=${descriptor.characteristic.uuid} status=$status"
+                    )
+                    closeGatt()
+                    scheduleRetry()
+                    return@launch
+                }
                 when {
                     notifySetupQueue.isNotEmpty() -> enableNextNotification()
                     inSyncCommandNotify -> {
@@ -641,10 +661,12 @@ class BleEngine @Inject constructor(
         ) {
             scope.launch {
                 if (status != BluetoothGatt.GATT_SUCCESS) {
-                    Timber.w(
-                        "BleEngine: write to ${characteristic.uuid} failed status=$status — " +
-                            "sync command skipped, device may not stream data"
+                    Timber.e(
+                        "BleEngine: write to ${characteristic.uuid} failed (command $commandIndex) status=$status — scheduling retry"
                     )
+                    closeGatt()
+                    scheduleRetry()
+                    return@launch
                 }
                 commandIndex++
                 executeNextSyncCommand()
@@ -812,7 +834,6 @@ class BleEngine @Inject constructor(
     @SuppressLint("MissingPermission")
     private suspend fun closeGatt() {
         withContext(Dispatchers.Main) {
-            activeGatt?.disconnect()
             activeGatt?.close()
             activeGatt = null
         }
@@ -827,8 +848,9 @@ class BleEngine @Inject constructor(
      *
      * Known metric types → their dedicated table (hr_readings, hrv_readings, etc.).
      * [MetricType.SLEEP_STAGE] → metric_readings_staging with a pending_sleep_stage flag.
-     *   TODO: a post-processor must group pending sleep stage readings into SleepSession +
-     *   SleepStage rows once a complete night is available.
+     *   Grouping those staged rows into SleepSession + SleepStage rows once a complete night
+     *   is available is handled by [com.athletedata.openAthleteMetrics.worker.SleepStagePromoter],
+     *   which is invoked by both [DeviceSyncProcessor] and [DeviceReprocessor].
      * [MetricType.BLOOD_PRESSURE] → blood_pressure_readings when metaJson["diastolic"] is
      *   present and parseable; falls back to metric_readings_staging otherwise.
      * All other types → metric_readings_staging (catch-all for unknown metrics).

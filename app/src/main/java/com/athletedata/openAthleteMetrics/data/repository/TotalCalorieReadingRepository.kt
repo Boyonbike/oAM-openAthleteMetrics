@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.Flow
 interface TotalCalorieReadingRepository {
     suspend fun insert(entity: TotalCalorieReadingEntity)
     suspend fun insertAll(entities: List<TotalCalorieReadingEntity>)
+    suspend fun insertAllOrIgnore(entities: List<TotalCalorieReadingEntity>): List<Long>
     suspend fun deleteBySource(source: DataSource)
     fun getReadingsInRange(startMs: Long, endMs: Long): Flow<List<TotalCalorieReadingEntity>>
     suspend fun getReadingsInRangeOnce(startMs: Long, endMs: Long): List<TotalCalorieReadingEntity>

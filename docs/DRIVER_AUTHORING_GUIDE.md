@@ -3,6 +3,13 @@
 > All drivers use WASM mode for parsing. A driver is a single `.json` file
 > containing device configuration and an embedded WASM binary.
 
+> **Note — supported driver formats:** The WASM manifest format described in this
+> guide is currently the **only** supported external driver format. `DeviceDriver`
+> and `MetricProcessor` exist in the source code as internal scaffolding for a
+> possible future native Kotlin driver path; they are not currently functional and
+> are not intended for external contributors to implement. If you found these
+> interfaces while reading the source, please use the WASM path described here.
+
 This document contains everything needed to write a device driver for the app —
 either as a human developer or as an AI given a device protocol document alongside
 this guide.
@@ -73,16 +80,72 @@ skipped. The rest of the sync continues.
 
 ### 5. Sync Processing
 
-Once the connection and sync-command sequence completes, the app automatically
-passes all accumulated data to `DeviceSyncProcessor.process()`, which:
+Metric data flows through one of two entry points depending on whether the sync is a
+live BLE session or a replay of stored raw data. Both ultimately write to the same
+destination tables, but they reach those tables via different call paths.
 
-1. Records a `SyncSession` row in the database
-2. Validates all readings, sleep sessions, and activities
-3. Inserts valid data into `metric_readings`, `sleep_sessions`, and `activities`
-4. Raw BLE payloads are stored in `raw_device_data` on packet arrival (not at this
-   step) and are retained for 7 days for future reprocessing
-5. Re-runs `DailySummaryWorker` to update the Dashboard
-6. Updates the device's `last_sync_ms` timestamp
+#### Where metrics land
+
+Readings with dedicated metric types are written to their own typed tables; all other
+types go to the staging table:
+
+| Metric type | Destination table |
+|---|---|
+| `HR`, `HRV`, `SPO2`, `RESPIRATION`, `SKIN_TEMP` | Dedicated typed tables |
+| `STEPS`, `ACTIVE_CALORIES`, `TOTAL_CALORIES` | Dedicated typed tables |
+| `BLOOD_PRESSURE`, `GLUCOSE` | Dedicated typed tables |
+| `SLEEP_STAGE` | Dedicated typed table (then promoted by `SleepStagePromoter`) |
+| All other metric types | `metric_readings_staging` |
+| `BATTERY` | Device metadata only — not written to any metric table |
+
+Sleep sessions go to `sleep_sessions`; activities go to `activities`.
+
+#### Live BLE sync — `DeviceSyncProcessor.process()`
+
+During a live sync, `BleEngine.handleNotification()` calls `MetricRouter.route()` **on
+each incoming notification as packets arrive** — before the sync is complete and before
+`process()` is ever called. `MetricRouter` immediately persists dedicated-type readings
+to their typed tables.
+
+By the time `process()` is called at the end of the sync, those readings are already in
+the database. The `pendingMetrics` list passed to `process()` contains only non-dedicated
+metric types. `process()` persists these directly into `metric_readings_staging` via
+`metricRepository.insertAllFromDevice()` — it does not call `MetricRouter` at all.
+
+> **Invariant:** If dedicated-type readings reach `process()`, the app logs an error and
+> they will be misfiled into `metric_readings_staging`. This indicates a bug in the
+> BleEngine/MetricRouter call sequence, not a driver issue.
+
+After persisting metric and sleep data, `process()`:
+1. Updates the `SyncSession` row to `SUCCESS`, `PARTIAL`, or `FAILED`
+2. Calls `SleepStagePromoter.promote()` to promote staged sleep stage readings
+3. Stamps the device's `last_sync_ms` and last known battery percentage
+4. Schedules a background prune of `raw_device_data` older than 7 days and
+   `sync_sessions` older than 90 days
+
+#### Raw replay — `DeviceSyncProcessor.processFromRaw()`
+
+This path is triggered by the "Reprocess from raw data" action in the Devices screen.
+It re-parses all stored `raw_device_data` packets for a session through the current WASM
+driver without reconnecting to the device.
+
+Unlike the live path, there is no BleEngine pre-routing. `processFromRaw()` calls
+`MetricRouter.routeAll()` directly inside the write transaction, which routes the full
+set of parsed readings in a single pass: dedicated types to their typed tables,
+everything else to `metric_readings_staging`.
+
+`SleepStagePromoter.promote()` and device metadata updates run afterward, identical to
+the live path.
+
+Raw payloads are written to `raw_device_data` on packet arrival — not at the end of the
+sync — and retained for 7 days. Reprocessing is unavailable after that window.
+
+#### Common to both paths
+
+- A `SyncSession` row is created (or updated) with status `IN_PROGRESS` at the start
+  and resolved to `SUCCESS`, `PARTIAL`, or `FAILED` at the end
+- All readings, sleep sessions, and activities are validated before any write occurs
+- Sleep sessions are merged when multiple sessions share the same driver and calendar date
 
 Validation rules applied to every **metric reading**:
 
@@ -277,7 +340,7 @@ readings may be misattributed if the device clock is wrong.
 Given a correct UTC `recordedAtMs`, the calendar date a reading belongs to is
 determined as follows.
 
-**Point-in-time metrics** (HR, HRV, RHR, SPO2, RESPIRATORY_RATE,
+**Point-in-time metrics** (HR, HRV, RHR, SPO2, RESPIRATION,
 SKIN_TEMP, BODY_TEMP, TEMP_DEVIATION, VO2_MAX)
 
 The calendar date is the UTC date of `recordedAtMs`. A reading at
@@ -307,7 +370,7 @@ later that day, the updated total will replace the partial via insert-or-replace
 
 **BATTERY**
 
-BATTERY is a special case. It is not stored in `metric_readings` — it is written
+BATTERY is a special case. It is not stored in `metric_readings_staging` — it is written
 directly to the device record as the last known battery percentage and displayed in
 the Devices screen. Emit it exactly as you would a point-in-time metric; the app
 routes it automatically. Date attribution rules do not apply to BATTERY.
@@ -403,6 +466,16 @@ re-runs all stored raw BLE payloads through the current driver using insert-or-r
 This is the correct path for fixing historical records after a driver update. Raw data
 is retained for 7 days — corrections beyond that window require the device to resync
 naturally as new days accumulate.
+
+> **Note — Reprocess routes through MetricRouter, not directly to staging:** Each
+> corrected reading produced during Reprocess passes through MetricRouter, exactly as
+> it does during a live sync. MetricRouter sends readings to the same destination
+> table the original reading went to: `HR`, `HRV`, `SPO2`, `RESPIRATION`,
+> `SKIN_TEMP`, `STEPS`, `ACTIVE_CALORIES`, `TOTAL_CALORIES`, `BLOOD_PRESSURE`, and
+> `GLUCOSE` are written to their own dedicated typed tables; all other metric types
+> go to `metric_readings_staging`. Insert-or-replace applies in both cases. A value
+> fix that affects any metric type — whether it lives in a dedicated table or in
+> staging — will be correctly applied by Reprocess.
 
 **What Reprocess can and cannot fix:**
 
@@ -532,8 +605,8 @@ HRV              Heart rate variability (ms)
 RHR              Resting heart rate (bpm)
 SPO2             Blood oxygen saturation (%)
 STEPS            Step count (steps) — daily total only, one per day
-BATTERY          Device battery level (%) — routed to device metadata, not metric_readings
-RESPIRATORY_RATE Breaths per minute
+BATTERY          Device battery level (%) — routed to device metadata, not metric_readings_staging
+RESPIRATION      Breaths per minute
 SKIN_TEMP        Skin temperature (°C)
 BODY_TEMP        Body temperature (°C)
 TEMP_DEVIATION   Temperature deviation from baseline (°C)
@@ -544,18 +617,56 @@ ELEVATION_LOSS   Elevation loss (m) — daily total only, one per day
 CALORIES         Total calories (kcal) — daily total only, one per day
 ACTIVE_CALORIES  Active calories (kcal) — daily total only, one per day
 BASAL_CALORIES   Basal metabolic calories (kcal) — daily total only, one per day
+TOTAL_CALORIES   Full-day calorie expenditure including resting metabolic rate (kcal) — daily total
+BLOOD_PRESSURE   Blood pressure reading — see contract note below
+GLUCOSE          Blood glucose level; unit described by the `unit` field (mmol or mg_dl)
 ```
 
-> **Sleep capability is not declared via `supportedMetrics`.** Sleep stage data lives
-> inside `SleepSession.stagesJson` — it is not emitted as a MetricReading and
-> `SLEEP_STAGE` should not appear in `supportedMetrics`. Sleep support is declared
-> by including `parseSleep` in `parsing.exports`. If your driver supports sleep, add
-> `parseSleep` to exports and omit `SLEEP_STAGE` from `supportedMetrics` entirely.
+> **Sleep: two valid reporting paths.** Choose based on how your device exposes sleep data:
+>
+> **Path A — end-of-night summary (`parseSleep` export):** The device delivers a complete
+> night of data at once (e.g. after the user wakes up and syncs). Export a `parseSleep`
+> function that returns a `SleepSession` object. Embedded stage breakdown goes in
+> `stagesJson`. Sleep support is declared by including `parseSleep` in `parsing.exports`.
+> Do **not** add `SLEEP_STAGE` to `supportedMetrics` when using this path.
+>
+> **Path B — stage-by-stage via `parseMetrics()`:** The device streams individual stage
+> transitions as the night progresses (e.g. via BLE notifications). Emit one
+> `MetricReading` per transition with `metricType = "SLEEP_STAGE"` and a `metaJson`
+> object containing:
+> ```json
+> { "stage": "DEEP" | "LIGHT" | "REM" | "AWAKE", "start_ms": <epoch ms>, "end_ms": <epoch ms> }
+> ```
+> Add `SLEEP_STAGE` to `supportedMetrics` when using this path. The app's
+> `SleepStagePromoter` automatically picks up these staged readings after each sync,
+> groups them by UTC calendar date, creates a `SleepSession` if one does not already
+> exist, and inserts `SleepStageEntity` records — no extra work is required beyond
+> emitting correctly formatted readings.
+
+> **`computed_by_version` — internal field, not set by drivers:** Some records the
+> app derives from your driver's raw output — HRV readings computed from heart-rate
+> data, and `SleepStageEntity` records promoted by `SleepStagePromoter` — carry a
+> `computed_by_version` column in the database. This field tracks which internal
+> algorithm version produced the derived value. It does not appear in any driver JSON
+> output schema and you never set it yourself. The app populates it automatically
+> whenever it generates a derived record from raw driver output.
 
 > **BATTERY routing:** BATTERY is written to the device record (last known battery
-> percentage visible in the Devices screen), not to `metric_readings`. Include it in
+> percentage visible in the Devices screen), not to `metric_readings_staging`. Include it in
 > `supportedMetrics` if your device reports battery level. The app routes it
 > automatically — no special handling is needed in your parser.
+
+> **BLOOD_PRESSURE contract:** `value` must hold the **systolic** reading as an integer
+> (mmHg). The **diastolic** reading must be present in `metaJson` as an integer under
+> the key `"diastolic"`:
+> ```json
+> { "metricType": "BLOOD_PRESSURE", "value": 120, "metaJson": "{\"diastolic\": 80}" }
+> ```
+> If `"diastolic"` is absent or `metaJson` is null, the router cannot construct a
+> `BloodPressureReading` and will silently fall back to the staging table
+> (`Timber.w("MetricRouter: BLOOD_PRESSURE reading missing diastolic…")`). The reading
+> is **not** surfaced as an error to the driver — it simply disappears from the UI.
+> Always include `"diastolic"` in `metaJson`.
 
 Do not include any proprietary manufacturer metrics (readiness scores, recovery
 scores, sleep scores, body battery, strain scores, or similar). The app stores
@@ -976,7 +1087,7 @@ is rejected entirely with an error message shown to the user.
 **Correctness under failure conditions**
 - [ ] Parser does not emit a sleep session when sleepEndMs is 0, missing, or ≤ sleepStartMs
 - [ ] If the device sends complete stage arrays in multiple packets, stages are not doubled in the merge
-- [ ] BATTERY readings are not expected in `metric_readings` — battery is routed to device metadata automatically
+- [ ] BATTERY readings are not expected in `metric_readings_staging` — battery is routed to device metadata automatically
 - [ ] Driver changelog documents any version that changes recordedAtMs values, so users know to use Reprocess
 
 ---

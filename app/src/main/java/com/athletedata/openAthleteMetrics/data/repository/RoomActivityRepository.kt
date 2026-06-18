@@ -4,6 +4,7 @@ import androidx.work.WorkManager
 import com.athletedata.openAthleteMetrics.data.db.ActivityDao
 import com.athletedata.openAthleteMetrics.data.db.toEntity
 import com.athletedata.openAthleteMetrics.data.db.toModel
+import com.athletedata.openAthleteMetrics.data.db.toUtcStartMs
 import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.DataSource
 import com.athletedata.openAthleteMetrics.data.model.UserCategory
@@ -15,7 +16,6 @@ import java.time.LocalDate
 import java.time.ZoneOffset
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.math.abs
 
 @Singleton
 class RoomActivityRepository @Inject constructor(
@@ -40,8 +40,7 @@ class RoomActivityRepository @Inject constructor(
         val window = 30_000L
         var skipped = 0
         for (activity in activities) {
-            val validated = fixDurationIfNeeded(activity)
-            val entity = validated.copy(source = DataSource.DEVICE).toEntity()
+            val entity = activity.copy(source = DataSource.DEVICE).toEntity()
             val driverId = entity.driverId
             val existing = if (driverId != null) {
                 dao.findNear(
@@ -68,19 +67,6 @@ class RoomActivityRepository @Inject constructor(
             }
         }
         return skipped
-    }
-
-    private fun fixDurationIfNeeded(activity: Activity): Activity {
-        val derivedMinutes = ((activity.endTime.toEpochMilli() - activity.startTime.toEpochMilli()) / 60_000L).toInt()
-        return if (abs(derivedMinutes - activity.durationMinutes) > 2) {
-            Timber.w(
-                "Activity duration mismatch: stored=%d derived=%d — using derived value",
-                activity.durationMinutes, derivedMinutes,
-            )
-            activity.copy(durationMinutes = derivedMinutes)
-        } else {
-            activity
-        }
     }
 
     override suspend fun replaceAllFromDevice(activities: List<Activity>): Int {
@@ -115,6 +101,3 @@ class RoomActivityRepository @Inject constructor(
             endMs = date.plusDays(1).toUtcStartMs(),
         ).map { it.toModel() }
 }
-
-private fun LocalDate.toUtcStartMs(): Long =
-    atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()

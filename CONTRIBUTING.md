@@ -26,7 +26,7 @@ See the driver authoring guide in the docs folder for the full guide. The short 
 
 - Drivers are standalone files with an embedded WASM parsing module
 - You don't need to modify the OAM app itself
-- Submit finished drivers to the [`Driver Builds/`](Driver Builds/) directory via pull request. Create a subdirectory named after your device (e.g. `Driver Builds/Polar H10/`) and place your manifest JSON file inside it.
+- Submit finished drivers to the [`Driver Builds/`](Driver%20Builds/) directory via pull request. Create a subdirectory named after your device (e.g. `Driver Builds/Polar H10/`) and place your manifest JSON file inside it.
 - Include a brief description of the device and how you tested it
 
 If you're in the process of reverse engineering a device and want input or help, open a Discussion rather than a PR — it's a good place to share findings and get eyes on protocol questions.

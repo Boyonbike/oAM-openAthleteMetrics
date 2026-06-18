@@ -62,6 +62,7 @@ data class DailySummaryEntity(
     val totalCalories: Double? = null,
     @ColumnInfo(name = "active_calories")
     val activeCalories: Double? = null,
+    /** Applies to any computed/derived artifact table, not only raw reading tables — the daily summary is itself a computed roll-up. */
     @ColumnInfo(name = "computed_by_version", defaultValue = "0")
     val computedByVersion: Int = 0,
     val source: DataSource,

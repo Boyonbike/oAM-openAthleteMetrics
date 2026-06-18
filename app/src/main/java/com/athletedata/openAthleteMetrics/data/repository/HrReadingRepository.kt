@@ -8,6 +8,7 @@ import java.time.LocalDate
 interface HrReadingRepository {
     suspend fun insert(entity: HrReadingEntity)
     suspend fun insertAll(entities: List<HrReadingEntity>)
+    suspend fun insertAllOrIgnore(entities: List<HrReadingEntity>): List<Long>
     suspend fun deleteBySource(source: DataSource)
     fun getReadingsInRange(startMs: Long, endMs: Long): Flow<List<HrReadingEntity>>
     suspend fun getReadingsInRangeOnce(startMs: Long, endMs: Long): List<HrReadingEntity>

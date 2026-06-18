@@ -6,6 +6,7 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.athletedata.openAthleteMetrics.data.model.QuestionResponse
+import java.time.LocalDate
 
 @Entity(
     tableName = "question_responses",
@@ -27,7 +28,7 @@ data class QuestionResponseEntity(
     val id: Long = 0,
     @ColumnInfo(name = "question_id")
     val questionId: Long,
-    val date: String,
+    val date: LocalDate,
     val value: String,
     @ColumnInfo(name = "recorded_at")
     val recordedAt: Long,

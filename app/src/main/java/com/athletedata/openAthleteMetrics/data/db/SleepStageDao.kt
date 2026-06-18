@@ -42,7 +42,4 @@ interface SleepStageDao {
 
     @Query("DELETE FROM sleep_stages WHERE session_id = :sessionId")
     suspend fun deleteForSession(sessionId: Long)
-
-    @Query("SELECT * FROM sleep_stages WHERE start_ms >= :startMs AND start_ms < :endMs ORDER BY start_ms ASC")
-    fun getStagesInRange(startMs: Long, endMs: Long): Flow<List<SleepStageEntity>>
 }

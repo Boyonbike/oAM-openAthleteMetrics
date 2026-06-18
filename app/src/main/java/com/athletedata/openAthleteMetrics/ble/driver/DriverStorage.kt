@@ -39,11 +39,17 @@ class DriverStorage @Inject constructor(
         }
     }
 
-    fun loadAllDrivers(): List<WasmDriverManifest> {
-        return driversDir.listFiles { f -> f.extension == "json" }
+    suspend fun loadAllDrivers(): List<WasmDriverManifest> = withContext(Dispatchers.IO) {
+        driversDir.listFiles { f -> f.extension == "json" }
             ?.mapNotNull { file ->
                 try {
-                    json.decodeFromString<WasmDriverManifest>(file.readText())
+                    val manifest = json.decodeFromString<WasmDriverManifest>(file.readText())
+                    val errors = validator.validate(manifest)
+                    if (errors.isNotEmpty()) {
+                        Timber.w("DriverStorage: skipping invalid driver ${file.name}: $errors")
+                        return@mapNotNull null
+                    }
+                    manifest
                 } catch (e: Exception) {
                     Timber.w(e, "DriverStorage: skipping unparseable driver ${file.name}")
                     null

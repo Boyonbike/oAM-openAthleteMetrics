@@ -9,8 +9,10 @@ import com.athletedata.openAthleteMetrics.data.model.SleepSession
 import com.dylibso.chicory.runtime.Instance
 import com.dylibso.chicory.wasm.ChicoryException
 import com.dylibso.chicory.wasm.Parser
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import org.json.JSONArray
 import timber.log.Timber
@@ -225,13 +227,13 @@ class WasmDriverEngine @Inject constructor() {
      * Returns null when outLen == 0 ("no data") or on any [ChicoryException] — after a trap
      * the instance is re-instantiated.
      */
-    private fun callParse(functionName: String, data: ByteArray): String? {
+    private suspend fun callParse(functionName: String, data: ByteArray): String? {
         val inst = instance ?: return null
         val manifest = loadedManifest ?: return null
         val isV2 = manifest.specVersion == "2"
         val inputOffset = if (isV2) IN_OFFSET_V2 else IN_OFFSET_V1
 
-        return try {
+        return withContext(Dispatchers.Default) { try {
             val memory = inst.memory()
 
             if (isV2) {
@@ -259,9 +261,12 @@ class WasmDriverEngine @Inject constructor() {
             runCatching {
                 val wasm = loadedManifest?.parsing as? ParsingConfig.WasmParsing
                 if (wasm != null) instance = instantiate(wasm.wasmBytes)
+            }.onFailure { e ->
+                Timber.e(e, "WasmDriverEngine: re-instantiation failed after trap — clearing dead instance")
+                instance = null
             }
             null
-        }
+        } }
     }
 
     private fun stageAwareEndInstant(reportedEndMs: Long, stagesJson: String?): Instant {

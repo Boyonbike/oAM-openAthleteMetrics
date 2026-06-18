@@ -15,7 +15,7 @@ interface SyncSessionDao {
     suspend fun insert(entity: SyncSessionEntity): Long
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun update(entity: SyncSessionEntity)
+    suspend fun upsert(entity: SyncSessionEntity)
 
     @Query("DELETE FROM sync_sessions WHERE device_id = :deviceId")
     suspend fun deleteForDevice(deviceId: Long)
@@ -26,8 +26,13 @@ interface SyncSessionDao {
     @Query("DELETE FROM sync_sessions")
     suspend fun deleteAll()
 
-    @Query("UPDATE sync_sessions SET status = 'FAILED' WHERE status = 'PARTIAL' AND ended_at IS NULL AND started_at < :cutoffMs")
-    suspend fun markOldPartialsAsFailed(cutoffMs: Long)
+    @Query("""
+        UPDATE sync_sessions
+        SET status = 'FAILED'
+        WHERE (status = 'IN_PROGRESS' OR (status = 'PARTIAL' AND ended_at IS NULL))
+          AND started_at < :cutoffMs
+    """)
+    suspend fun markOldInProgressAsFailed(cutoffMs: Long)
 
     // ── Reads ─────────────────────────────────────────────────────────────────
 
@@ -37,13 +42,13 @@ interface SyncSessionDao {
     @Query(
         """
         SELECT * FROM sync_sessions
-        WHERE status = 'PARTIAL'
+        WHERE status = 'IN_PROGRESS'
           AND ended_at IS NULL
           AND started_at >= :cutoffMs
         ORDER BY started_at DESC
         """
     )
-    suspend fun getRecentPartial(cutoffMs: Long): List<SyncSessionEntity>
+    suspend fun getRecentInProgress(cutoffMs: Long): List<SyncSessionEntity>
 
     @Query(
         """

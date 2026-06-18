@@ -14,6 +14,5 @@ interface SleepStageRepository {
     fun getStagesForSession(sessionId: Long): Flow<List<SleepStageEntity>>
     suspend fun getStagesForSessionOnce(sessionId: Long): List<SleepStageEntity>
     suspend fun deleteForSession(sessionId: Long)
-    fun getStagesInRange(startMs: Long, endMs: Long): Flow<List<SleepStageEntity>>
     suspend fun insertAllOrIgnore(entities: List<SleepStageEntity>): List<Long>
 }

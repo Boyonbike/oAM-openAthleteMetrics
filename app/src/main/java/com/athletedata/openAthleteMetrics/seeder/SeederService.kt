@@ -6,9 +6,6 @@ import com.athletedata.openAthleteMetrics.data.db.BloodPressureReadingEntity
 import com.athletedata.openAthleteMetrics.data.db.GlucoseReadingEntity
 import com.athletedata.openAthleteMetrics.data.db.HrReadingEntity
 import com.athletedata.openAthleteMetrics.data.db.HrvReadingEntity
-import com.athletedata.openAthleteMetrics.data.db.QuestionDefinitionDao
-import com.athletedata.openAthleteMetrics.data.db.QuestionDefinitionEntity
-import com.athletedata.openAthleteMetrics.data.db.QuestionResponseDao
 import com.athletedata.openAthleteMetrics.data.db.QuestionResponseEntity
 import com.athletedata.openAthleteMetrics.data.db.RespirationReadingEntity
 import com.athletedata.openAthleteMetrics.data.db.SkinTempReadingEntity
@@ -17,6 +14,7 @@ import com.athletedata.openAthleteMetrics.data.db.SpO2ReadingEntity
 import com.athletedata.openAthleteMetrics.data.db.StepsReadingEntity
 import com.athletedata.openAthleteMetrics.data.db.TotalCalorieReadingEntity
 import com.athletedata.openAthleteMetrics.data.model.Activity
+import com.athletedata.openAthleteMetrics.data.model.QuestionDefinition
 import com.athletedata.openAthleteMetrics.data.model.DailyContext
 import com.athletedata.openAthleteMetrics.data.model.DataSource
 import com.athletedata.openAthleteMetrics.data.model.SleepSession
@@ -35,9 +33,12 @@ import com.athletedata.openAthleteMetrics.data.repository.SleepRepository
 import com.athletedata.openAthleteMetrics.data.repository.SleepStageRepository
 import com.athletedata.openAthleteMetrics.data.repository.SpO2ReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.StepsReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.QuestionRepository
 import com.athletedata.openAthleteMetrics.data.repository.TotalCalorieReadingRepository
+import com.athletedata.openAthleteMetrics.data.db.toUtcStartMs
 import com.athletedata.openAthleteMetrics.worker.enqueueSummaryWorker
 import org.json.JSONObject
+import timber.log.Timber
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -63,13 +64,12 @@ class SeederService @Inject constructor(
     private val dailyContextRepository: DailyContextRepository,
     private val dailySummaryRepository: DailySummaryRepository,
     private val activityRepository: ActivityRepository,
-    private val questionDefinitionDao: QuestionDefinitionDao,
-    private val questionResponseDao: QuestionResponseDao,
+    private val questionRepository: QuestionRepository,
     private val workManager: WorkManager,
 ) {
-    suspend fun seedThirtyDays(onProgress: (Float) -> Unit) = seedDays(30, onProgress)
+    suspend fun seedThirtyDays(onProgress: (Float) -> Unit): List<LocalDate> = seedDays(30, onProgress)
 
-    suspend fun seedToday(onProgress: (Float) -> Unit) = seedDays(1, onProgress)
+    suspend fun seedToday(onProgress: (Float) -> Unit): List<LocalDate> = seedDays(1, onProgress)
 
     suspend fun clearSeederData(onProgress: (Float) -> Unit) {
         hrReadingRepository.deleteBySource(DataSource.SEEDER)
@@ -100,7 +100,7 @@ class SeederService @Inject constructor(
         onProgress(0.90f)
         dailySummaryRepository.deleteAll()
         onProgress(0.93f)
-        questionResponseDao.deleteAll()
+        questionRepository.deleteAllResponses()
         onProgress(0.97f)
         dailyContextRepository.deleteAll()
         onProgress(1.00f)
@@ -108,7 +108,7 @@ class SeederService @Inject constructor(
 
     // ── Core orchestration ────────────────────────────────────────────────────
 
-    private suspend fun seedDays(days: Int, onProgress: (Float) -> Unit) {
+    private suspend fun seedDays(days: Int, onProgress: (Float) -> Unit): List<LocalDate> {
         val rng   = Random(42L)
         val today = LocalDate.now()
         val dates = (days - 1 downTo 0).map { today.minusDays(it.toLong()) }
@@ -119,108 +119,76 @@ class SeederService @Inject constructor(
         val sleepMins   = computeSleepDurations(dates, rng)
         val weights     = computeWeightSeries(dates, rng)
 
-        val lifestyleDefinitions = questionDefinitionDao.getLifestyleOnce()
-
-        val hrEntities          = mutableListOf<HrReadingEntity>()
-        val hrvEntities         = mutableListOf<HrvReadingEntity>()
-        val spo2Entities        = mutableListOf<SpO2ReadingEntity>()
-        val skinTempEntities    = mutableListOf<SkinTempReadingEntity>()
-        val respirationEntities = mutableListOf<RespirationReadingEntity>()
-        val stepsEntities       = mutableListOf<StepsReadingEntity>()
-        val activeCalEntities   = mutableListOf<ActiveCalorieReadingEntity>()
-        val totalCalEntities    = mutableListOf<TotalCalorieReadingEntity>()
-        val bpEntities          = mutableListOf<BloodPressureReadingEntity>()
-        val glucoseEntities     = mutableListOf<GlucoseReadingEntity>()
-        val contexts            = mutableListOf<DailyContext>()
-        val responses           = mutableListOf<QuestionResponseEntity>()
-        val activities          = mutableListOf<Activity>()
-        val seededDates         = mutableListOf<LocalDate>()
+        val lifestyleDefinitions = questionRepository.getLifestyleQuestionsOnce()
+        val failedDates = mutableListOf<LocalDate>()
 
         for ((idx, date) in dates.withIndex()) {
-            val dayStartMs = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
-            val dayEndMs   = date.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+            val dayStartMs = date.toUtcStartMs()
+            val dayEndMs   = date.plusDays(1).toUtcStartMs()
 
             val alreadySeeded = hrReadingRepository.getReadingsInRangeOnce(dayStartMs, dayEndMs).isNotEmpty()
                 || sleepRepository.getSessionForDateOnce(date) != null
                 || dailyContextRepository.getForDateOnce(date) != null
 
             if (!alreadySeeded) {
-                val hasWorkout      = date in workoutDays
-                val workoutStartMin = if (hasWorkout) rng.nextInt(12 * 60) + 7 * 60 else -1
-                val workoutEndMin   = if (hasWorkout) workoutStartMin + rng.nextInt(31) + 30 else -1
+                try {
+                    val hasWorkout      = date in workoutDays
+                    val workoutStartMin = if (hasWorkout) rng.nextInt(12 * 60) + 7 * 60 else -1
+                    val workoutEndMin   = if (hasWorkout) workoutStartMin + rng.nextInt(31) + 30 else -1
 
-                hrEntities          += generateHr(date, workoutStartMin, workoutEndMin, rng)
-                hrvEntities         += generateHrv(date, rng)
-                spo2Entities        += generateSpo2(date, date in dipNights, rng)
-                skinTempEntities    += generateSkinTemp(date, rng)
-                respirationEntities += generateRespiration(date, workoutStartMin, workoutEndMin, rng)
-                stepsEntities       += generateSteps(date, hasWorkout, rng)
-                generateActiveCalories(date, hasWorkout, workoutStartMin, workoutEndMin, rng)
-                    ?.let { activeCalEntities += it }
-                totalCalEntities    += generateTotalCalories(date, hasWorkout, rng)
-                bpEntities          += generateBloodPressure(date, rng)
-                glucoseEntities     += generateGlucose(date, rng)
+                    hrReadingRepository.insertAll(generateHr(date, workoutStartMin, workoutEndMin, rng))
+                    hrvReadingRepository.insertAll(generateHrv(date, rng))
+                    spo2ReadingRepository.insertAll(generateSpo2(date, date in dipNights, rng))
+                    skinTempReadingRepository.insertAll(generateSkinTemp(date, rng))
+                    respirationReadingRepository.insertAll(generateRespiration(date, workoutStartMin, workoutEndMin, rng))
+                    stepsReadingRepository.insertAll(generateSteps(date, hasWorkout, rng))
+                    generateActiveCalories(date, hasWorkout, workoutStartMin, workoutEndMin, rng)
+                        ?.let { activeCalorieReadingRepository.insertAll(listOf(it)) }
+                    totalCalorieReadingRepository.insertAll(listOf(generateTotalCalories(date, hasWorkout, rng)))
+                    bloodPressureReadingRepository.insertAll(generateBloodPressure(date, rng))
+                    glucoseReadingRepository.insertAll(generateGlucose(date, rng))
 
-                val weeklyAdj  = weeklyHrvAdjustment(date)
-                val morningHrv = (60.0 + weeklyAdj + rng.nextGaussian() * 5.0).coerceIn(20.0, 100.0)
+                    val weeklyAdj  = weeklyHrvAdjustment(date)
+                    val morningHrv = (60.0 + weeklyAdj + rng.nextGaussian() * 5.0).coerceIn(20.0, 100.0)
 
-                contexts += generateDailyContext(
-                    date, date in illnessDays, weights.getValue(date),
-                    sleepMins.getValue(date), morningHrv, rng,
-                )
-                if (lifestyleDefinitions.isNotEmpty()) {
-                    responses += generateQuestionResponses(
-                        date, morningHrv, sleepMins.getValue(date), rng, lifestyleDefinitions,
+                    val durationMins = sleepMins.getValue(date)
+                    val wakeHour  = rng.nextInt(3) + 6
+                    val endMs     = date.atTime(wakeHour, 0).toInstant(ZoneOffset.UTC).toEpochMilli()
+                    val startMs   = endMs - durationMins * 60_000L
+                    val session   = SleepSession(
+                        date            = date,
+                        sleepStartMs    = Instant.ofEpochMilli(startMs),
+                        sleepEndMs      = Instant.ofEpochMilli(endMs),
+                        durationMinutes = durationMins,
+                        source          = DataSource.SEEDER,
                     )
+                    sleepRepository.insert(session)
+                    val inserted = sleepRepository.getSessionForDateOnce(date)
+                    if (inserted != null) {
+                        sleepStageRepository.insertAll(buildSleepStages(inserted.id, startMs, endMs, rng))
+                    }
+
+                    dailyContextRepository.upsert(generateDailyContext(
+                        date, date in illnessDays, weights.getValue(date),
+                        durationMins, morningHrv, rng,
+                    ))
+                    if (lifestyleDefinitions.isNotEmpty()) {
+                        questionRepository.upsertAllResponses(generateQuestionResponses(
+                            date, morningHrv, durationMins, rng, lifestyleDefinitions,
+                        ))
+                    }
+                    activityRepository.insertAll(listOf(generateActivity(date, hasWorkout, rng)))
+
+                    enqueueSummaryWorker(date, workManager)
+                } catch (e: Exception) {
+                    Timber.e(e, "Seeding failed for date=$date, skipping")
+                    failedDates.add(date)
                 }
-                activities += generateActivity(date, hasWorkout, rng)
-                seededDates += date
             }
-            onProgress(idx.toFloat() / dates.size * 0.60f)
+            onProgress((idx + 1).toFloat() / dates.size)
         }
 
-        if (hrEntities.isNotEmpty())          hrReadingRepository.insertAll(hrEntities)
-        onProgress(0.65f)
-        if (hrvEntities.isNotEmpty())         hrvReadingRepository.insertAll(hrvEntities)
-        if (spo2Entities.isNotEmpty())        spo2ReadingRepository.insertAll(spo2Entities)
-        if (skinTempEntities.isNotEmpty())    skinTempReadingRepository.insertAll(skinTempEntities)
-        if (respirationEntities.isNotEmpty()) respirationReadingRepository.insertAll(respirationEntities)
-        if (stepsEntities.isNotEmpty())       stepsReadingRepository.insertAll(stepsEntities)
-        if (activeCalEntities.isNotEmpty())   activeCalorieReadingRepository.insertAll(activeCalEntities)
-        if (totalCalEntities.isNotEmpty())    totalCalorieReadingRepository.insertAll(totalCalEntities)
-        if (bpEntities.isNotEmpty())          bloodPressureReadingRepository.insertAll(bpEntities)
-        if (glucoseEntities.isNotEmpty())     glucoseReadingRepository.insertAll(glucoseEntities)
-        onProgress(0.75f)
-
-        for (date in seededDates) {
-            val durationMins = sleepMins.getValue(date)
-            val wakeHour  = rng.nextInt(3) + 6
-            val endMs     = date.atTime(wakeHour, 0).toInstant(ZoneOffset.UTC).toEpochMilli()
-            val startMs   = endMs - durationMins * 60_000L
-            val session   = SleepSession(
-                date            = date,
-                sleepStartMs    = Instant.ofEpochMilli(startMs),
-                sleepEndMs      = Instant.ofEpochMilli(endMs),
-                durationMinutes = durationMins,
-                source          = DataSource.SEEDER,
-            )
-            sleepRepository.insert(session)
-            val inserted = sleepRepository.getSessionForDateOnce(date)
-            if (inserted != null) {
-                sleepStageRepository.insertAll(buildSleepStages(inserted.id, startMs, endMs, rng))
-            }
-        }
-        onProgress(0.85f)
-
-        for (ctx in contexts) dailyContextRepository.upsert(ctx)
-        onProgress(0.90f)
-        if (responses.isNotEmpty()) questionResponseDao.upsertAll(responses)
-        onProgress(0.93f)
-        if (activities.isNotEmpty()) activityRepository.insertAll(activities)
-        onProgress(0.95f)
-
-        seededDates.forEach { enqueueSummaryWorker(it, workManager) }
-        onProgress(1.00f)
+        return failedDates
     }
 
     // ── Schedule pre-computation ──────────────────────────────────────────────
@@ -281,7 +249,7 @@ class SeederService @Inject constructor(
         workoutEndMin: Int,
         rng: Random,
     ): List<HrReadingEntity> {
-        val dayStartMs = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val dayStartMs = date.toUtcStartMs()
         val now        = Instant.now()
         val hasWorkout = workoutStartMin >= 0
 
@@ -306,7 +274,7 @@ class SeederService @Inject constructor(
     // ── HRV ───────────────────────────────────────────────────────────────────
 
     private fun generateHrv(date: LocalDate, rng: Random): List<HrvReadingEntity> {
-        val dayStartMs = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val dayStartMs = date.toUtcStartMs()
         val weeklyAdj  = weeklyHrvAdjustment(date)
         val now        = Instant.now()
 
@@ -338,7 +306,7 @@ class SeederService @Inject constructor(
         isDipNight: Boolean,
         rng: Random,
     ): List<SpO2ReadingEntity> {
-        val dayStartMs = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val dayStartMs = date.toUtcStartMs()
         val now        = Instant.now()
 
         return listOf(0, 1, 2, 3, 4, 5, 6, 7, 22, 23).map { hour ->
@@ -359,7 +327,7 @@ class SeederService @Inject constructor(
     // ── Skin temperature ──────────────────────────────────────────────────────
 
     private fun generateSkinTemp(date: LocalDate, rng: Random): List<SkinTempReadingEntity> {
-        val dayStartMs = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val dayStartMs = date.toUtcStartMs()
         val now        = Instant.now()
         val count      = rng.nextInt(5) + 4  // 4–8 readings
 
@@ -391,7 +359,7 @@ class SeederService @Inject constructor(
         workoutEndMin: Int,
         rng: Random,
     ): List<RespirationReadingEntity> {
-        val dayStartMs = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val dayStartMs = date.toUtcStartMs()
         val now        = Instant.now()
         val hasWorkout = workoutStartMin >= 0
 
@@ -419,7 +387,7 @@ class SeederService @Inject constructor(
         hasWorkout: Boolean,
         rng: Random,
     ): List<StepsReadingEntity> {
-        val dayStartMs = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val dayStartMs = date.toUtcStartMs()
         val now        = Instant.now()
 
         val target = when {
@@ -461,7 +429,7 @@ class SeederService @Inject constructor(
         rng: Random,
     ): ActiveCalorieReadingEntity? {
         if (!hasWorkout) return null
-        val dayStartMs   = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val dayStartMs   = date.toUtcStartMs()
         val midpointMs   = dayStartMs + ((workoutStartMin + workoutEndMin) / 2) * 60_000L
         return ActiveCalorieReadingEntity(
             recordedAt = Instant.ofEpochMilli(midpointMs),
@@ -661,10 +629,9 @@ class SeederService @Inject constructor(
         morningHrv: Double,
         sleepMinutes: Int,
         rng: Random,
-        definitions: List<QuestionDefinitionEntity>,
+        definitions: List<QuestionDefinition>,
     ): List<QuestionResponseEntity> {
         val now        = Instant.now().toEpochMilli()
-        val dateStr    = date.toString()
         val hrvNorm    = (morningHrv - 20.0) / 80.0
         val baseStress = (1.0 - hrvNorm) * 4.0 + 1.0
 
@@ -687,7 +654,7 @@ class SeederService @Inject constructor(
             }
             QuestionResponseEntity(
                 questionId = def.id,
-                date       = dateStr,
+                date       = date,
                 value      = value.toString(),
                 recordedAt = now,
             )
@@ -697,7 +664,7 @@ class SeederService @Inject constructor(
     // ── Activity ──────────────────────────────────────────────────────────────
 
     private fun generateActivity(date: LocalDate, isWorkout: Boolean, rng: Random): Activity {
-        val dayStartMs = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val dayStartMs = date.toUtcStartMs()
         return if (isWorkout) {
             val deviceNames     = listOf("Outdoor Run", "Cycling", "Strength Training", "Swimming")
             val durationMinutes = rng.nextInt(31) + 30

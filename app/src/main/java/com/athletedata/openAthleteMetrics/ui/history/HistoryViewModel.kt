@@ -196,8 +196,7 @@ class HistoryViewModel @Inject constructor(
                     ?: return flowOf(emptyList())
                 questionRepo.getResponsesForRange(questionId, from, endDate).map { responses ->
                     responses.mapNotNull { resp ->
-                        val date = runCatching { LocalDate.parse(resp.date) }.getOrNull()
-                            ?: return@mapNotNull null
+                        val date = resp.date
                         val value = resp.value.toFloatOrNull()
                             ?: when {
                                 resp.value.equals("true", ignoreCase = true) -> 1f

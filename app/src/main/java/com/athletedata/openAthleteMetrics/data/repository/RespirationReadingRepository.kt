@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.Flow
 interface RespirationReadingRepository {
     suspend fun insert(entity: RespirationReadingEntity)
     suspend fun insertAll(entities: List<RespirationReadingEntity>)
+    suspend fun insertAllOrIgnore(entities: List<RespirationReadingEntity>): List<Long>
     suspend fun deleteBySource(source: DataSource)
     fun getReadingsInRange(startMs: Long, endMs: Long): Flow<List<RespirationReadingEntity>>
     suspend fun getReadingsInRangeOnce(startMs: Long, endMs: Long): List<RespirationReadingEntity>

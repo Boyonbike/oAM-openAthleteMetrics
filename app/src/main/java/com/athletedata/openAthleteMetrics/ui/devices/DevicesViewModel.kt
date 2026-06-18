@@ -106,7 +106,7 @@ class DevicesViewModel @Inject constructor(
         // Check for interrupted syncs that have raw data available for recovery.
         viewModelScope.launch(Dispatchers.IO) {
             val since = Instant.now().minus(24, ChronoUnit.HOURS)
-            _recoverySessions.value = syncSessionRepository.getRecentPartial(since)
+            _recoverySessions.value = syncSessionRepository.getRecentInProgress(since)
         }
     }
 
@@ -233,9 +233,9 @@ class DevicesViewModel @Inject constructor(
     }
 
     fun deleteDriver(driverId: String) {
-        driverRegistry.unregister(driverId)
-        refreshDrivers()
         viewModelScope.launch {
+            driverRegistry.unregister(driverId)
+            refreshDrivers()
             withContext(Dispatchers.IO) { driverStorage.deleteDriver(driverId) }
         }
     }

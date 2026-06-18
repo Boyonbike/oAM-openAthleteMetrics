@@ -2,12 +2,9 @@ package com.athletedata.openAthleteMetrics.di
 
 import android.content.Context
 import androidx.room.Room
-import androidx.room.RoomDatabase
-import androidx.sqlite.db.SupportSQLiteDatabase
 import com.athletedata.openAthleteMetrics.data.db.ActiveCalorieReadingDao
 import com.athletedata.openAthleteMetrics.data.db.ActivityDao
 import com.athletedata.openAthleteMetrics.data.db.AppDatabase
-import com.athletedata.openAthleteMetrics.data.db.AppDatabase.Companion.LIFESTYLE_SEEDS
 import com.athletedata.openAthleteMetrics.data.db.BloodPressureReadingDao
 import com.athletedata.openAthleteMetrics.data.db.DailyContextDao
 import com.athletedata.openAthleteMetrics.data.db.DailySummaryDao
@@ -164,25 +161,8 @@ abstract class DatabaseModule {
                 AppDatabase.MIGRATION_8_9,
                 AppDatabase.MIGRATION_9_10,
                 AppDatabase.MIGRATION_10_11,
+                AppDatabase.MIGRATION_11_12,
             )
-            .addCallback(object : RoomDatabase.Callback() {
-                override fun onOpen(db: SupportSQLiteDatabase) {
-                    super.onOpen(db)
-                    val cursor = db.query(
-                        "SELECT COUNT(*) FROM question_definitions WHERE category = 'LIFESTYLE'"
-                    )
-                    val count = if (cursor.moveToFirst()) cursor.getInt(0) else 0
-                    cursor.close()
-                    if (count == 0) {
-                        LIFESTYLE_SEEDS.forEach { seed ->
-                            db.execSQL(
-                                "INSERT OR IGNORE INTO question_definitions (name, type, category, is_visible, is_starred, sort_order) VALUES (?, ?, 'LIFESTYLE', 1, ?, ?)",
-                                arrayOf(seed.name, seed.type, if (seed.isStarred) 1 else 0, seed.sortOrder),
-                            )
-                        }
-                    }
-                }
-            })
             .build()
 
         @Provides @Singleton

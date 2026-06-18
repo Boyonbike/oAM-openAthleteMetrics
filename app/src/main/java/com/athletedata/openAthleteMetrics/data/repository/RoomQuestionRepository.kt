@@ -11,6 +11,7 @@ import com.athletedata.openAthleteMetrics.data.model.QuestionResponse
 import com.athletedata.openAthleteMetrics.data.model.QuestionType
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import timber.log.Timber
 import java.time.LocalDate
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -34,45 +35,80 @@ class RoomQuestionRepository @Inject constructor(
         definitionDao.getCustom().map { list -> list.map { it.toModel() } }
 
     override fun getResponsesForDate(date: LocalDate): Flow<List<QuestionResponse>> =
-        responseDao.getResponsesForDate(date.toString()).map { list -> list.map { it.toModel() } }
+        responseDao.getResponsesForDate(date).map { list -> list.map { it.toModel() } }
 
     override suspend fun upsertResponse(questionId: Long, date: LocalDate, value: String) {
-        responseDao.upsert(
-            QuestionResponseEntity(
-                questionId = questionId,
-                date = date.toString(),
-                value = value,
-                recordedAt = System.currentTimeMillis(),
+        try {
+            responseDao.upsert(
+                QuestionResponseEntity(
+                    questionId = questionId,
+                    date = date,
+                    value = value,
+                    recordedAt = System.currentTimeMillis(),
+                )
             )
-        )
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to upsert question response")
+            throw e
+        }
     }
 
     override suspend fun toggleVisibility(questionId: Long, currentlyVisible: Boolean) {
-        if (currentlyVisible) {
-            definitionDao.hideAndUnstar(questionId)
-        } else {
-            definitionDao.show(questionId)
+        try {
+            if (currentlyVisible) {
+                definitionDao.hideAndUnstar(questionId)
+            } else {
+                definitionDao.show(questionId)
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to toggle question visibility")
+            throw e
         }
     }
 
     override suspend fun toggleStar(questionId: Long, currentlyStarred: Boolean) {
-        definitionDao.setStar(questionId, !currentlyStarred)
+        try {
+            definitionDao.setStar(questionId, !currentlyStarred)
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to toggle question star")
+            throw e
+        }
     }
 
     override suspend fun reorderQuestions(updates: List<Pair<Long, Int>>) {
-        updates.forEach { (id, order) -> definitionDao.updateSortOrder(id, order) }
+        try {
+            updates.forEach { (id, order) -> definitionDao.updateSortOrder(id, order) }
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to reorder questions")
+            throw e
+        }
     }
 
     override suspend fun deleteCustomQuestion(questionId: Long) {
-        definitionDao.deleteById(questionId)
+        try {
+            definitionDao.deleteById(questionId)
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to delete custom question")
+            throw e
+        }
     }
 
     override suspend fun updateCustomQuestion(id: Long, name: String, type: QuestionType) {
-        definitionDao.updateNameAndType(id, name, type.name)
+        try {
+            definitionDao.updateNameAndType(id, name, type.name)
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to update custom question")
+            throw e
+        }
     }
 
     override suspend fun clearResponse(questionId: Long, date: LocalDate) {
-        responseDao.deleteResponse(questionId, date.toString())
+        try {
+            responseDao.deleteResponse(questionId, date)
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to clear question response")
+            throw e
+        }
     }
 
     override fun getResponsesForRange(
@@ -80,19 +116,45 @@ class RoomQuestionRepository @Inject constructor(
         from: LocalDate,
         to: LocalDate,
     ): Flow<List<QuestionResponse>> =
-        responseDao.getResponsesForRange(questionId, from.toString(), to.toString())
+        responseDao.getResponsesForRange(questionId, from, to)
             .map { list -> list.map { it.toModel() } }
 
     override suspend fun addCustomQuestion(name: String, type: QuestionType): Long {
-        val nextOrder = (definitionDao.maxCustomSortOrder() ?: 0) + 1
-        return definitionDao.insert(
-            QuestionDefinitionEntity(
-                name = name,
-                type = type.name,
-                category = QuestionCategory.CUSTOM.name,
-                isVisible = true,
-                sortOrder = nextOrder,
+        return try {
+            val nextOrder = (definitionDao.maxCustomSortOrder() ?: 0) + 1
+            definitionDao.insert(
+                QuestionDefinitionEntity(
+                    name = name,
+                    type = type.name,
+                    category = QuestionCategory.CUSTOM.name,
+                    isVisible = true,
+                    sortOrder = nextOrder,
+                )
             )
-        )
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to add custom question")
+            throw e
+        }
+    }
+
+    override suspend fun getLifestyleQuestionsOnce(): List<QuestionDefinition> =
+        definitionDao.getLifestyleOnce().map { it.toModel() }
+
+    override suspend fun upsertAllResponses(entities: List<QuestionResponseEntity>) {
+        try {
+            responseDao.upsertAll(entities)
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to upsert question responses")
+            throw e
+        }
+    }
+
+    override suspend fun deleteAllResponses() {
+        try {
+            responseDao.deleteAll()
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to delete all question responses")
+            throw e
+        }
     }
 }

@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.Flow
 interface BloodPressureReadingRepository {
     suspend fun insert(entity: BloodPressureReadingEntity)
     suspend fun insertAll(entities: List<BloodPressureReadingEntity>)
+    suspend fun insertAllOrIgnore(entities: List<BloodPressureReadingEntity>): List<Long>
     suspend fun deleteBySource(source: DataSource)
     fun getReadingsInRange(startMs: Long, endMs: Long): Flow<List<BloodPressureReadingEntity>>
     suspend fun getReadingsInRangeOnce(startMs: Long, endMs: Long): List<BloodPressureReadingEntity>

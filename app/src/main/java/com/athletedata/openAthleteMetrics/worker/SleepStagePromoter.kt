@@ -53,13 +53,17 @@ class SleepStagePromoter @Inject constructor(
 
         val byDate = mutableMapOf<LocalDate, MutableList<ParsedStage>>()
         for (row in pendingRows) {
+            val rowJson = JSONObject(row.metaJson ?: "{}")
+            if (!rowJson.optBoolean("pending_sleep_stage", false)) {
+                Timber.w("Skipping staging row id=${row.id}: missing pending_sleep_stage flag in meta_json")
+                continue
+            }
             val parsed = runCatching {
-                val json = JSONObject(row.metaJson ?: "{}")
                 ParsedStage(
                     rowId   = row.id,
-                    stage   = SleepStage.valueOf(json.getString("stage")),
-                    startMs = json.getLong("start_ms"),
-                    endMs   = json.getLong("end_ms"),
+                    stage   = SleepStage.valueOf(rowJson.getString("stage")),
+                    startMs = rowJson.getLong("start_ms"),
+                    endMs   = rowJson.getLong("end_ms"),
                 )
             }.getOrElse { e ->
                 val msg = "Skipping staging row id=${row.id}: malformed meta_json — ${e.message}"
@@ -98,7 +102,7 @@ class SleepStagePromoter @Inject constructor(
                     sessionsCreated++
 
 
-                    ● Good. Now // Re-query to obtain the auto-generated session id.
+                    // Re-query to obtain the auto-generated session id.
                     sleepRepository.getByDriverAndDate(driverId, date)!!.id
                 }
             }.getOrElse { e ->

@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import kotlinx.coroutines.flow.Flow
+import java.time.LocalDate
 
 @Dao
 interface QuestionResponseDao {
@@ -16,7 +17,7 @@ interface QuestionResponseDao {
     suspend fun upsertAll(entities: List<QuestionResponseEntity>)
 
     @Query("SELECT * FROM question_responses WHERE date = :date")
-    fun getResponsesForDate(date: String): Flow<List<QuestionResponseEntity>>
+    fun getResponsesForDate(date: LocalDate): Flow<List<QuestionResponseEntity>>
 
     @Query(
         """
@@ -25,10 +26,10 @@ interface QuestionResponseDao {
         LIMIT 1
         """
     )
-    suspend fun getResponseOnce(questionId: Long, date: String): QuestionResponseEntity?
+    suspend fun getResponseOnce(questionId: Long, date: LocalDate): QuestionResponseEntity?
 
     @Query("DELETE FROM question_responses WHERE question_id = :questionId AND date = :date")
-    suspend fun deleteResponse(questionId: Long, date: String)
+    suspend fun deleteResponse(questionId: Long, date: LocalDate)
 
     @Query("DELETE FROM question_responses")
     suspend fun deleteAll()
@@ -40,5 +41,5 @@ interface QuestionResponseDao {
         ORDER BY date ASC
         """
     )
-    fun getResponsesForRange(questionId: Long, from: String, to: String): Flow<List<QuestionResponseEntity>>
+    fun getResponsesForRange(questionId: Long, from: LocalDate, to: LocalDate): Flow<List<QuestionResponseEntity>>
 }

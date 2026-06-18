@@ -21,14 +21,14 @@ class AppStartupWorker @AssistedInject constructor(
 ) : CoroutineWorker(context, workerParams) {
 
     override suspend fun doWork(): Result = try {
-        val cutoff = Instant.now().minusSeconds(86400)
-        // Log each stale session before marking (getRecentPartial(EPOCH) returns all in-flight PARTIAL rows).
-        syncSessionRepository.getRecentPartial(Instant.EPOCH)
+        val cutoff = Instant.now().minusSeconds(86400)  // 24 h stale threshold
+        // Log each stale session before marking (getRecentInProgress(EPOCH) returns all in-flight rows).
+        syncSessionRepository.getRecentInProgress(Instant.EPOCH)
             .filter { it.startedAt < cutoff }
             .forEach { session ->
-                Timber.i("Expiring stale PARTIAL SyncSession ${session.id} from ${session.startedAt}")
+                Timber.i("Expiring stale IN_PROGRESS SyncSession ${session.id} from ${session.startedAt}")
             }
-        syncSessionRepository.markOldPartialsAsFailed(cutoff)
+        syncSessionRepository.markOldInProgressAsFailed(cutoff)
         Result.success()
     } catch (e: Exception) {
         Timber.e(e, "AppStartupWorker failed")

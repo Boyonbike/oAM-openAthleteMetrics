@@ -13,6 +13,7 @@ import com.athletedata.openAthleteMetrics.data.model.SyncSession
 import com.athletedata.openAthleteMetrics.data.model.SyncStatus
 import com.athletedata.openAthleteMetrics.data.repository.ActivityRepository
 import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
+import com.athletedata.openAthleteMetrics.domain.usecase.SyncActivityUseCase
 import com.athletedata.openAthleteMetrics.data.repository.MetricReadingStagingRepository
 import com.athletedata.openAthleteMetrics.data.repository.RawDeviceDataRepository
 import com.athletedata.openAthleteMetrics.data.repository.SleepRepository
@@ -24,6 +25,7 @@ import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import timber.log.Timber
 
@@ -33,6 +35,7 @@ class DeviceSyncProcessor @Inject constructor(
     private val metricRepository: MetricReadingStagingRepository,
     private val sleepRepository: SleepRepository,
     private val activityRepository: ActivityRepository,
+    private val syncActivityUseCase: SyncActivityUseCase,
     private val syncSessionRepository: SyncSessionRepository,
     private val rawDeviceDataRepository: RawDeviceDataRepository,
     private val deviceRepository: DeviceRepository,
@@ -44,8 +47,12 @@ class DeviceSyncProcessor @Inject constructor(
 
     private val pruneScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
+    fun shutdown() {
+        pruneScope.cancel()
+    }
+
     /**
-     * Creates (or finds) the device row and inserts a PARTIAL SyncSession sentinel.
+     * Creates (or finds) the device row and inserts an IN_PROGRESS SyncSession sentinel.
      * Called from BleEngine on the first assembled packet so raw writes have a session ID
      * before triggerSync() is ever invoked.
      */
@@ -60,7 +67,7 @@ class DeviceSyncProcessor @Inject constructor(
                 deviceId = device.id,
                 driverId = driverId,
                 startedAt = syncStartedAt,
-                status = SyncStatus.PARTIAL,
+                status = SyncStatus.IN_PROGRESS,
                 recordsImported = 0,
             )
         )
@@ -96,7 +103,7 @@ class DeviceSyncProcessor @Inject constructor(
                     deviceId = device.id,
                     driverId = result.driverId,
                     startedAt = result.syncStartedAt,
-                    status = SyncStatus.PARTIAL,
+                    status = SyncStatus.IN_PROGRESS,
                     recordsImported = 0,
                     packetsReceived = result.packetsReceived,
                     syncedBeforeQuiescence = result.syncedBeforeQuiescence,
@@ -121,13 +128,37 @@ class DeviceSyncProcessor @Inject constructor(
                 .filterIsInstance<ValidationResult.Accepted<Activity>>()
                 .map { it.item }
 
+            val dedicatedTypes = setOf(
+                MetricType.HR, MetricType.HRV, MetricType.SPO2,
+                MetricType.RESPIRATION, MetricType.SKIN_TEMP, MetricType.STEPS,
+                MetricType.ACTIVE_CALORIES, MetricType.TOTAL_CALORIES,
+                MetricType.BLOOD_PRESSURE, MetricType.GLUCOSE, MetricType.SLEEP_STAGE,
+            )
+            val misfiled = acceptedReadings.filter { it.metricType in dedicatedTypes }
+            if (misfiled.isNotEmpty()) {
+                Timber.e(
+                    "INVARIANT VIOLATION: acceptedReadings contains %d dedicated-type reading(s) " +
+                    "that should have been routed by MetricRouter before reaching process(). " +
+                    "Types: %s. These will be misfiled into the staging table.",
+                    misfiled.size,
+                    misfiled.map { it.metricType }.distinct(),
+                )
+            }
+
             // c-f. Persist accepted data and raw payloads atomically.
             val mergedSessions = buildMergedSessions(acceptedSessions)
             val (deviceInsert, activitiesSkipped) =
                 appDatabase.withTransaction {
+                    // INVARIANT: acceptedReadings here must contain only non-dedicated
+                    // MetricTypes. Dedicated types (HR, HRV, SPO2, etc.) are routed to their
+                    // typed tables by BleEngine.handleNotification() -> MetricRouter.route()
+                    // BEFORE reaching pendingMetrics. If this function is ever called with
+                    // unrouted dedicated-type readings, they will be silently misfiled into
+                    // the staging table. Do not remove this comment without addressing that
+                    // risk.
                     val rs = metricRepository.insertAllFromDevice(acceptedReadings)
                     mergedSessions.forEach { sleepRepository.insertOrReplace(it) }
-                    val as_ = activityRepository.insertAllFromDevice(acceptedActivities)
+                    val as_ = syncActivityUseCase.execute(acceptedActivities)
                     // rawPayloads is empty when packets were persisted on arrival (Fix 18);
                     // non-empty only on the legacy path where BleEngine held them in memory.
                     rawDeviceDataRepository.insertAll(result.rawPayloads, syncSessionId)
@@ -173,6 +204,12 @@ class DeviceSyncProcessor @Inject constructor(
                     packetsReceived = result.packetsReceived,
                     syncedBeforeQuiescence = result.syncedBeforeQuiescence,
                 )
+            )
+
+            sleepStagePromoter.promote(
+                driverId = result.driverId,
+                syncWindowStartMs = result.syncStartedAt.toEpochMilli(),
+                syncWindowEndMs = result.syncEndedAt.toEpochMilli(),
             )
 
             schedulePrune()
@@ -256,116 +293,138 @@ class DeviceSyncProcessor @Inject constructor(
         val rawPayloads = rawDeviceDataRepository.getForSession(sessionId)
         Timber.i("processFromRaw: replaying ${rawPayloads.size} packets for session $sessionId via driver ${session.driverId}")
 
-        val allMetrics = mutableListOf<MetricReading>()
-        val allSleep = mutableListOf<SleepSession>()
-        val allActivities = mutableListOf<Activity>()
-        for (payload in rawPayloads) {
-            allMetrics += driverRegistry.parseMetrics(manifest, payload.characteristicUuid, payload.payload)
-            driverRegistry.parseSleep(manifest, payload.characteristicUuid, payload.payload)
-                ?.let { allSleep += it }
-            driverRegistry.parseActivity(manifest, payload.characteristicUuid, payload.payload)
-                ?.let { allActivities += it }
-        }
-
-        val readingResults = validator.validateReadings(allMetrics)
-        val sessionResults = validator.validateSessions(allSleep)
-        val activityResults = validator.validateActivities(allActivities)
-
-        val acceptedReadings = readingResults
-            .filterIsInstance<ValidationResult.Accepted<MetricReading>>()
-            .map { it.item }
-            .filter { it.metricType != MetricType.BATTERY }
-        val acceptedSessions = sessionResults
-            .filterIsInstance<ValidationResult.Accepted<SleepSession>>()
-            .map { it.item }
-        val acceptedActivities = activityResults
-            .filterIsInstance<ValidationResult.Accepted<Activity>>()
-            .map { it.item }
-
-        val mergedSessions = buildMergedSessions(acceptedSessions)
-        val activitiesSkipped =
-            appDatabase.withTransaction {
-                metricRouter.routeAll(acceptedReadings)
-                mergedSessions.forEach { sleepRepository.insertOrReplace(it) }
-                activityRepository.insertAllFromDevice(acceptedActivities)
+        try {
+            val allMetrics = mutableListOf<MetricReading>()
+            val allSleep = mutableListOf<SleepSession>()
+            val allActivities = mutableListOf<Activity>()
+            for (payload in rawPayloads) {
+                allMetrics += driverRegistry.parseMetrics(manifest, payload.characteristicUuid, payload.payload)
+                driverRegistry.parseSleep(manifest, payload.characteristicUuid, payload.payload)
+                    ?.let { allSleep += it }
+                driverRegistry.parseActivity(manifest, payload.characteristicUuid, payload.payload)
+                    ?.let { allActivities += it }
             }
 
-        val healthReadingsTotal = allMetrics.count { it.metricType != MetricType.BATTERY }
-        val readingsAccepted = acceptedReadings.size
-        val readingsRejected = healthReadingsTotal - readingsAccepted
-        val sessionsAccepted = acceptedSessions.size
-        val sessionsInserted = mergedSessions.size
-        val sessionsRejected = allSleep.size - acceptedSessions.size
-        val activitiesAccepted = acceptedActivities.size
-        val activitiesInserted = activitiesAccepted - activitiesSkipped
-        val activitiesRejected = allActivities.size - activitiesAccepted
-        val totalAccepted = readingsAccepted + sessionsAccepted + activitiesAccepted
-        val totalRejected = readingsRejected + sessionsRejected + activitiesRejected
+            val readingResults = validator.validateReadings(allMetrics)
+            val sessionResults = validator.validateSessions(allSleep)
+            val activityResults = validator.validateActivities(allActivities)
 
-        val finalStatus = when {
-            totalRejected == 0 -> SyncStatus.SUCCESS
-            totalAccepted == 0 -> SyncStatus.FAILED
-            else -> SyncStatus.PARTIAL
-        }
+            val acceptedReadings = readingResults
+                .filterIsInstance<ValidationResult.Accepted<MetricReading>>()
+                .map { it.item }
+                .filter { it.metricType != MetricType.BATTERY }
+            val acceptedSessions = sessionResults
+                .filterIsInstance<ValidationResult.Accepted<SleepSession>>()
+                .map { it.item }
+            val acceptedActivities = activityResults
+                .filterIsInstance<ValidationResult.Accepted<Activity>>()
+                .map { it.item }
 
-        val genuinelyNew = readingsAccepted + sessionsInserted + activitiesInserted
+            val mergedSessions = buildMergedSessions(acceptedSessions)
+            val (routeResult, activitiesSkipped) =
+                appDatabase.withTransaction {
+                    val rr = metricRouter.routeAll(acceptedReadings)
+                    mergedSessions.forEach { sleepRepository.insertOrReplace(it) }
+                    Pair(rr, syncActivityUseCase.execute(acceptedActivities))
+                }
 
-        val syncEndedAt = Instant.now()
-        sleepStagePromoter.promote(
-            driverId = session.driverId,
-            syncWindowStartMs = session.startedAt.toEpochMilli(),
-            syncWindowEndMs = syncEndedAt.toEpochMilli(),
-        )
-        syncSessionRepository.update(
-            SyncSession(
-                id = sessionId,
-                deviceId = device.id,
+            val healthReadingsTotal = allMetrics.count { it.metricType != MetricType.BATTERY }
+            val readingsAccepted = acceptedReadings.size
+            val readingsRejected = healthReadingsTotal - readingsAccepted
+            val sessionsAccepted = acceptedSessions.size
+            val sessionsInserted = mergedSessions.size
+            val sessionsRejected = allSleep.size - acceptedSessions.size
+            val activitiesAccepted = acceptedActivities.size
+            val activitiesInserted = activitiesAccepted - activitiesSkipped
+            val activitiesRejected = allActivities.size - activitiesAccepted
+            val totalAccepted = readingsAccepted + sessionsAccepted + activitiesAccepted
+            val totalRejected = readingsRejected + sessionsRejected + activitiesRejected
+
+            val finalStatus = when {
+                totalRejected == 0 -> SyncStatus.SUCCESS
+                totalAccepted == 0 -> SyncStatus.FAILED
+                else -> SyncStatus.PARTIAL
+            }
+
+            val genuinelyNew = routeResult.newRecordsInserted + routeResult.accumulatorUpdates +
+                sessionsInserted + activitiesInserted
+
+            val syncEndedAt = Instant.now()
+            sleepStagePromoter.promote(
                 driverId = session.driverId,
-                startedAt = session.startedAt,
-                endedAt = syncEndedAt,
-                status = finalStatus,
-                recordsImported = genuinelyNew,
+                syncWindowStartMs = session.startedAt.toEpochMilli(),
+                syncWindowEndMs = syncEndedAt.toEpochMilli(),
+            )
+            syncSessionRepository.update(
+                SyncSession(
+                    id = sessionId,
+                    deviceId = device.id,
+                    driverId = session.driverId,
+                    startedAt = session.startedAt,
+                    endedAt = syncEndedAt,
+                    status = finalStatus,
+                    recordsImported = genuinelyNew,
+                    packetsReceived = session.packetsReceived,
+                    syncedBeforeQuiescence = session.syncedBeforeQuiescence,
+                )
+            )
+
+            schedulePrune()
+
+            deviceRepository.updateLastSync(device.bleAddress, syncEndedAt.toEpochMilli())
+            allMetrics.filter { it.metricType == MetricType.BATTERY }.lastOrNull()
+                ?.let { deviceRepository.updateLastBatteryPct(device.bleAddress, it.value.toInt()) }
+
+            val rejectionReasons = buildList {
+                readingResults.filterIsInstance<ValidationResult.Rejected<MetricReading>>()
+                    .forEach { add(it.reason) }
+                sessionResults.filterIsInstance<ValidationResult.Rejected<SleepSession>>()
+                    .forEach { add(it.reason) }
+                activityResults.filterIsInstance<ValidationResult.Rejected<Activity>>()
+                    .forEach { add(it.reason) }
+            }
+
+            Timber.i(
+                "processFromRaw session=$sessionId: newInserted=%d accumulatorUpdates=%d " +
+                "readingsSkipped=%d readingsRejected=%d | sessions inserted=%d | " +
+                "activities inserted=%d | status=%s",
+                routeResult.newRecordsInserted, routeResult.accumulatorUpdates,
+                readingsAccepted - routeResult.newRecordsInserted - routeResult.accumulatorUpdates,
+                readingsRejected, sessionsInserted, activitiesInserted, finalStatus,
+            )
+
+            return SyncSummary(
+                newRecordsInserted = routeResult.newRecordsInserted,
+                accumulatorUpdates = routeResult.accumulatorUpdates,
+                accumulatorNoChange = 0,
+                accumulatorGuarded = 0,
+                readingsSkipped = readingsAccepted - routeResult.newRecordsInserted - routeResult.accumulatorUpdates,
+                sessionsInserted = sessionsInserted,
+                activitiesInserted = activitiesInserted,
+                activitiesSkipped = activitiesSkipped,
+                rejectionReasons = rejectionReasons,
+                finalStatus = finalStatus,
                 packetsReceived = session.packetsReceived,
                 syncedBeforeQuiescence = session.syncedBeforeQuiescence,
             )
-        )
 
-        schedulePrune()
-
-        deviceRepository.updateLastSync(device.bleAddress, syncEndedAt.toEpochMilli())
-        allMetrics.filter { it.metricType == MetricType.BATTERY }.lastOrNull()
-            ?.let { deviceRepository.updateLastBatteryPct(device.bleAddress, it.value.toInt()) }
-
-        val rejectionReasons = buildList {
-            readingResults.filterIsInstance<ValidationResult.Rejected<MetricReading>>()
-                .forEach { add(it.reason) }
-            sessionResults.filterIsInstance<ValidationResult.Rejected<SleepSession>>()
-                .forEach { add(it.reason) }
-            activityResults.filterIsInstance<ValidationResult.Rejected<Activity>>()
-                .forEach { add(it.reason) }
+        } catch (e: Exception) {
+            runCatching {
+                syncSessionRepository.update(
+                    SyncSession(
+                        id = sessionId,
+                        deviceId = device.id,
+                        driverId = session.driverId,
+                        startedAt = session.startedAt,
+                        endedAt = Instant.now(),
+                        status = SyncStatus.FAILED,
+                        recordsImported = 0,
+                        errorMessage = e.message,
+                    )
+                )
+            }
+            throw e
         }
-
-        Timber.i(
-            "processFromRaw session=$sessionId: readingsAccepted=%d readingsRejected=%d | " +
-            "sessions inserted=%d | activities inserted=%d | status=%s",
-            readingsAccepted, readingsRejected,
-            sessionsInserted, activitiesInserted, finalStatus,
-        )
-
-        return SyncSummary(
-            newRecordsInserted = readingsAccepted,
-            accumulatorUpdates = 0,
-            accumulatorNoChange = 0,
-            accumulatorGuarded = 0,
-            readingsSkipped = 0,
-            sessionsInserted = sessionsInserted,
-            activitiesInserted = activitiesInserted,
-            activitiesSkipped = activitiesSkipped,
-            rejectionReasons = rejectionReasons,
-            finalStatus = finalStatus,
-            packetsReceived = session.packetsReceived,
-            syncedBeforeQuiescence = session.syncedBeforeQuiescence,
-        )
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.athletedata.openAthleteMetrics.ble.BleConnectionState
 import com.athletedata.openAthleteMetrics.ble.BleEngine
+import com.athletedata.openAthleteMetrics.ble.DiscoveredCandidate
 import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
 import com.athletedata.openAthleteMetrics.ble.driver.DriverStorage
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
@@ -84,6 +85,8 @@ class DevicesViewModel @Inject constructor(
             initialValue = BleConnectionState.Idle,
         )
 
+    val discoveredCandidates = bleEngine.discoveredCandidates
+
     private val _reprocessState = MutableStateFlow<ReprocessState>(ReprocessState.Idle)
     val reprocessState: StateFlow<ReprocessState> = _reprocessState.asStateFlow()
 
@@ -116,6 +119,10 @@ class DevicesViewModel @Inject constructor(
             current is BleConnectionState.GattCacheError) {
             bleEngine.startScan()
         }
+    }
+
+    fun onCandidateSelected(candidate: DiscoveredCandidate) {
+        bleEngine.connectToCandidate(candidate)
     }
 
     fun onDeviceCellTapped(device: Device) {

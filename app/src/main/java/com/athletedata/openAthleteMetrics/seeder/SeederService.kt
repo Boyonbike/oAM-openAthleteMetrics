@@ -35,13 +35,12 @@ import com.athletedata.openAthleteMetrics.data.repository.SpO2ReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.StepsReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.QuestionRepository
 import com.athletedata.openAthleteMetrics.data.repository.TotalCalorieReadingRepository
-import com.athletedata.openAthleteMetrics.data.db.toUtcStartMs
 import com.athletedata.openAthleteMetrics.worker.enqueueSummaryWorker
 import org.json.JSONObject
 import timber.log.Timber
 import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneOffset
+import java.time.ZoneId
 import java.util.Random
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -123,8 +122,8 @@ class SeederService @Inject constructor(
         val failedDates = mutableListOf<LocalDate>()
 
         for ((idx, date) in dates.withIndex()) {
-            val dayStartMs = date.toUtcStartMs()
-            val dayEndMs   = date.plusDays(1).toUtcStartMs()
+            val dayStartMs = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            val dayEndMs   = date.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
             val alreadySeeded = hrReadingRepository.getReadingsInRangeOnce(dayStartMs, dayEndMs).isNotEmpty()
                 || sleepRepository.getSessionForDateOnce(date) != null
@@ -153,7 +152,7 @@ class SeederService @Inject constructor(
 
                     val durationMins = sleepMins.getValue(date)
                     val wakeHour  = rng.nextInt(3) + 6
-                    val endMs     = date.atTime(wakeHour, 0).toInstant(ZoneOffset.UTC).toEpochMilli()
+                    val endMs     = date.atTime(wakeHour, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
                     val startMs   = endMs - durationMins * 60_000L
                     val session   = SleepSession(
                         date            = date,
@@ -249,7 +248,7 @@ class SeederService @Inject constructor(
         workoutEndMin: Int,
         rng: Random,
     ): List<HrReadingEntity> {
-        val dayStartMs = date.toUtcStartMs()
+        val dayStartMs = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
         val now        = Instant.now()
         val hasWorkout = workoutStartMin >= 0
 
@@ -274,7 +273,7 @@ class SeederService @Inject constructor(
     // ── HRV ───────────────────────────────────────────────────────────────────
 
     private fun generateHrv(date: LocalDate, rng: Random): List<HrvReadingEntity> {
-        val dayStartMs = date.toUtcStartMs()
+        val dayStartMs = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
         val weeklyAdj  = weeklyHrvAdjustment(date)
         val now        = Instant.now()
 
@@ -306,7 +305,7 @@ class SeederService @Inject constructor(
         isDipNight: Boolean,
         rng: Random,
     ): List<SpO2ReadingEntity> {
-        val dayStartMs = date.toUtcStartMs()
+        val dayStartMs = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
         val now        = Instant.now()
 
         return listOf(0, 1, 2, 3, 4, 5, 6, 7, 22, 23).map { hour ->
@@ -327,7 +326,7 @@ class SeederService @Inject constructor(
     // ── Skin temperature ──────────────────────────────────────────────────────
 
     private fun generateSkinTemp(date: LocalDate, rng: Random): List<SkinTempReadingEntity> {
-        val dayStartMs = date.toUtcStartMs()
+        val dayStartMs = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
         val now        = Instant.now()
         val count      = rng.nextInt(5) + 4  // 4–8 readings
 
@@ -359,7 +358,7 @@ class SeederService @Inject constructor(
         workoutEndMin: Int,
         rng: Random,
     ): List<RespirationReadingEntity> {
-        val dayStartMs = date.toUtcStartMs()
+        val dayStartMs = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
         val now        = Instant.now()
         val hasWorkout = workoutStartMin >= 0
 
@@ -387,7 +386,7 @@ class SeederService @Inject constructor(
         hasWorkout: Boolean,
         rng: Random,
     ): List<StepsReadingEntity> {
-        val dayStartMs = date.toUtcStartMs()
+        val dayStartMs = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
         val now        = Instant.now()
 
         val target = when {
@@ -429,7 +428,7 @@ class SeederService @Inject constructor(
         rng: Random,
     ): ActiveCalorieReadingEntity? {
         if (!hasWorkout) return null
-        val dayStartMs   = date.toUtcStartMs()
+        val dayStartMs   = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
         val midpointMs   = dayStartMs + ((workoutStartMin + workoutEndMin) / 2) * 60_000L
         return ActiveCalorieReadingEntity(
             recordedAt = Instant.ofEpochMilli(midpointMs),
@@ -452,7 +451,7 @@ class SeederService @Inject constructor(
             rng.nextDouble() * 600.0 + 1_800.0   // 1800–2400 on rest days
         }
         return TotalCalorieReadingEntity(
-            recordedAt = date.atTime(23, 59).toInstant(ZoneOffset.UTC),
+            recordedAt = date.atTime(23, 59).atZone(ZoneId.systemDefault()).toInstant(),
             createdAt  = Instant.now(),
             source     = DataSource.SEEDER,
             calories   = base,
@@ -462,7 +461,7 @@ class SeederService @Inject constructor(
     // ── Blood pressure & glucose ──────────────────────────────────────────────
 
     private fun generateBloodPressure(date: LocalDate, rng: Random): List<BloodPressureReadingEntity> {
-        val recordedAt = date.atTime(6 + rng.nextInt(3), rng.nextInt(60)).toInstant(ZoneOffset.UTC)
+        val recordedAt = date.atTime(6 + rng.nextInt(3), rng.nextInt(60)).atZone(ZoneId.systemDefault()).toInstant()
         val systolic   = rng.nextInt(21) + 110
         val diastolic  = ((systolic - 110) * 0.5 + 65 + rng.nextGaussian() * 2).roundToInt().coerceIn(65, 85)
         return listOf(
@@ -482,7 +481,7 @@ class SeederService @Inject constructor(
         val now = Instant.now()
         val windows = listOf(6, 8, 12, 18)
         return windows.mapIndexed { idx, startHour ->
-            val recordedAt = date.atTime(startHour, rng.nextInt(60)).toInstant(ZoneOffset.UTC)
+            val recordedAt = date.atTime(startHour, rng.nextInt(60)).atZone(ZoneId.systemDefault()).toInstant()
             val value = if (idx == 0) {
                 4.0 + rng.nextDouble() * 1.5   // fasting: 4.0–5.5 mmol
             } else {
@@ -664,7 +663,7 @@ class SeederService @Inject constructor(
     // ── Activity ──────────────────────────────────────────────────────────────
 
     private fun generateActivity(date: LocalDate, isWorkout: Boolean, rng: Random): Activity {
-        val dayStartMs = date.toUtcStartMs()
+        val dayStartMs = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
         return if (isWorkout) {
             val deviceNames     = listOf("Outdoor Run", "Cycling", "Strength Training", "Swimming")
             val durationMinutes = rng.nextInt(31) + 30

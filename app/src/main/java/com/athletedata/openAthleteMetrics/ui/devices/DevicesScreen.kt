@@ -66,6 +66,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.athletedata.openAthleteMetrics.ble.BleConnectionState
 import com.athletedata.openAthleteMetrics.ble.BlePermissionHelper
+import com.athletedata.openAthleteMetrics.ble.DiscoveredCandidate
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
 import com.athletedata.openAthleteMetrics.ble.rememberBlePermissionState
 import com.athletedata.openAthleteMetrics.data.model.Device
@@ -91,6 +92,7 @@ fun DevicesScreen(
     val reprocessState by viewModel.reprocessState.collectAsStateWithLifecycle()
     val reprocessingDeviceId by viewModel.reprocessingDeviceId.collectAsStateWithLifecycle()
     val recoverySessions by viewModel.recoverySessions.collectAsStateWithLifecycle()
+    val discoveredCandidates by viewModel.discoveredCandidates.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -306,21 +308,31 @@ fun DevicesScreen(
                                     onDisconnect = viewModel::onDisconnectTapped,
                                 )
                             }
-                            item {
-                                AddCell(
-                                    label = "Add Device",
-                                    sublabel = if (sortedDevices.isNotEmpty()) "Multi-device not yet supported" else null,
-                                ) {
-                                    when {
-                                        !BlePermissionHelper.allGranted(context) ->
-                                            blePermissionState.requestPermissions()
-                                        !BlePermissionHelper.isBluetoothEnabled(context) ->
-                                            coroutineScope.launch {
-                                                snackbarHostState.showSnackbar(
-                                                    "Please enable Bluetooth to add a device"
-                                                )
-                                            }
-                                        else -> viewModel.onAddDeviceTapped()
+                            items(discoveredCandidates, key = { it.address }) { candidate ->
+                                val hasDuplicateNames = discoveredCandidates.count { it.deviceName == candidate.deviceName } > 1
+                                CandidateCell(
+                                    candidate = candidate,
+                                    hasDuplicateNames = hasDuplicateNames,
+                                    onAdd = { viewModel.onCandidateSelected(candidate) },
+                                )
+                            }
+                            if (connectionState !is BleConnectionState.Scanning && discoveredCandidates.isEmpty()) {
+                                item {
+                                    AddCell(
+                                        label = "Add Device",
+                                        sublabel = if (sortedDevices.isNotEmpty()) "Multi-device not yet supported" else null,
+                                    ) {
+                                        when {
+                                            !BlePermissionHelper.allGranted(context) ->
+                                                blePermissionState.requestPermissions()
+                                            !BlePermissionHelper.isBluetoothEnabled(context) ->
+                                                coroutineScope.launch {
+                                                    snackbarHostState.showSnackbar(
+                                                        "Please enable Bluetooth to add a device"
+                                                    )
+                                                }
+                                            else -> viewModel.onAddDeviceTapped()
+                                        }
                                     }
                                 }
                             }
@@ -443,6 +455,63 @@ private fun AddCell(label: String, sublabel: String? = null, onClick: () -> Unit
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(horizontal = space8),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CandidateCell(candidate: DiscoveredCandidate, hasDuplicateNames: Boolean, onAdd: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .aspectRatio(1f)
+            .clickable(onClick = onAdd)
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                shape = RoundedCornerShape(CardRadius),
+            )
+            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(CardRadius))
+            .padding(space8),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                text = candidate.deviceName,
+                style = TypographyTitle,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(space4))
+            Text(
+                text = candidate.manifest.displayName,
+                style = TypographyMeta,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "···${candidate.address.takeLast(5)}",
+                style = TypographyMeta,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(
+                    alpha = if (hasDuplicateNames) 1f else 0.5f
+                ),
+            )
+            Spacer(modifier = Modifier.height(space8))
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = MaterialTheme.colorScheme.primary,
+            ) {
+                Text(
+                    text = "ADD",
+                    style = TypographyMeta,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                 )
             }
         }

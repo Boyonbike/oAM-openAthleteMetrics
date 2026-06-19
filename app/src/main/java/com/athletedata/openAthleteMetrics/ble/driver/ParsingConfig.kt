@@ -55,6 +55,8 @@ data class WasmExports(
     val parseSleep: String? = null,
     /** Optional: parses activity/workout data. */
     val parseActivity: String? = null,
+    /** Optional: dynamically builds sync commands at connection time. Null = driver uses static syncCommands only. */
+    val buildSyncCommands: String? = null,
 )
 
 /**

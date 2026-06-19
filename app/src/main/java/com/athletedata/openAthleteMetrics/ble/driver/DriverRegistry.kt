@@ -53,6 +53,11 @@ class DriverRegistry @Inject constructor(
         wasmEngine.startSync()
     }
 
+    suspend fun buildEffectiveSyncCommands(manifest: WasmDriverManifest): List<SyncCommand> {
+        ensureWasmLoaded(manifest)
+        return wasmEngine.buildEffectiveSyncCommands(manifest)
+    }
+
     fun allDrivers(): List<WasmDriverManifest> = _drivers.toList()
 
     fun isWasmLoaded(manifest: WasmDriverManifest): Boolean = wasmLoadedId == manifest.id
@@ -66,7 +71,11 @@ class DriverRegistry @Inject constructor(
                 deviceName.startsWith(ble.matchByName)
             val uuidMatch = ble.matchByServiceUuid != null &&
                 serviceUuids.any { it.equals(ble.matchByServiceUuid, ignoreCase = true) }
-            return nameMatch || uuidMatch
+            return if (ble.matchByName != null && ble.matchByServiceUuid != null) {
+                nameMatch && uuidMatch
+            } else {
+                nameMatch || uuidMatch
+            }
         }
         return _drivers.firstOrNull { it.ble.matchConfidence == MatchConfidence.CERTAIN && it.matches() }
             ?.let { it to MatchConfidence.CERTAIN }

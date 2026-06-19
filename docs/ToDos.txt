@@ -1,3 +1,4 @@
 1. Time handling for devices that request time. it may impact device readings
-2. select device being added while its looking. no auto selection
+
 3. sync popup build up and error handling
+4. multi driver handling

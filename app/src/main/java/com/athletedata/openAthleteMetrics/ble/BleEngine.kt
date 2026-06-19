@@ -36,6 +36,7 @@ import com.athletedata.openAthleteMetrics.data.repository.RawDeviceDataRepositor
 import com.athletedata.openAthleteMetrics.worker.enqueueSummaryWorker
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.LocalDate
+import java.time.ZoneId
 import java.time.ZoneOffset
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -57,6 +58,12 @@ import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
+data class DiscoveredCandidate(
+    val address: String,
+    val manifest: WasmDriverManifest,
+    val deviceName: String,
+)
+
 @Singleton
 class BleEngine @Inject constructor(
     @param:ApplicationContext val context: Context,
@@ -71,7 +78,7 @@ class BleEngine @Inject constructor(
     companion object {
         private const val CCCD_UUID = "00002902-0000-1000-8000-00805f9b34fb"
         private const val MTU_REQUEST = 512
-        private const val SCAN_TIMEOUT_MS = 30_000L
+        private const val SCAN_TIMEOUT_MS = 10_000L
         private const val MAX_RETRIES = 3
         private const val STREAM_QUIESCENCE_MS = 3_000L
         private const val SILENT_SYNC_TIMEOUT_MS = 15_000L
@@ -126,11 +133,18 @@ class BleEngine @Inject constructor(
     private var retryJob: Job? = null
     private val notifySetupQueue = ArrayDeque<String>()
     private var commandIndex = 0
+    private var effectiveSyncCommands: List<SyncCommand> = emptyList()
     private var inSyncCommandNotify = false
     private var userDisconnecting = false
 
     private val _connectionState = MutableStateFlow<BleConnectionState>(BleConnectionState.Idle)
     val connectionState: StateFlow<BleConnectionState> = _connectionState.asStateFlow()
+
+    private val _discoveredCandidates = MutableStateFlow<List<DiscoveredCandidate>>(emptyList())
+    val discoveredCandidates: StateFlow<List<DiscoveredCandidate>> = _discoveredCandidates.asStateFlow()
+    // Keyed by MAC address. All access is on the main thread (inside scope.launch) so no
+    // extra synchronisation is needed. Cleared on each new scan and on candidate selection.
+    private val candidateMap = LinkedHashMap<String, DiscoveredCandidate>()
 
     init {
         // Auto-sync whenever a fresh Connecting → Connected transition occurs,
@@ -189,8 +203,16 @@ class BleEngine @Inject constructor(
         }
     }
 
+    fun connectToCandidate(candidate: DiscoveredCandidate) {
+        candidateMap.clear()
+        _discoveredCandidates.value = emptyList()
+        stopScan()
+        connectToDevice(candidate.address, candidate.manifest)
+    }
+
     @SuppressLint("MissingPermission")
     fun startScan() {
+        Timber.d("BleEngine: startScan() called", Exception("startScan stack trace"))
         val current = _connectionState.value
         if (current !is BleConnectionState.Idle && current !is BleConnectionState.Error &&
             current !is BleConnectionState.GattCacheError) return
@@ -231,6 +253,8 @@ class BleEngine @Inject constructor(
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
 
+        candidateMap.clear()
+        _discoveredCandidates.value = emptyList()
         _connectionState.value = BleConnectionState.Scanning
         try {
             scanner.startScan(filters.takeIf { it.isNotEmpty() }, settings, scanCallback)
@@ -244,7 +268,9 @@ class BleEngine @Inject constructor(
             delay(SCAN_TIMEOUT_MS)
             if (_connectionState.value is BleConnectionState.Scanning) {
                 stopScan()
-                _connectionState.value = BleConnectionState.Error("No device found")
+                if (_discoveredCandidates.value.isEmpty()) {
+                    _connectionState.value = BleConnectionState.Error("No device found")
+                }
             }
         }
     }
@@ -449,15 +475,18 @@ class BleEngine @Inject constructor(
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             // Capture before launching — result object may be recycled by the stack
             val device = result.device
+            val address = device.address
             val name = device.name
             val serviceUuids = result.scanRecord?.serviceUuids?.map { it.uuid.toString() }.orEmpty()
+            Timber.d("BleEngine: onScanResult address=$address name=$name")
             scope.launch {
                 if (_connectionState.value !is BleConnectionState.Scanning) return@launch
                 val (manifest, confidence) = driverRegistry.resolve(name, serviceUuids)
                     ?: return@launch
                 Timber.d("BleEngine: matched driver ${manifest.id} for $name ($confidence)")
-                stopScan()
-                connect(device, manifest, resetRetries = true)
+                candidateMap[address] = DiscoveredCandidate(address, manifest, name ?: manifest.displayName)
+                Timber.d("BleEngine: candidateMap after insert = ${candidateMap.keys}")
+                _discoveredCandidates.value = candidateMap.values.toList()
             }
         }
 
@@ -509,6 +538,7 @@ class BleEngine @Inject constructor(
         negotiatedMtu = 23
         notifySetupQueue.clear()
         commandIndex = 0
+        effectiveSyncCommands = emptyList()
         inSyncCommandNotify = false
         userDisconnecting = false
         _connectionState.value = BleConnectionState.Connecting(device.address)
@@ -603,7 +633,7 @@ class BleEngine @Inject constructor(
                         commandIndex++
                         executeNextSyncCommand()
                     }
-                    else -> executeNextSyncCommand()
+                    else -> beginSyncCommandExecution()
                 }
             }
         }
@@ -661,8 +691,8 @@ class BleEngine @Inject constructor(
             if (enableNotification(uuid)) return  // waiting for onDescriptorWrite
             Timber.w("BleEngine: no CCCD for $uuid, skipping")
         }
-        // Queue exhausted — begin sync command execution
-        executeNextSyncCommand()
+        // Queue exhausted — build effective commands then begin execution.
+        scope.launch { beginSyncCommandExecution() }
     }
 
     @SuppressLint("MissingPermission")
@@ -686,11 +716,18 @@ class BleEngine @Inject constructor(
     // Sync command execution
     // -------------------------------------------------------------------------
 
+    /** Builds effective sync commands (static + any dynamic prepend) then starts execution. */
+    private suspend fun beginSyncCommandExecution() {
+        val manifest = activeManifest ?: return
+        effectiveSyncCommands = driverRegistry.buildEffectiveSyncCommands(manifest)
+        executeNextSyncCommand()
+    }
+
     @SuppressLint("MissingPermission")
     private fun executeNextSyncCommand() {
         val manifest = activeManifest ?: return
         val address = activeDeviceAddress ?: return
-        val commands = manifest.syncCommands
+        val commands = effectiveSyncCommands.ifEmpty { manifest.syncCommands }
 
         if (commandIndex >= commands.size) {
             Timber.d("BleEngine: sync commands done, device ready")
@@ -836,7 +873,7 @@ class BleEngine @Inject constructor(
      */
     private suspend fun routeReading(reading: MetricReading) {
         metricRouter.route(reading)
-        val date = reading.recordedAt.atZone(ZoneOffset.UTC).toLocalDate()
+        val date = reading.recordedAt.atZone(ZoneId.systemDefault()).toLocalDate()
         synchronized(affectedDates) { affectedDates.add(date) }
     }
 

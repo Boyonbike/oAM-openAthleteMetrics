@@ -1,7 +1,7 @@
 {
   "id": "hume_band_j2208_v1",
   "displayName": "Hume Band J2208",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "specVersion": "2",
   "author": "Boyonabike",
   "supportedMetrics": [
@@ -16,10 +16,10 @@
   ],
   "ble": {
     "matchByName": "Hume Band 434B",
-    "matchByServiceUuid": "0000fff0-0000-1000-8000-00805f9b34fb",
+    "matchByServiceUuid": "0000180d-0000-1000-8000-00805f9b34fb",
     "matchConfidence": "CERTAIN",
     "services": [
-      "0000fff0-0000-1000-8000-00805f9b34fb"
+      "0000180d-0000-1000-8000-00805f9b34fb"
     ],
     "characteristics": {
       "notify": "0000fff7-0000-1000-8000-00805f9b34fb",

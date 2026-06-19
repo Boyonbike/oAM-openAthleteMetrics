@@ -7,6 +7,7 @@ import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.data.model.SleepSession
 import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import java.time.ZoneOffset
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -73,7 +74,7 @@ class SyncValidator @Inject constructor() {
                 Log.w(TAG, "Rejecting sleep session [$dateIso]: $reason")
                 ValidationResult.Rejected(session, reason)
             } else {
-                val expectedDate = session.sleepEndMs.atZone(ZoneOffset.UTC).toLocalDate()
+                val expectedDate = session.sleepEndMs.atZone(ZoneId.systemDefault()).toLocalDate()
                 val corrected = if (session.date != expectedDate) {
                     Log.w(TAG, "Correcting sleep session date from ${session.date} to $expectedDate (sleepEndMs=${session.sleepEndMs})")
                     session.copy(date = expectedDate)

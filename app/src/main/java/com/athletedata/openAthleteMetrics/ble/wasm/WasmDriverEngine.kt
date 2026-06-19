@@ -1,6 +1,7 @@
 package com.athletedata.openAthleteMetrics.ble.wasm
 
 import com.athletedata.openAthleteMetrics.ble.driver.ParsingConfig
+import com.athletedata.openAthleteMetrics.ble.driver.SyncCommand
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
 import com.athletedata.openAthleteMetrics.ble.driver.WasmExports
 import com.athletedata.openAthleteMetrics.data.model.Activity
@@ -266,6 +267,103 @@ class WasmDriverEngine @Inject constructor() {
         } }
     }
 
+    /**
+     * Builds the effective sync command list for [manifest].
+     *
+     * If the driver exports [WasmExports.buildSyncCommands], the WASM function is called and
+     * its output is prepended before the manifest's static [WasmDriverManifest.syncCommands].
+     * If the export is absent or the call fails, the static commands are returned unchanged.
+     *
+     * The WASM function receives a fresh metadata block at memory offset 0:
+     * ```
+     * Bytes 0–7:   currentTimeMs     — i64 LE — Instant.now().toEpochMilli() at call time
+     * Bytes 8–9:   utcOffsetMinutes  — i16 LE — ZoneId.systemDefault() offset at call time
+     * Bytes 10–15: reserved (zeroed)
+     * Offset 16+:  zeroed
+     * ```
+     * Values are captured freshly at call time — NOT from [syncStartMs] or
+     * [capturedUtcOffsetMinutes] — so DST transitions that occurred after connection are
+     * reflected correctly.
+     */
+    internal suspend fun buildEffectiveSyncCommands(manifest: WasmDriverManifest): List<SyncCommand> {
+        val wasm = manifest.parsing as? ParsingConfig.WasmParsing ?: return manifest.syncCommands
+        val exportName = wasm.exports.buildSyncCommands ?: return manifest.syncCommands
+
+        // Ensure WASM is loaded for this manifest (acquires + releases parseMutex).
+        parseMutex.withLock {
+            if (loadedManifest?.id != manifest.id) {
+                unload()
+                try {
+                    instance = instantiate(wasm.wasmBytes)
+                    loadedManifest = manifest
+                } catch (e: Exception) {
+                    Timber.w(e, "WasmDriverEngine: failed to load driver ${manifest.id} for buildSyncCommands")
+                    return manifest.syncCommands
+                }
+            }
+        }
+
+        // callBuildSyncCommands acquires parseMutex independently — no deadlock.
+        val dynamic = callBuildSyncCommands(exportName) ?: return manifest.syncCommands
+        return dynamic + manifest.syncCommands
+    }
+
+    /**
+     * Writes the command-build metadata block to WASM memory, calls [functionName], and
+     * parses the JSON result from [CMD_OUT_OFFSET] as a list of [SyncCommand.Write].
+     *
+     * ## Metadata block (offset 0, 16 bytes)
+     * Bytes 0–7:   currentTimeMs     — i64 LE — [Instant.now] at call time (NOT syncStartMs)
+     * Bytes 8–9:   utcOffsetMinutes  — i16 LE — system timezone offset at call time (NOT cached)
+     * Bytes 10–15: reserved (zeroed)
+     * Offset 16+:  zeroed (no characteristic bytes for command-build calls)
+     *
+     * The WASM function signature is `(func (result i32))` — no input params. It reads
+     * metadata from memory offset 0 and writes JSON at offset [CMD_OUT_OFFSET] (1024),
+     * returning the byte count written.
+     *
+     * Returns null on WASM trap (module is re-instantiated) or zero-length output.
+     *
+     * // TODO: No driver currently uses buildSyncCommands. This path has not been
+     * // exercised against a real device. Verify byte ordering and memory offset
+     * // conventions with the first driver that requires it.
+     */
+    private suspend fun callBuildSyncCommands(functionName: String): List<SyncCommand.Write>? =
+        parseMutex.withLock {
+            val inst = instance ?: return@withLock null
+            withContext(Dispatchers.Default) {
+                try {
+                    val currentTimeMs = Instant.now().toEpochMilli()
+                    val offsetMinutes = utcOffsetMinutes()
+
+                    val memory = inst.memory()
+                    memory.write(0, longToLeBytes(currentTimeMs))
+                    memory.write(8, shortToLeBytes(offsetMinutes))
+                    memory.write(10, ByteArray(6))                 // reserved, zeroed
+                    if (previousPacketSize > 0) {
+                        memory.write(IN_OFFSET_V2, ByteArray(previousPacketSize))  // clear stale input
+                    }
+
+                    val result = inst.export(functionName).apply()
+                    val outLen = result[0].toInt()
+                    if (outLen <= 0) return@withContext null
+
+                    val jsonStr = memory.readString(CMD_OUT_OFFSET, outLen)
+                    json.decodeFromString<List<SyncCommand.Write>>(jsonStr)
+                } catch (e: ChicoryException) {
+                    Timber.w(e, "WasmDriverEngine: ChicoryException in $functionName — re-instantiating")
+                    runCatching {
+                        val wasm = loadedManifest?.parsing as? ParsingConfig.WasmParsing
+                        if (wasm != null) instance = instantiate(wasm.wasmBytes)
+                    }.onFailure { ex ->
+                        Timber.e(ex, "WasmDriverEngine: re-instantiation failed after trap — clearing dead instance")
+                        instance = null
+                    }
+                    null
+                }
+            }
+        }
+
     private fun stageAwareEndInstant(reportedEndMs: Long, stagesJson: String?): Instant {
         if (stagesJson.isNullOrBlank()) return Instant.ofEpochMilli(reportedEndMs)
         val stageMaxEndMs = try {
@@ -275,10 +373,10 @@ class WasmDriverEngine @Inject constructor() {
         return Instant.ofEpochMilli(maxOf(reportedEndMs, stageMaxEndMs))
     }
 
-    private fun longToLeBytes(value: Long): ByteArray =
+    internal fun longToLeBytes(value: Long): ByteArray =
         ByteArray(8) { i -> (value shr (i * 8)).toByte() }
 
-    private fun shortToLeBytes(value: Short): ByteArray {
+    internal fun shortToLeBytes(value: Short): ByteArray {
         val v = value.toInt()
         return byteArrayOf((v and 0xFF).toByte(), ((v shr 8) and 0xFF).toByte())
     }
@@ -290,6 +388,7 @@ class WasmDriverEngine @Inject constructor() {
         private const val IN_OFFSET_V1 = 0   // legacy: spec v1 drivers read BLE bytes from offset 0
         private const val IN_OFFSET_V2 = 16  // spec v2: bytes 0–15 are the metadata header
         private const val OUT_OFFSET = 0x1000
+        private const val CMD_OUT_OFFSET = 0x400  // 1024 — output offset for buildSyncCommands
         private val json = Json { ignoreUnknownKeys = true }
     }
 }

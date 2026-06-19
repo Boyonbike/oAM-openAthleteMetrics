@@ -20,6 +20,7 @@ import com.athletedata.openAthleteMetrics.worker.SleepStagePromoter
 import com.athletedata.openAthleteMetrics.worker.enqueueSummaryWorker
 import timber.log.Timber
 import java.time.Instant
+import java.time.ZoneId
 import java.time.ZoneOffset
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -148,9 +149,9 @@ class DeviceReprocessor @Inject constructor(
             onProgress(0.95f)
 
             val metricDates = acceptedReadings
-                .map { it.recordedAt.atZone(ZoneOffset.UTC).toLocalDate() }.toSet()
+                .map { it.recordedAt.atZone(ZoneId.systemDefault()).toLocalDate() }.toSet()
             val activityDates = acceptedActivities
-                .map { it.startTime.atZone(ZoneOffset.UTC).toLocalDate() }.toSet()
+                .map { it.startTime.atZone(ZoneId.systemDefault()).toLocalDate() }.toSet()
             val sleepDates = mergedSessions.map { it.date }.toSet()
             val allDates = metricDates + activityDates + sleepDates
 

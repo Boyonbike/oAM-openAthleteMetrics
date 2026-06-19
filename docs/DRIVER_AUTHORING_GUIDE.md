@@ -403,6 +403,22 @@ earlier than `sleepStartMs`. Signal no data by returning 0 from `parseSleep`. Th
 correct session will be emitted on the next morning sync, and the deduplication key
 (`driverId + dateIso`) will ensure it inserts cleanly.
 
+#### Sleep date assignment
+
+The `dateIso` field in `SleepWasmDto` is **ignored by the host**. Do not rely on it.
+
+The host always recomputes the sleep session date from `sleepEndMs` (the wake-up
+moment) using the device local timezone. The date filed in the database will be the
+local calendar date on which the user woke up, regardless of what `dateIso` contains.
+
+Your driver is responsible only for providing accurate `sleepStartMs` and `sleepEndMs`
+values as UTC epoch milliseconds. Use the `utcOffsetMinutes` value from the metadata
+block (bytes 8–9) to convert device local-time sleep boundaries to UTC if the device
+encodes them in local wall-clock time.
+
+You may populate `dateIso` for your own debugging purposes, but it has no effect on
+how the session is stored.
+
 **Activities**
 
 The date an activity belongs to is the UTC date of `startTimeMs`. Use the exact
@@ -695,7 +711,7 @@ raw sensor measurements only.
 |---|---|---|---|
 | `matchByName` | string | one of name/uuid required | Exact BLE advertised name or name prefix. |
 | `matchByServiceUuid` | string | one of name/uuid required | Full 128-bit UUID string advertised during scan. |
-| `matchConfidence` | string | yes | `"CERTAIN"` or `"PROBABLE"`. Use `CERTAIN` only when name + UUID together uniquely identify this device. Use `PROBABLE` if the name is a prefix or the UUID is shared with other devices from the same manufacturer. |
+| `matchConfidence` | string | yes | `"CERTAIN"` or `"PROBABLE"`. `CERTAIN` drivers are evaluated first — if any `CERTAIN` driver matches a scanned device, no `PROBABLE` driver is tried for that device. Use `CERTAIN` only when `matchByName` and `matchByServiceUuid` together are unique to your hardware family. Use `PROBABLE` if either field could match an unrelated device. Confidence is captured in the match log but is not currently surfaced in the UI — this may change in a future release. |
 | `services` | string[] | yes | Service UUIDs to discover after connecting. Must have at least one. |
 | `characteristics` | object | yes | Map of role names to characteristic UUIDs. Role names are driver-defined (e.g. `"notify"`, `"write"`). The app enables notifications on all characteristics listed here. |
 
@@ -748,6 +764,136 @@ enters Connected state and sync fires automatically.
 
 ---
 
+### Dynamic Sync Commands (`buildSyncCommands`)
+
+Some devices require values that cannot be known at driver-authoring time — for
+example, a Bluetooth Current Time Service (CTS) write (UUID 0x2A2B) that must carry
+the exact current time at the moment of connection. For these cases, declare a
+`buildSyncCommands` export in `parsing.exports`.
+
+**When to use `buildSyncCommands` vs static `syncCommands`:**
+
+- Use static `syncCommands` for all fixed byte sequences (command codes, enable flags, etc.).
+- Use `buildSyncCommands` only when the device requires a value that is unknowable until
+  sync time (e.g. current wall-clock time, connection counter, random nonce).
+
+**Manifest declaration:**
+
+Add `"buildSyncCommands"` to `parsing.exports`:
+
+```json
+"exports": {
+  "parseMetrics": "parse_metrics",
+  "buildSyncCommands": "build_sync_commands"
+}
+```
+
+**Function signature:**
+
+`(func (result i32))`
+
+No input parameters. The host writes a metadata block to memory offset 0 before
+calling this function (see layout below). The function writes a JSON array at memory
+offset **1024** and returns the byte count written. Return 0 to produce no dynamic
+commands (the static `syncCommands` will still run).
+
+**Metadata block written at offset 0 (16 bytes):**
+
+```
+Bytes 0–7:   currentTimeMs     — i64 little-endian — Instant.now().toEpochMilli() at call time
+Bytes 8–9:   utcOffsetMinutes  — i16 little-endian — ZoneId.systemDefault() offset at call time
+Bytes 10–15: reserved (zeroed)
+Offset 16+:  zeroed (no characteristic bytes for command-build calls)
+```
+
+> **Important:** These values are captured freshly at call time — not from the
+> `syncStartMs` cached at connection time. This ensures DST transitions that occurred
+> after connection are correctly reflected.
+
+**Output JSON format (at memory offset 1024):**
+
+```json
+[
+  {"characteristic": "currentTime", "bytes": "0x07 0xE8 0x06 0x13 0x0C 0x00 0x00"},
+  {"characteristic": "dataRequest", "bytes": "0x01 0x00"}
+]
+```
+
+Each object maps to a `SyncCommand.Write`. `characteristic` is a role name from
+`ble.characteristics`. `bytes` is a space-separated hex string (same format as static
+`syncCommands` WRITE entries). Dynamic commands are prepended before any static
+`syncCommands` — they execute first.
+
+---
+
+#### Canonical Rules for Time Writes
+
+**Device expects UTC epoch seconds:**
+Read `currentTimeMs` from bytes 0–7 of the metadata block and divide by 1000.
+Never use `syncStartMs` — it was captured at connection time and may be stale.
+
+**Device expects local wall-clock time:**
+Derive local time from `currentTimeMs` plus `utcOffsetMinutes` from bytes 8–9.
+Never substitute `ZoneOffset.UTC` and never use a hardcoded offset.
+
+> **WARNING — highest-risk failure in the system:**
+> Using `ZoneOffset.UTC` for a local-wall-clock device sets the device clock off by
+> the full UTC offset permanently. All subsequent readings will carry unrecoverable
+> wrong timestamps. There is no in-app recovery path for this failure.
+
+> **WARNING:**
+> Never use the `syncStartMs` value for time writes. It was captured at connection
+> time and may predate a DST transition. Always read current time from the
+> `currentTimeMs` field in the metadata block provided to `buildSyncCommands`.
+
+> **WARNING:**
+> `SleepWasmDto.dateIso` is ignored by the host. Do not rely on it. The host
+> recomputes the sleep date from `sleepEndMs` using the device local timezone.
+
+#### buildSyncCommands — time write rules (IMPORTANT)
+
+If your driver writes the current time to a device characteristic, follow these rules
+without exception. Getting this wrong corrupts the device clock permanently — all
+readings the device takes after a wrong time write carry unrecoverable wrong timestamps.
+
+**The metadata block for `buildSyncCommands` is different from the parse metadata block.**
+
+For `buildSyncCommands` calls:
+- Bytes 0–7 contain the current UTC epoch milliseconds at the moment the function is
+  called — not `syncStartMs`. Do not assume these are the same value.
+- Bytes 8–9 contain the current UTC offset in minutes, also captured at call time.
+
+**Rules:**
+
+1. If the device expects UTC epoch seconds:
+
+   ```
+   currentTimeS = readI64(memory, 0) / 1000
+   ```
+
+   Write `currentTimeS` as i32 or i64 little-endian as the device requires.
+
+2. If the device expects local wall-clock time (BLE DateTime characteristic or
+   vendor-packed format):
+
+   ```
+   currentUtcMs = readI64(memory, 0)
+   utcOffsetMs  = readI16(memory, 8) * 60_000
+   localTimeMs  = currentUtcMs + utcOffsetMs
+   ```
+
+   Decompose `localTimeMs` into year/month/day/hour/min/sec fields for the device.
+
+3. Never hardcode `ZoneOffset.UTC` or assume UTC = local. A device in India (UTC+5:30)
+   receiving a UTC time when it expects local time will have its clock set 5 hours
+   30 minutes behind reality. Every reading it takes after this will be wrong.
+
+4. Never use `syncStartMs` (bytes 0–7 of the parse metadata block) in a time write.
+   Use only the values provided in the `buildSyncCommands` metadata block, which are
+   captured freshly at execution time.
+
+---
+
 ### The `parsing` Block
 
 ```json
@@ -769,6 +915,7 @@ enters Connected state and sync fires automatically.
 | `exports.parseMetrics` | string | yes | Name of the exported WASM function that parses metric readings. |
 | `exports.parseSleep` | string | no | Name of the exported WASM function that parses sleep sessions. Omit if device has no sleep data. |
 | `exports.parseActivity` | string | no | Name of the exported WASM function that parses activities. Omit if device has no activity data. |
+| `exports.buildSyncCommands` | string | no | Name of the exported WASM function that builds dynamic sync commands. Omit if all sync commands are static. See [Dynamic Sync Commands](#dynamic-sync-commands-buildSyncCommands). |
 
 ---
 

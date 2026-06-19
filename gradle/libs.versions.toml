@@ -53,6 +53,7 @@ kotlinx-serialization   = "1.8.0"
 junit                   = "4.13.2"
 junitVersion            = "1.2.1"
 espressoCore            = "3.6.1"
+mockk                   = "1.13.12"
 
 
 [libraries]
@@ -101,6 +102,7 @@ androidx-hilt-compiler           = { group = "androidx.hilt", name = "hilt-compi
 # ── Coroutines ───────────────────────────────────────────────────────────────
 # -android includes the Android main-thread dispatcher; -core is a transitive dep.
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+kotlinx-coroutines-test    = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 
 # ── DataStore ────────────────────────────────────────────────────────────────
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
@@ -126,6 +128,7 @@ kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 junit                   = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit          = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core  = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
+mockk                   = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
 
 
 [plugins]

@@ -76,6 +76,7 @@ import com.patrykandpatrick.vico.core.cartesian.data.lineSeries
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
@@ -226,11 +227,11 @@ fun DashboardScreen(
     if (showDatePicker) {
         val datePickerState = rememberDatePickerState(
             initialSelectedDateMillis = uiState.date
-                .atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(),
+                .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli(),
             selectableDates = object : SelectableDates {
                 override fun isSelectableDate(utcTimeMillis: Long): Boolean {
                     val picked = Instant.ofEpochMilli(utcTimeMillis)
-                        .atZone(ZoneOffset.UTC).toLocalDate()
+                        .atZone(ZoneId.systemDefault()).toLocalDate()
                     return !picked.isAfter(today)
                 }
             },
@@ -241,7 +242,7 @@ fun DashboardScreen(
                 TextButton(onClick = {
                     datePickerState.selectedDateMillis?.let { ms ->
                         val picked = Instant.ofEpochMilli(ms)
-                            .atZone(ZoneOffset.UTC).toLocalDate()
+                            .atZone(ZoneId.systemDefault()).toLocalDate()
                         viewModel.setDate(picked)
                     }
                     showDatePicker = false

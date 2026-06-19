@@ -83,6 +83,7 @@ import com.patrykandpatrick.vico.core.cartesian.layer.CartesianLayerDimensions
 import com.patrykandpatrick.vico.core.cartesian.layer.LineCartesianLayer
 import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
@@ -612,11 +613,11 @@ private fun HistoryDatePickerDialog(
 ) {
     val datePickerState = rememberDatePickerState(
         initialSelectedDateMillis = currentDate
-            .atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(),
+            .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli(),
         selectableDates = object : SelectableDates {
             override fun isSelectableDate(utcTimeMillis: Long): Boolean {
                 val picked = Instant.ofEpochMilli(utcTimeMillis)
-                    .atZone(ZoneOffset.UTC).toLocalDate()
+                    .atZone(ZoneId.systemDefault()).toLocalDate()
                 return !picked.isAfter(today)
             }
         },
@@ -626,7 +627,7 @@ private fun HistoryDatePickerDialog(
         confirmButton = {
             TextButton(onClick = {
                 datePickerState.selectedDateMillis?.let { ms ->
-                    val picked = Instant.ofEpochMilli(ms).atZone(ZoneOffset.UTC).toLocalDate()
+                    val picked = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).toLocalDate()
                     onConfirm(picked)
                 } ?: onDismiss()
             }) { Text("OK") }

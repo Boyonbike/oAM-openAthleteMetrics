@@ -8,31 +8,25 @@ import com.athletedata.openAthleteMetrics.data.model.DataSource
 import kotlinx.coroutines.flow.Flow
 
 @Dao
-interface HrReadingDao {
+interface HrReadingDao : BaseReadingDao<HrReadingEntity> {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(entity: HrReadingEntity)
+    override suspend fun insert(entity: HrReadingEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertAll(entities: List<HrReadingEntity>)
+    override suspend fun insertAll(entities: List<HrReadingEntity>)
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun insertAllOrIgnore(entities: List<HrReadingEntity>): List<Long>
+    override suspend fun insertAllOrIgnore(entities: List<HrReadingEntity>): List<Long>
 
     @Query("DELETE FROM hr_readings WHERE source = :source")
-    suspend fun deleteBySource(source: DataSource)
+    override suspend fun deleteBySource(source: DataSource)
 
     @Query("DELETE FROM hr_readings")
-    suspend fun deleteAll()
+    override suspend fun deleteAll()
 
     @Query("SELECT * FROM hr_readings WHERE recorded_at >= :startMs AND recorded_at < :endMs ORDER BY recorded_at ASC")
-    fun getReadingsInRange(startMs: Long, endMs: Long): Flow<List<HrReadingEntity>>
-
-    @Query("SELECT * FROM hr_readings WHERE recorded_at >= :startMs AND recorded_at < :endMs ORDER BY recorded_at ASC")
-    suspend fun getReadingsInRangeOnce(startMs: Long, endMs: Long): List<HrReadingEntity>
-
-    @Query("SELECT * FROM hr_readings ORDER BY recorded_at DESC LIMIT 1")
-    fun getLatestReading(): Flow<HrReadingEntity?>
+    override suspend fun getReadingsInRangeOnce(startMs: Long, endMs: Long): List<HrReadingEntity>
 
     @Query(
         "SELECT COUNT(*) FROM hr_readings " +

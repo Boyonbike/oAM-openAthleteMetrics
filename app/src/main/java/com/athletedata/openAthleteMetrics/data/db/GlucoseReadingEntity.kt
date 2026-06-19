@@ -5,6 +5,7 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.athletedata.openAthleteMetrics.data.model.DataSource
+import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import java.time.Instant
 
 @Entity(
@@ -27,4 +28,14 @@ data class GlucoseReadingEntity(
     val value: Double,
     /** Either "mmol" or "mg_dl". */
     val unit: String,
+)
+
+// ── Mapper ───────────────────────────────────────────────────────────────────
+
+fun MetricReading.toGlucoseEntity() = GlucoseReadingEntity(
+    recordedAt = recordedAt, createdAt = createdAt,
+    source = source, driverId = driverId,
+    confidence = confidence, metaJson = metaJson,
+    value = value,
+    unit = unit,
 )

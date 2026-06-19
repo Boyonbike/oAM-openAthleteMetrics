@@ -5,6 +5,7 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.athletedata.openAthleteMetrics.data.model.DataSource
+import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import java.time.Instant
 
 @Entity(
@@ -25,4 +26,13 @@ data class HrReadingEntity(
     @ColumnInfo(name = "meta_json")
     val metaJson: String? = null,
     val bpm: Int,
+)
+
+// ── Mapper ───────────────────────────────────────────────────────────────────
+
+fun MetricReading.toHrEntity() = HrReadingEntity(
+    recordedAt = recordedAt, createdAt = createdAt,
+    source = source, driverId = driverId,
+    confidence = confidence, metaJson = metaJson,
+    bpm = value.toInt(),
 )

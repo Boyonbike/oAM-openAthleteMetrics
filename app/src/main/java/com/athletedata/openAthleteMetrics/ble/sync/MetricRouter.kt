@@ -1,15 +1,16 @@
 package com.athletedata.openAthleteMetrics.ble.sync
 
-import com.athletedata.openAthleteMetrics.data.db.ActiveCalorieReadingEntity
 import com.athletedata.openAthleteMetrics.data.db.BloodPressureReadingEntity
-import com.athletedata.openAthleteMetrics.data.db.GlucoseReadingEntity
-import com.athletedata.openAthleteMetrics.data.db.HrReadingEntity
-import com.athletedata.openAthleteMetrics.data.db.HrvReadingEntity
-import com.athletedata.openAthleteMetrics.data.db.RespirationReadingEntity
-import com.athletedata.openAthleteMetrics.data.db.SkinTempReadingEntity
-import com.athletedata.openAthleteMetrics.data.db.SpO2ReadingEntity
-import com.athletedata.openAthleteMetrics.data.db.StepsReadingEntity
-import com.athletedata.openAthleteMetrics.data.db.TotalCalorieReadingEntity
+import com.athletedata.openAthleteMetrics.data.db.toActiveCalorieEntity
+import com.athletedata.openAthleteMetrics.data.db.toBloodPressureEntityOrNull
+import com.athletedata.openAthleteMetrics.data.db.toGlucoseEntity
+import com.athletedata.openAthleteMetrics.data.db.toHrEntity
+import com.athletedata.openAthleteMetrics.data.db.toHrvEntity
+import com.athletedata.openAthleteMetrics.data.db.toRespirationEntity
+import com.athletedata.openAthleteMetrics.data.db.toSkinTempEntity
+import com.athletedata.openAthleteMetrics.data.db.toSpO2Entity
+import com.athletedata.openAthleteMetrics.data.db.toStepsEntity
+import com.athletedata.openAthleteMetrics.data.db.toTotalCalorieEntity
 import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.data.repository.ActiveCalorieReadingRepository
@@ -49,107 +50,25 @@ class MetricRouter @Inject constructor(
 ) {
     suspend fun route(reading: MetricReading) {
         when (reading.metricType) {
-            MetricType.HR -> hrReadingRepository.insert(
-                HrReadingEntity(
-                    recordedAt = reading.recordedAt, createdAt = reading.createdAt,
-                    source = reading.source, driverId = reading.driverId,
-                    confidence = reading.confidence, metaJson = reading.metaJson,
-                    bpm = reading.value.toInt(),
-                )
-            )
-            MetricType.HRV -> hrvReadingRepository.insert(
-                HrvReadingEntity(
-                    recordedAt = reading.recordedAt, createdAt = reading.createdAt,
-                    source = reading.source, driverId = reading.driverId,
-                    confidence = reading.confidence, metaJson = reading.metaJson,
-                    rmssdMs = reading.value,
-                    computedByVersion = 1,
-                )
-            )
-            MetricType.SPO2 -> spo2ReadingRepository.insert(
-                SpO2ReadingEntity(
-                    recordedAt = reading.recordedAt, createdAt = reading.createdAt,
-                    source = reading.source, driverId = reading.driverId,
-                    confidence = reading.confidence, metaJson = reading.metaJson,
-                    percentage = reading.value,
-                )
-            )
-            MetricType.RESPIRATION -> respirationReadingRepository.insert(
-                RespirationReadingEntity(
-                    recordedAt = reading.recordedAt, createdAt = reading.createdAt,
-                    source = reading.source, driverId = reading.driverId,
-                    confidence = reading.confidence, metaJson = reading.metaJson,
-                    breathsPerMinute = reading.value,
-                )
-            )
-            MetricType.SKIN_TEMP -> skinTempReadingRepository.insert(
-                SkinTempReadingEntity(
-                    recordedAt = reading.recordedAt, createdAt = reading.createdAt,
-                    source = reading.source, driverId = reading.driverId,
-                    confidence = reading.confidence, metaJson = reading.metaJson,
-                    celsius = reading.value,
-                )
-            )
-            MetricType.STEPS -> stepsReadingRepository.insert(
-                StepsReadingEntity(
-                    recordedAt = reading.recordedAt, createdAt = reading.createdAt,
-                    source = reading.source, driverId = reading.driverId,
-                    confidence = reading.confidence, metaJson = reading.metaJson,
-                    cumulativeSteps = reading.value.toInt(),
-                )
-            )
-            MetricType.ACTIVE_CALORIES -> activeCalorieReadingRepository.insert(
-                ActiveCalorieReadingEntity(
-                    recordedAt = reading.recordedAt, createdAt = reading.createdAt,
-                    source = reading.source, driverId = reading.driverId,
-                    confidence = reading.confidence, metaJson = reading.metaJson,
-                    calories = reading.value,
-                )
-            )
-            MetricType.TOTAL_CALORIES -> totalCalorieReadingRepository.insert(
-                TotalCalorieReadingEntity(
-                    recordedAt = reading.recordedAt, createdAt = reading.createdAt,
-                    source = reading.source, driverId = reading.driverId,
-                    confidence = reading.confidence, metaJson = reading.metaJson,
-                    calories = reading.value,
-                )
-            )
+            MetricType.HR -> hrReadingRepository.insert(reading.toHrEntity())
+            MetricType.HRV -> hrvReadingRepository.insert(reading.toHrvEntity())
+            MetricType.SPO2 -> spo2ReadingRepository.insert(reading.toSpO2Entity())
+            MetricType.RESPIRATION -> respirationReadingRepository.insert(reading.toRespirationEntity())
+            MetricType.SKIN_TEMP -> skinTempReadingRepository.insert(reading.toSkinTempEntity())
+            MetricType.STEPS -> stepsReadingRepository.insert(reading.toStepsEntity())
+            MetricType.ACTIVE_CALORIES -> activeCalorieReadingRepository.insert(reading.toActiveCalorieEntity())
+            MetricType.TOTAL_CALORIES -> totalCalorieReadingRepository.insert(reading.toTotalCalorieEntity())
             MetricType.BLOOD_PRESSURE -> {
-                val diastolic = runCatching {
-                    JSONObject(reading.metaJson ?: "").getInt("diastolic")
-                }.getOrNull()
-                if (diastolic != null) {
-                    bloodPressureReadingRepository.insert(
-                        BloodPressureReadingEntity(
-                            recordedAt = reading.recordedAt, createdAt = reading.createdAt,
-                            source = reading.source, driverId = reading.driverId,
-                            confidence = reading.confidence, metaJson = reading.metaJson,
-                            systolic = reading.value.toInt(),
-                            diastolic = diastolic,
-                        )
-                    )
+                val entity = reading.toBloodPressureEntityOrNull()
+                if (entity != null) {
+                    bloodPressureReadingRepository.insert(entity)
                 } else {
                     Timber.w("MetricRouter: BLOOD_PRESSURE reading missing diastolic in metaJson — falling back to staging")
                     stagingRepository.insert(reading)
                 }
             }
-            MetricType.GLUCOSE -> glucoseReadingRepository.insert(
-                GlucoseReadingEntity(
-                    recordedAt = reading.recordedAt, createdAt = reading.createdAt,
-                    source = reading.source, driverId = reading.driverId,
-                    confidence = reading.confidence, metaJson = reading.metaJson,
-                    value = reading.value,
-                    unit = reading.unit,
-                )
-            )
-            MetricType.SLEEP_STAGE -> {
-                val merged = runCatching {
-                    val base = JSONObject(reading.metaJson ?: "{}")
-                    base.put("pending_sleep_stage", true)
-                    base.toString()
-                }.getOrElse { """{"pending_sleep_stage": true}""" }
-                stagingRepository.insert(reading.copy(metaJson = merged))
-            }
+            MetricType.GLUCOSE -> glucoseReadingRepository.insert(reading.toGlucoseEntity())
+            MetricType.SLEEP_STAGE -> stagingRepository.insert(reading.withPendingSleepStageFlag())
             MetricType.BATTERY -> {
                 // BATTERY is handled by DeviceSyncProcessor.updateLastBatteryPct()
                 // and stored in the devices table. No dedicated metric table exists.
@@ -185,108 +104,43 @@ class MetricRouter @Inject constructor(
         val byType = readings.groupBy { it.metricType }
 
         byType[MetricType.HR]?.let { list ->
-            newRecordsInserted += hrReadingRepository.insertAllOrIgnore(list.map {
-                HrReadingEntity(
-                    recordedAt = it.recordedAt, createdAt = it.createdAt,
-                    source = it.source, driverId = it.driverId,
-                    confidence = it.confidence, metaJson = it.metaJson,
-                    bpm = it.value.toInt(),
-                )
-            }).count { it != -1L }
+            newRecordsInserted += hrReadingRepository.insertAllOrIgnore(list.map { it.toHrEntity() }).count { it != -1L }
         }
 
         byType[MetricType.HRV]?.let { list ->
-            newRecordsInserted += hrvReadingRepository.insertAllOrIgnore(list.map {
-                HrvReadingEntity(
-                    recordedAt = it.recordedAt, createdAt = it.createdAt,
-                    source = it.source, driverId = it.driverId,
-                    confidence = it.confidence, metaJson = it.metaJson,
-                    rmssdMs = it.value,
-                    computedByVersion = 1,
-                )
-            }).count { it != -1L }
+            newRecordsInserted += hrvReadingRepository.insertAllOrIgnore(list.map { it.toHrvEntity() }).count { it != -1L }
         }
 
         byType[MetricType.SPO2]?.let { list ->
-            newRecordsInserted += spo2ReadingRepository.insertAllOrIgnore(list.map {
-                SpO2ReadingEntity(
-                    recordedAt = it.recordedAt, createdAt = it.createdAt,
-                    source = it.source, driverId = it.driverId,
-                    confidence = it.confidence, metaJson = it.metaJson,
-                    percentage = it.value,
-                )
-            }).count { it != -1L }
+            newRecordsInserted += spo2ReadingRepository.insertAllOrIgnore(list.map { it.toSpO2Entity() }).count { it != -1L }
         }
 
         byType[MetricType.RESPIRATION]?.let { list ->
-            newRecordsInserted += respirationReadingRepository.insertAllOrIgnore(list.map {
-                RespirationReadingEntity(
-                    recordedAt = it.recordedAt, createdAt = it.createdAt,
-                    source = it.source, driverId = it.driverId,
-                    confidence = it.confidence, metaJson = it.metaJson,
-                    breathsPerMinute = it.value,
-                )
-            }).count { it != -1L }
+            newRecordsInserted += respirationReadingRepository.insertAllOrIgnore(list.map { it.toRespirationEntity() }).count { it != -1L }
         }
 
         byType[MetricType.SKIN_TEMP]?.let { list ->
-            newRecordsInserted += skinTempReadingRepository.insertAllOrIgnore(list.map {
-                SkinTempReadingEntity(
-                    recordedAt = it.recordedAt, createdAt = it.createdAt,
-                    source = it.source, driverId = it.driverId,
-                    confidence = it.confidence, metaJson = it.metaJson,
-                    celsius = it.value,
-                )
-            }).count { it != -1L }
+            newRecordsInserted += skinTempReadingRepository.insertAllOrIgnore(list.map { it.toSkinTempEntity() }).count { it != -1L }
         }
 
         byType[MetricType.STEPS]?.let { list ->
-            newRecordsInserted += stepsReadingRepository.insertAllOrIgnore(list.map {
-                StepsReadingEntity(
-                    recordedAt = it.recordedAt, createdAt = it.createdAt,
-                    source = it.source, driverId = it.driverId,
-                    confidence = it.confidence, metaJson = it.metaJson,
-                    cumulativeSteps = it.value.toInt(),
-                )
-            }).count { it != -1L }
+            newRecordsInserted += stepsReadingRepository.insertAllOrIgnore(list.map { it.toStepsEntity() }).count { it != -1L }
         }
 
         byType[MetricType.ACTIVE_CALORIES]?.let { list ->
-            newRecordsInserted += activeCalorieReadingRepository.insertAllOrIgnore(list.map {
-                ActiveCalorieReadingEntity(
-                    recordedAt = it.recordedAt, createdAt = it.createdAt,
-                    source = it.source, driverId = it.driverId,
-                    confidence = it.confidence, metaJson = it.metaJson,
-                    calories = it.value,
-                )
-            }).count { it != -1L }
+            newRecordsInserted += activeCalorieReadingRepository.insertAllOrIgnore(list.map { it.toActiveCalorieEntity() }).count { it != -1L }
         }
 
         byType[MetricType.TOTAL_CALORIES]?.let { list ->
-            newRecordsInserted += totalCalorieReadingRepository.insertAllOrIgnore(list.map {
-                TotalCalorieReadingEntity(
-                    recordedAt = it.recordedAt, createdAt = it.createdAt,
-                    source = it.source, driverId = it.driverId,
-                    confidence = it.confidence, metaJson = it.metaJson,
-                    calories = it.value,
-                )
-            }).count { it != -1L }
+            newRecordsInserted += totalCalorieReadingRepository.insertAllOrIgnore(list.map { it.toTotalCalorieEntity() }).count { it != -1L }
         }
 
         byType[MetricType.BLOOD_PRESSURE]?.let { list ->
             val validEntities = mutableListOf<BloodPressureReadingEntity>()
             list.forEach { reading ->
-                val diastolic = runCatching {
-                    JSONObject(reading.metaJson ?: "").getInt("diastolic")
-                }.getOrNull()
-                if (diastolic != null) {
-                    validEntities += BloodPressureReadingEntity(
-                        recordedAt = reading.recordedAt, createdAt = reading.createdAt,
-                        source = reading.source, driverId = reading.driverId,
-                        confidence = reading.confidence, metaJson = reading.metaJson,
-                        systolic = reading.value.toInt(),
-                        diastolic = diastolic,
-                    )
+                val entity = reading.toBloodPressureEntityOrNull()
+                if (entity != null) {
+                    validEntities += entity
                 } else {
                     Timber.w("MetricRouter: BLOOD_PRESSURE reading missing diastolic in metaJson — falling back to staging")
                     stagingRepository.insert(reading)
@@ -299,24 +153,11 @@ class MetricRouter @Inject constructor(
         }
 
         byType[MetricType.GLUCOSE]?.let { list ->
-            newRecordsInserted += glucoseReadingRepository.insertAllOrIgnore(list.map {
-                GlucoseReadingEntity(
-                    recordedAt = it.recordedAt, createdAt = it.createdAt,
-                    source = it.source, driverId = it.driverId,
-                    confidence = it.confidence, metaJson = it.metaJson,
-                    value = it.value,
-                    unit = it.unit,
-                )
-            }).count { it != -1L }
+            newRecordsInserted += glucoseReadingRepository.insertAllOrIgnore(list.map { it.toGlucoseEntity() }).count { it != -1L }
         }
 
         byType[MetricType.SLEEP_STAGE]?.forEach { reading ->
-            val merged = runCatching {
-                val base = JSONObject(reading.metaJson ?: "{}")
-                base.put("pending_sleep_stage", true)
-                base.toString()
-            }.getOrElse { """{"pending_sleep_stage": true}""" }
-            stagingRepository.insert(reading.copy(metaJson = merged))
+            stagingRepository.insert(reading.withPendingSleepStageFlag())
             newRecordsInserted += 1
         }
 
@@ -341,5 +182,12 @@ class MetricRouter @Inject constructor(
      *  force-overwrite existing records when the driver output has been corrected. */
     suspend fun routeAllForceReplace(readings: List<MetricReading>) {
         readings.forEach { route(it) }
+    }
+
+    private fun MetricReading.withPendingSleepStageFlag(): MetricReading {
+        val merged = runCatching {
+            JSONObject(metaJson ?: "{}").put("pending_sleep_stage", true).toString()
+        }.getOrElse { """{"pending_sleep_stage": true}""" }
+        return copy(metaJson = merged)
     }
 }

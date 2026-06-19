@@ -5,6 +5,7 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.athletedata.openAthleteMetrics.data.model.DataSource
+import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import java.time.Instant
 
 @Entity(
@@ -25,4 +26,13 @@ data class SkinTempReadingEntity(
     @ColumnInfo(name = "meta_json")
     val metaJson: String? = null,
     val celsius: Double,
+)
+
+// ── Mapper ───────────────────────────────────────────────────────────────────
+
+fun MetricReading.toSkinTempEntity() = SkinTempReadingEntity(
+    recordedAt = recordedAt, createdAt = createdAt,
+    source = source, driverId = driverId,
+    confidence = confidence, metaJson = metaJson,
+    celsius = value,
 )

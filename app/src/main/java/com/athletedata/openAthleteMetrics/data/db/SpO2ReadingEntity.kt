@@ -5,6 +5,7 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.athletedata.openAthleteMetrics.data.model.DataSource
+import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import java.time.Instant
 
 @Entity(
@@ -25,4 +26,13 @@ data class SpO2ReadingEntity(
     @ColumnInfo(name = "meta_json")
     val metaJson: String? = null,
     val percentage: Double,
+)
+
+// ── Mapper ───────────────────────────────────────────────────────────────────
+
+fun MetricReading.toSpO2Entity() = SpO2ReadingEntity(
+    recordedAt = recordedAt, createdAt = createdAt,
+    source = source, driverId = driverId,
+    confidence = confidence, metaJson = metaJson,
+    percentage = value,
 )

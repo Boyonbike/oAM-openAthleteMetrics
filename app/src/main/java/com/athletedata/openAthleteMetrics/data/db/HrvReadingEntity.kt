@@ -5,6 +5,7 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.athletedata.openAthleteMetrics.data.model.DataSource
+import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import java.time.Instant
 
 @Entity(
@@ -28,4 +29,14 @@ data class HrvReadingEntity(
     val rmssdMs: Double,
     @ColumnInfo(name = "computed_by_version")
     val computedByVersion: Int,
+)
+
+// ── Mapper ───────────────────────────────────────────────────────────────────
+
+fun MetricReading.toHrvEntity() = HrvReadingEntity(
+    recordedAt = recordedAt, createdAt = createdAt,
+    source = source, driverId = driverId,
+    confidence = confidence, metaJson = metaJson,
+    rmssdMs = value,
+    computedByVersion = 1,
 )

@@ -5,6 +5,7 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.athletedata.openAthleteMetrics.data.model.DataSource
+import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import java.time.Instant
 
 /** Calories burned during activity periods only (excludes resting metabolic rate). */
@@ -26,4 +27,13 @@ data class ActiveCalorieReadingEntity(
     @ColumnInfo(name = "meta_json")
     val metaJson: String? = null,
     val calories: Double,
+)
+
+// ── Mapper ───────────────────────────────────────────────────────────────────
+
+fun MetricReading.toActiveCalorieEntity() = ActiveCalorieReadingEntity(
+    recordedAt = recordedAt, createdAt = createdAt,
+    source = source, driverId = driverId,
+    confidence = confidence, metaJson = metaJson,
+    calories = value,
 )

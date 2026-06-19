@@ -2,6 +2,7 @@ package com.athletedata.openAthleteMetrics.ble.wasm
 
 import com.athletedata.openAthleteMetrics.ble.driver.ParsingConfig
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
+import com.athletedata.openAthleteMetrics.ble.driver.WasmExports
 import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.DataSource
 import com.athletedata.openAthleteMetrics.data.model.MetricReading
@@ -95,10 +96,8 @@ class WasmDriverEngine @Inject constructor() {
         characteristicUuid: String,
         data: ByteArray,
         driverId: String,
-    ): List<MetricReading> = parseMutex.withLock {
-        val wasm = loadedManifest?.parsing as? ParsingConfig.WasmParsing ?: return@withLock emptyList()
-        try {
-            val jsonStr = callParse(wasm.exports.parseMetrics, data) ?: return@withLock emptyList()
+    ): List<MetricReading> =
+        callAndDecode(data, { it.parseMetrics }, "parseMetrics(driver=$driverId)") { jsonStr ->
             val now = Instant.now()
             json.decodeFromString<List<MetricWasmDto>>(jsonStr).map { dto ->
                 MetricReading(
@@ -113,11 +112,7 @@ class WasmDriverEngine @Inject constructor() {
                     metaJson = dto.metaJson,
                 )
             }
-        } catch (e: Exception) {
-            Timber.w(e, "WasmDriverEngine: parseMetrics failed for driver $driverId")
-            emptyList()
-        }
-    }
+        } ?: emptyList()
 
     /**
      * Calls the WASM parseSleep export if present.
@@ -128,13 +123,8 @@ class WasmDriverEngine @Inject constructor() {
         characteristicUuid: String,
         data: ByteArray,
         driverId: String,
-    ): SleepSession? = parseMutex.withLock {
-        val wasm = loadedManifest?.parsing as? ParsingConfig.WasmParsing ?: return@withLock null
-        val exportName = wasm.exports.parseSleep ?: return@withLock null
-        try {
-            val jsonStr = callParse(exportName, data)
-                ?.takeIf { it.isNotBlank() && it != "{}" }
-                ?: return@withLock null
+    ): SleepSession? =
+        callAndDecode(data, { it.parseSleep }, "parseSleep(driver=$driverId)") { jsonStr ->
             val dto = json.decodeFromString<SleepWasmDto>(jsonStr)
             val startInstant = Instant.ofEpochMilli(dto.sleepStartMs)
             // Extend end to cover stage blocks (e.g. AWAKE) that lie past the reported
@@ -148,11 +138,7 @@ class WasmDriverEngine @Inject constructor() {
                 source = DataSource.DEVICE,
                 driverId = driverId,
             )
-        } catch (e: Exception) {
-            Timber.w(e, "WasmDriverEngine: parseSleep failed for driver $driverId")
-            null
         }
-    }
 
     /**
      * Calls the WASM parseActivity export if present.
@@ -162,13 +148,8 @@ class WasmDriverEngine @Inject constructor() {
         characteristicUuid: String,
         data: ByteArray,
         driverId: String,
-    ): Activity? = parseMutex.withLock {
-        val wasm = loadedManifest?.parsing as? ParsingConfig.WasmParsing ?: return@withLock null
-        val exportName = wasm.exports.parseActivity ?: return@withLock null
-        try {
-            val jsonStr = callParse(exportName, data)
-                ?.takeIf { it.isNotBlank() && it != "{}" }
-                ?: return@withLock null
+    ): Activity? =
+        callAndDecode(data, { it.parseActivity }, "parseActivity(driver=$driverId)") { jsonStr ->
             val dto = json.decodeFromString<ActivityWasmDto>(jsonStr)
             val derivedDuration = ((dto.endTimeMs - dto.startTimeMs) / 60_000L).toInt()
             if (derivedDuration <= 0) {
@@ -176,26 +157,42 @@ class WasmDriverEngine @Inject constructor() {
                     "WasmDriverEngine: Discarding activity ${dto.deviceName}: derived duration ≤ 0 " +
                     "startMs=${dto.startTimeMs} endMs=${dto.endTimeMs}"
                 )
-                return@withLock null
+                null
+            } else {
+                Activity(
+                    startTime = Instant.ofEpochMilli(dto.startTimeMs),
+                    endTime = Instant.ofEpochMilli(dto.endTimeMs),
+                    durationMinutes = derivedDuration,
+                    deviceName = dto.deviceName,
+                    source = DataSource.DEVICE,
+                    driverId = driverId,
+                    avgHrBpm = dto.avgHrBpm,
+                    maxHrBpm = dto.maxHrBpm,
+                    minHrBpm = dto.minHrBpm,
+                    calories = dto.calories,
+                    activeCalories = dto.activeCalories,
+                    distanceMeters = dto.distanceMeters,
+                    steps = dto.steps,
+                    hrZonesJson = dto.hrZonesJson,
+                )
             }
-            Activity(
-                startTime = Instant.ofEpochMilli(dto.startTimeMs),
-                endTime = Instant.ofEpochMilli(dto.endTimeMs),
-                durationMinutes = derivedDuration,
-                deviceName = dto.deviceName,
-                source = DataSource.DEVICE,
-                driverId = driverId,
-                avgHrBpm = dto.avgHrBpm,
-                maxHrBpm = dto.maxHrBpm,
-                minHrBpm = dto.minHrBpm,
-                calories = dto.calories,
-                activeCalories = dto.activeCalories,
-                distanceMeters = dto.distanceMeters,
-                steps = dto.steps,
-                hrZonesJson = dto.hrZonesJson,
-            )
+        }
+
+    private suspend fun <T> callAndDecode(
+        data: ByteArray,
+        getExportName: (WasmExports) -> String?,
+        logTag: String,
+        decode: (String) -> T,
+    ): T? = parseMutex.withLock {
+        val wasm = loadedManifest?.parsing as? ParsingConfig.WasmParsing ?: return@withLock null
+        val exportName = getExportName(wasm.exports) ?: return@withLock null
+        try {
+            val jsonStr = callParse(exportName, data)
+                ?.takeIf { it.isNotBlank() && it != "{}" }
+                ?: return@withLock null
+            decode(jsonStr)
         } catch (e: Exception) {
-            Timber.w(e, "WasmDriverEngine: parseActivity failed for driver $driverId")
+            Timber.w(e, "WasmDriverEngine: $logTag failed")
             null
         }
     }

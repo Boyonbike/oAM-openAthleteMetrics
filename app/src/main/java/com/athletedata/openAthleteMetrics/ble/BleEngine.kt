@@ -17,9 +17,7 @@ import android.os.Build
 import android.os.ParcelUuid
 import androidx.annotation.RequiresApi
 import androidx.work.WorkManager
-import com.athletedata.openAthleteMetrics.ble.driver.DeviceDriver
 import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
-import com.athletedata.openAthleteMetrics.ble.driver.MetricProcessor
 import com.athletedata.openAthleteMetrics.ble.driver.SyncCommand
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
 import com.athletedata.openAthleteMetrics.ble.sync.DeviceSyncProcessor
@@ -78,16 +76,6 @@ class BleEngine @Inject constructor(
         private const val STREAM_QUIESCENCE_MS = 3_000L
         private const val SILENT_SYNC_TIMEOUT_MS = 15_000L
 
-        // MetricTypes that have a dedicated typed table. Readings for these types are routed
-        // directly by routeReading() and are NOT added to pendingMetrics, so they do not
-        // flow through DeviceSyncProcessor into metric_readings_staging.
-        private val DEDICATED_METRIC_TYPES = setOf(
-            MetricType.HR, MetricType.HRV, MetricType.SPO2,
-            MetricType.RESPIRATION, MetricType.SKIN_TEMP, MetricType.STEPS,
-            MetricType.ACTIVE_CALORIES, MetricType.TOTAL_CALORIES,
-            MetricType.BLOOD_PRESSURE, MetricType.GLUCOSE,
-            MetricType.SLEEP_STAGE,
-        )
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -105,11 +93,6 @@ class BleEngine @Inject constructor(
     // connection and on disconnect. Raw packets are persisted against this ID immediately on
     // arrival so they survive process death (Fix 18).
     @Volatile private var currentSyncSessionId: Long? = null
-
-    // Processor supplied by a native DeviceDriver implementation. Always null for WASM-based
-    // drivers (WasmDriverManifest is a data class and does not implement DeviceDriver).
-    // Reset to null on each fresh connect and on disconnect.
-    @Volatile private var currentProcessor: MetricProcessor? = null
 
     // Dates that received at least one new reading this sync. Populated by routeReading();
     // snapshotted and cleared at quiescence to enqueue DailySummaryWorker.
@@ -284,7 +267,6 @@ class BleEngine @Inject constructor(
         synchronized(pendingSleep) { pendingSleep.clear(); seenSleepStartMs.clear() }
         synchronized(pendingActivities) { pendingActivities.clear() }
         currentSyncSessionId = null
-        currentProcessor = null
         synchronized(affectedDates) { affectedDates.clear() }
         reassemblyBuffers.clear()
         scope.launch { @Suppress("MissingPermission") activeGatt?.disconnect() }
@@ -357,9 +339,8 @@ class BleEngine @Inject constructor(
             when (result) {
                 is ValidationResult.Accepted -> {
                     val reading = result.item
-                    currentProcessor?.onReading(reading)
                     routeReading(reading)
-                    if (reading.metricType !in DEDICATED_METRIC_TYPES) {
+                    if (reading.metricType !in MetricType.DEDICATED_METRIC_TYPES) {
                         synchronized(pendingMetrics) {
                             pendingMetrics[Pair(reading.metricType, reading.recordedAt.toEpochMilli())] = reading
                         }
@@ -408,10 +389,6 @@ class BleEngine @Inject constructor(
                 if (_connectionState.value is BleConnectionState.Connected) {
                     isQuiescent = true
                     _connectionState.value = BleConnectionState.Connected(address, manifest.displayName, count, true)
-                    val derived = currentProcessor?.onSyncComplete() ?: emptyList()
-                    if (derived.isNotEmpty()) {
-                        withContext(Dispatchers.IO) { derived.forEach { routeReading(it) } }
-                    }
                     val datesToProcess = synchronized(affectedDates) {
                         affectedDates.toSet().also { affectedDates.clear() }
                     }
@@ -523,7 +500,6 @@ class BleEngine @Inject constructor(
             isQuiescent = false
             quiescenceJob?.cancel()
             quiescenceJob = null
-            currentProcessor = (activeManifest as? DeviceDriver)?.createProcessor()
             synchronized(affectedDates) { affectedDates.clear() }
         } else {
             val existingCount = synchronized(pendingMetrics) { pendingMetrics.size }

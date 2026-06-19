@@ -28,54 +28,7 @@ Each prompt below is self-contained — it restates the relevant file, the probl
 **Prompt:**
 
 ```
-In MetricRouter.kt, route() (lines 50-172) and routeAll() (lines 183-338)
-both independently construct the same 10 entity types (HrReadingEntity,
-HrvReadingEntity, SpO2ReadingEntity, RespirationReadingEntity,
-SkinTempReadingEntity, StepsReadingEntity, ActiveCalorieReadingEntity,
-TotalCalorieReadingEntity, BloodPressureReadingEntity, GlucoseReadingEntity)
-from a MetricReading, with verbatim-duplicated special-case logic for
-BLOOD_PRESSURE (extracting diastolic from metaJson, with a fallback to
-staging + Timber.w on failure) and SLEEP_STAGE (injecting the
-pending_sleep_stage flag into metaJson). The computedByVersion = 1
-hardcode for HRV also appears in both places.
-
-The two functions differ only in: route() processes one reading and calls
-the single insert() (REPLACE conflict strategy); routeAll() groups
-readings by type and calls insertAllOrIgnore() (IGNORE conflict strategy)
-with conflict counting for newRecordsInserted.
-
-Fix: extract the entity-construction logic so it exists in exactly one
-place per metric type, and have both route() and routeAll() call it. Two
-viable approaches — pick whichever fits the codebase's existing style
-better:
-
-(a) Add an extension function per entity, e.g.
-    MetricReading.toHrEntity(): HrReadingEntity,
-    MetricReading.toHrvEntity(): HrvReadingEntity, etc. (10 functions,
-    co-located with each entity file, consistent with how entity-to-model
-    mappers are already co-located elsewhere in this codebase). For
-    BLOOD_PRESSURE and SLEEP_STAGE, the special-case logic (diastolic
-    extraction, staging fallback, pending_sleep_stage injection) should
-    live inside or alongside the relevant mapping function so it exists
-    once, not twice.
-
-(b) A single private fun toEntity(reading: MetricReading): Any? inside
-    MetricRouter.kt with a when block keyed on metricType, used by both
-    route() and routeAll().
-
-After extracting, route() and routeAll() should become thin: route()
-resolves the entity via the shared mapper and calls the appropriate
-single insert(); routeAll() groups by type, maps each reading in the
-group via the shared mapper, and calls insertAllOrIgnore(). The conflict
-strategy difference (REPLACE vs IGNORE) and the single-vs-batch call
-shape are the ONLY remaining differences between the two functions — do
-not change either function's actual database-write behavior, only
-deduplicate the entity construction. routeAllForceReplace() should
-continue to work exactly as before (delegating to route() per reading).
-
-Show me the extracted mapping logic and the simplified route() and
-routeAll() functions. Confirm the diff does not change which table any
-MetricType lands in, nor the conflict strategy used by either function.
+Done
 ```
 
 **After:** Rebuild, then run a live BLE sync (or simulate one) and a raw-replay/reprocess cycle, and confirm identical data lands in identical tables as before the refactor — this should be a pure refactor with zero behavior change.
@@ -93,53 +46,7 @@ MetricType lands in, nor the conflict strategy used by either function.
 **Prompt:**
 
 ```
-The set {HR, HRV, SPO2, RESPIRATION, SKIN_TEMP, STEPS, ACTIVE_CALORIES,
-TOTAL_CALORIES, BLOOD_PRESSURE, GLUCOSE, SLEEP_STAGE} — the MetricType
-values that have a dedicated typed table rather than falling through to
-staging — is currently defined independently in two places:
-
-1. BleEngine.kt (lines 84-91) as a companion object constant
-   DEDICATED_METRIC_TYPES, used to decide which readings get routed live
-   vs added to pendingMetrics.
-2. DeviceSyncProcessor.kt (lines 131-136) as a local val dedicatedTypes,
-   used only for an invariant-violation check.
-
-MetricRouter's own routing logic is an implicit third definition of the
-same set, expressed as explicit branches rather than a collection — check
-MetricRouter.kt's current structure first: it may still have separate
-route()/routeAll() functions each with their own when-block, or it may
-already have a single shared entity-mapping function if a prior cleanup
-unified them. Either way, identify wherever the "which MetricTypes get a
-dedicated table" knowledge currently lives in MetricRouter. If a new
-MetricType is given a dedicated table in the future,
-all the places that need to know "is this type dedicated or staging-only"
-must be updated together, and nothing currently enforces that.
-
-Fix:
-1. Define this set once, as the canonical location. MetricRouter is the
-   natural owner since it's the actual routing logic (alongside the
-   existing ACCUMULATOR_METRICS constant, if that pattern already exists
-   in MetricType's companion — check first and match that pattern's
-   placement, e.g. as a companion property on MetricType itself, or as a
-   companion constant on MetricRouter).
-2. Update BleEngine.kt to import and use this canonical set instead of
-   its own DEDICATED_METRIC_TYPES constant. Remove the now-redundant
-   local definition.
-3. Update DeviceSyncProcessor.kt to import and use the same canonical
-   set instead of its own local dedicatedTypes. Remove the now-redundant
-   local definition.
-4. Confirm: does the canonical set need to include SLEEP_STAGE? Check how
-   each of the three current copies treats SLEEP_STAGE and resolve any
-   inconsistency you find (the BLE audit that flagged this duplication
-   noted DeviceSyncProcessor's copy may already be using SLEEP_STAGE
-   inconsistently with its own check's stated purpose — investigate and
-   fix that inconsistency as part of this change, not just the
-   duplication).
-
-Show me the canonical definition and both updated call sites. Confirm
-that BleEngine's routing decisions and DeviceSyncProcessor's invariant
-check both still behave identically to before — this should not change
-which readings get routed where, only remove the duplicate definitions.
+Done
 ```
 
 **After:** Rebuild, then confirm the invariant-violation check in `DeviceSyncProcessor` still fires under the same conditions it did before (you can verify this by reading its logic against the canonical set rather than needing to reproduce a violation).
@@ -157,60 +64,7 @@ which readings get routed where, only remove the duplicate definitions.
 **Prompt:**
 
 ```
-The 10 typed reading DAO interfaces — HrReadingDao, HrvReadingDao,
-SpO2ReadingDao, RespirationReadingDao, SkinTempReadingDao, StepsReadingDao,
-ActiveCalorieReadingDao, TotalCalorieReadingDao, BloodPressureReadingDao,
-GlucoseReadingDao — are each 37 lines. 9 of the 10 are character-for-
-character identical except for the entity class name and the table name
-string in each @Query annotation. They all declare the same 8 methods in
-the same order: insert, insertAll, insertAllOrIgnore, deleteBySource,
-deleteAll, getReadingsInRange, getReadingsInRangeOnce, getLatestReading.
-HrReadingDao additionally declares a 9th method, countSourceDataInRange
-(used for the seeder "data exists" banner), that the other 9 don't have.
-
-This duplication means: adding a new shared query requires editing 10
-files; removing or changing a shared method's behavior requires auditing
-10 files to apply the change consistently.
-
-Investigate first, then implement: Room's annotation processor needs SQL
-known at compile time, so a naive generic interface with @Query won't
-work directly. Determine which of these approaches is actually feasible
-in this codebase (check the Room version in use, since newer Room/KSP
-versions support more patterns than older ones):
-
-(a) An abstract Room @Dao base class with the 8 shared methods using
-    @RawQuery (Room supports this — the abstract class implements the
-    shared logic by querying a table name parameter, or by using Room's
-    @Query with a fixed table name per concrete subclass override).
-(b) A KSP-based code generation approach if the project already uses KSP
-    for something else (Room itself uses KSP per the Step 1 dependency
-    setup) — generate the 10 boilerplate DAOs from one template.
-(c) If neither (a) nor (b) is clean given Room's actual constraints,
-    fall back to keeping 10 separate DAO interfaces but extracting the
-    shared 8 method signatures into a common parent interface
-    BaseReadingDao<T> that each of the 10 extends, with each concrete
-    DAO providing only the @Query-annotated override (this still
-    requires repeating the @Query annotations per concrete class due to
-    Room's compile-time SQL requirement, but at least centralizes the
-    method contract/signature in one place and ensures all 10 stay
-    consistent if a method signature needs to change).
-
-Pick the approach that actually compiles and works with this project's
-Room setup — verify by building before presenting it as the final answer.
-HrReadingDao's countSourceDataInRange should remain HR-specific; do not
-try to generalize it onto the shared base.
-
-After resolving the DAO layer, apply the same consolidation to the 10
-corresponding repository interfaces and Room repository implementations
-(HrReadingRepository / RoomHrReadingRepository, etc.) — they are also
-near-identical (59-68 lines each, every method following the same
-try/catch + delegate-to-dao pattern with only the entity type name and
-log message string varying).
-
-Show me: the chosen abstraction (base DAO + base repository), one fully
-worked example (e.g. HR) showing the concrete subclass/implementation,
-and confirm all other 9 reading types compile against the same base
-without behavior changes. Show me the final line-count reduction.
+Done 
 ```
 
 **After:** This is a large mechanical refactor — rebuild after, then run the full seeder cycle (seed 30 days, verify all reading types still populate correctly) and a BLE sync simulation to confirm no reading type silently broke during the consolidation.
@@ -228,38 +82,7 @@ without behavior changes. Show me the final line-count reduction.
 **Prompt:**
 
 ```
-Two methods are declared across all 10 typed reading DAOs (HrReadingDao,
-HrvReadingDao, SpO2ReadingDao, RespirationReadingDao, SkinTempReadingDao,
-StepsReadingDao, ActiveCalorieReadingDao, TotalCalorieReadingDao,
-BloodPressureReadingDao, GlucoseReadingDao), their corresponding 10
-repository interfaces, and their 10 Room repository implementations, but
-have zero real callers:
-
-1. getLatestReading() — confirmed by exhaustive search to have no callers
-   anywhere outside the data layer's own interface declarations and
-   overrides.
-2. getReadingsInRange() (the Flow<List<T>>-returning streaming variant —
-   NOT getReadingsInRangeOnce(), which IS used everywhere and must stay).
-   The only references to this Flow variant are two TODO comments in
-   DailyDetailScreen.kt (around lines 178 and 182) describing a planned
-   future feature, not an actual call site today.
-
-Before removing, re-confirm both findings yourself with a fresh search
-across the whole codebase (not just the data layer) to make sure neither
-method has gained a caller since the audit that found this. If you find
-any real caller for either method on any of the 10 types, do NOT remove
-that one — only remove instances confirmed to have zero callers.
-
-Fix: remove both confirmed-dead methods from all 10 DAO interfaces, all
-10 repository interfaces, and all 10 Room repository implementations.
-Leave the two TODO comments in DailyDetailScreen.kt in place (they
-describe a real future plan, not dead code — when that screen is built,
-the Flow variant can be re-added on the specific types that screen
-actually needs, rather than carried speculatively on all 10 today).
-
-Show me a list of all files you removed methods from and confirm the
-final line-count reduction. Confirm the project still builds cleanly with
-both methods removed from every type.
+Done
 ```
 
 **After:** Rebuild and run existing tests/screens that touch any of the 10 reading types to confirm nothing was actually relying on either removed method.
@@ -279,40 +102,7 @@ both methods removed from every type.
 **Prompt:**
 
 ```
-Investigate first, then act based on what you confirm:
-
-DeviceDriver.kt and MetricProcessor.kt are interfaces with no current
-implementation (their own KDoc says so). In BleEngine.kt, this shows up
-as dead code that executes on every live BLE packet:
-- Line 112: currentProcessor: MetricProcessor? — always null
-- Line 526: currentProcessor = (activeManifest as? DeviceDriver)?.createProcessor()
-  — always evaluates to null, since WasmDriverManifest does not implement
-  DeviceDriver
-- Line 360: currentProcessor?.onReading(reading) — runs as a no-op on
-  every incoming BLE packet
-- Line 411: val derived = currentProcessor?.onSyncComplete() ?: emptyList()
-  — always returns emptyList()
-
-This is a product/roadmap decision, not a pure code-quality call: is
-there a concrete near-term plan to implement a native (non-WASM) Kotlin
-driver path that would use these interfaces? Check the codebase for any
-other signal of this (recent commits referencing it, related TODOs,
-half-built implementations elsewhere) before assuming either way, and
-ask me directly if you can't find a clear signal — do not guess.
-
-If there is NO concrete near-term plan: delete DeviceDriver.kt and
-MetricProcessor.kt entirely, and remove all three currentProcessor-related
-lines from BleEngine.kt (the field declaration, the assignment, the
-onReading call, and the onSyncComplete call). This removes two files and
-simplifies the hot notification path by removing a branch that always
-does nothing.
-
-If there IS a concrete near-term plan: leave the code as-is, but add a
-clear comment at the currentProcessor field declaration in BleEngine.kt
-stating the plan and rough timeline, so a future reader understands why
-dead-looking code is being intentionally kept.
-
-Tell me which path you're taking and why before making the change.
+Done
 ```
 
 ---
@@ -384,30 +174,7 @@ handling outcome.
 **Prompt:**
 
 ```
-Skip this prompt if you've already applied the WasmDriverEngine
-boilerplate-extraction fix that unifies parseMetrics/parseSleep/
-parseActivity into a shared helper — that fix should resolve this as a
-side effect. Only proceed if parseMetrics, parseSleep, and parseActivity
-are still three independent functions.
-
-In WasmDriverEngine.kt, parseSleep (line 136) and parseActivity (line 169)
-both apply .takeIf { it.isNotBlank() && it != "{}" } to the raw result
-string from callParse before attempting to deserialize it, producing a
-clean null early-return when the WASM module signals "no data" via an
-empty object. parseMetrics (line 101) has no equivalent guard. If a WASM
-module writes "{}" from its parseMetrics export, deserializing it as
-List<MetricWasmDto> throws (since {} is not a valid JSON array), which is
-caught by the generic exception handler and logged as a WasmDriverEngine:
-parseMetrics failed warning — a false-alarm-looking log for a
-non-error condition.
-
-Fix: add the same .takeIf { it.isNotBlank() && it != "{}" } guard to
-parseMetrics at the equivalent point (after callParse, before
-deserialization), matching the pattern already used in parseSleep and
-parseActivity. The early-return value should be an empty list (matching
-parseMetrics's existing "no data" return type), not null.
-
-Show me the updated parseMetrics function.
+Not needed
 ```
 
 ---

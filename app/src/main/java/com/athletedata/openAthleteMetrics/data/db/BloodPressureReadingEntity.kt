@@ -5,7 +5,9 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.athletedata.openAthleteMetrics.data.model.DataSource
+import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import java.time.Instant
+import org.json.JSONObject
 
 @Entity(
     tableName = "blood_pressure_readings",
@@ -27,3 +29,18 @@ data class BloodPressureReadingEntity(
     val systolic: Int,
     val diastolic: Int,
 )
+
+// ── Mapper ───────────────────────────────────────────────────────────────────
+
+fun MetricReading.toBloodPressureEntityOrNull(): BloodPressureReadingEntity? {
+    val diastolic = runCatching {
+        JSONObject(metaJson ?: "").getInt("diastolic")
+    }.getOrNull() ?: return null
+    return BloodPressureReadingEntity(
+        recordedAt = recordedAt, createdAt = createdAt,
+        source = source, driverId = driverId,
+        confidence = confidence, metaJson = metaJson,
+        systolic = value.toInt(),
+        diastolic = diastolic,
+    )
+}

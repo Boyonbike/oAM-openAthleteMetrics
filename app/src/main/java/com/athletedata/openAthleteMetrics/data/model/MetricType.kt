@@ -48,5 +48,20 @@ enum class MetricType {
             STEPS, CALORIES, ACTIVE_CALORIES, BASAL_CALORIES,
             DISTANCE, ELEVATION_GAIN, ELEVATION_LOSS,
         )
+
+        /**
+         * Types that [com.athletedata.openAthleteMetrics.ble.sync.MetricRouter] handles directly —
+         * either inserting into a typed table or staging with a specific flag. Readings of these
+         * types are routed immediately by BleEngine and must never flow through
+         * [com.athletedata.openAthleteMetrics.ble.sync.DeviceSyncProcessor] without that handling.
+         *
+         * Note: SLEEP_STAGE has no dedicated table yet but is included because MetricRouter applies
+         * a pending_sleep_stage flag before staging; omitting that flag would misfile the reading.
+         */
+        val DEDICATED_METRIC_TYPES: Set<MetricType> = setOf(
+            HR, HRV, SPO2, RESPIRATION, SKIN_TEMP, STEPS,
+            ACTIVE_CALORIES, TOTAL_CALORIES, BLOOD_PRESSURE, GLUCOSE,
+            SLEEP_STAGE,
+        )
     }
 }

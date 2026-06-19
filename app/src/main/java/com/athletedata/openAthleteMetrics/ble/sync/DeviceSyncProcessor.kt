@@ -128,13 +128,7 @@ class DeviceSyncProcessor @Inject constructor(
                 .filterIsInstance<ValidationResult.Accepted<Activity>>()
                 .map { it.item }
 
-            val dedicatedTypes = setOf(
-                MetricType.HR, MetricType.HRV, MetricType.SPO2,
-                MetricType.RESPIRATION, MetricType.SKIN_TEMP, MetricType.STEPS,
-                MetricType.ACTIVE_CALORIES, MetricType.TOTAL_CALORIES,
-                MetricType.BLOOD_PRESSURE, MetricType.GLUCOSE, MetricType.SLEEP_STAGE,
-            )
-            val misfiled = acceptedReadings.filter { it.metricType in dedicatedTypes }
+            val misfiled = acceptedReadings.filter { it.metricType in MetricType.DEDICATED_METRIC_TYPES }
             if (misfiled.isNotEmpty()) {
                 Timber.e(
                     "INVARIANT VIOLATION: acceptedReadings contains %d dedicated-type reading(s) " +
@@ -150,8 +144,8 @@ class DeviceSyncProcessor @Inject constructor(
             val (deviceInsert, activitiesSkipped) =
                 appDatabase.withTransaction {
                     // INVARIANT: acceptedReadings here must contain only non-dedicated
-                    // MetricTypes. Dedicated types (HR, HRV, SPO2, etc.) are routed to their
-                    // typed tables by BleEngine.handleNotification() -> MetricRouter.route()
+                    // MetricTypes. MetricType.DEDICATED_METRIC_TYPES are routed directly by
+                    // BleEngine.handleNotification() -> MetricRouter.route()
                     // BEFORE reaching pendingMetrics. If this function is ever called with
                     // unrouted dedicated-type readings, they will be silently misfiled into
                     // the staging table. Do not remove this comment without addressing that

@@ -48,7 +48,6 @@ class DashboardViewModel @Inject constructor(
 
     private val _date = MutableStateFlow(LocalDate.now())
     private val _isEditMode = MutableStateFlow(false)
-    private val _optimisticLayout = MutableStateFlow<List<WidgetLayout>?>(null)
 
     private val _hasSeederData: StateFlow<Boolean> = _date
         .flatMapLatest { hrReadingRepo.hasSeederDataForDate(it) }
@@ -58,12 +57,11 @@ class DashboardViewModel @Inject constructor(
         _date,
         widgetLayoutRepo.getLayout(),
         _isEditMode,
-        _optimisticLayout,
         _hasSeederData,
-    ) { date, dbLayout, editMode, optimistic, hasSeeder ->
+    ) { date, dbLayout, editMode, hasSeeder ->
         DashboardUiState(
             date = date,
-            widgets = optimistic ?: dbLayout,
+            widgets = dbLayout,
             isEditMode = editMode,
             hasSeederData = hasSeeder,
         )
@@ -108,23 +106,12 @@ class DashboardViewModel @Inject constructor(
         }
     }
 
-    fun onReorderLocal(fromIndex: Int, toIndex: Int) {
-        val current = _optimisticLayout.value ?: uiState.value.widgets
-        val mutable = current.toMutableList()
-        val item = mutable.removeAt(fromIndex)
-        mutable.add(toIndex, item)
-        _optimisticLayout.value = mutable
-    }
-
-    fun onReorderPersist() {
-        val ordered = _optimisticLayout.value ?: return
+    fun onReorderPersist(orderedWidgets: List<WidgetLayout>) {
         viewModelScope.launch {
             try {
-                widgetLayoutRepo.reorderWidgets(ordered.map { it.id })
-                _optimisticLayout.value = null
+                widgetLayoutRepo.reorderWidgets(orderedWidgets.map { it.id })
             } catch (e: Exception) {
                 Timber.e(e, "Failed to persist widget order")
-                _optimisticLayout.value = null
                 _errors.tryEmit("Failed to save widget order")
             }
         }

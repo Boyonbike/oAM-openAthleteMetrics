@@ -94,15 +94,11 @@ import com.patrykandpatrick.vico.core.cartesian.data.lineSeries
 import com.patrykandpatrick.vico.core.cartesian.layer.CartesianLayerDimensions
 import com.patrykandpatrick.vico.core.cartesian.layer.LineCartesianLayer
 import java.time.LocalDate
-import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import kotlin.math.abs
-import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import com.athletedata.openAthleteMetrics.ui.nav.LocalBottomNavScrollBehavior
 import com.athletedata.openAthleteMetrics.ui.nav.rememberBottomNavNestedScrollConnection
-
-private val DATE_FORMATTER_SHORT = DateTimeFormatter.ofPattern("d MMM")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -123,7 +119,6 @@ fun HistoryScreen(
     val localDate    by viewModel.localDate.collectAsStateWithLifecycle()
     val rangeToggle  by viewModel.rangeToggle.collectAsStateWithLifecycle()
     val regularity   by viewModel.regularity.collectAsStateWithLifecycle()
-    val seriesList   by viewModel.seriesList.collectAsStateWithLifecycle()
     val metricKeys   by viewModel.metricKeys.collectAsStateWithLifecycle()
     val availableOverlayGroups by viewModel.availableOverlayGroups.collectAsStateWithLifecycle()
     val metricTiles  by viewModel.metricTiles.collectAsStateWithLifecycle()
@@ -173,12 +168,12 @@ fun HistoryScreen(
                 .padding(bottom = 80.dp),
         ) {
             HistoryChart(
-                allSeries         = seriesList.map { it.entries },
-                allDataEntries    = seriesList.flatMap { it.entries }.sortedBy { it.date },
+                allSeries         = metricTiles.map { it.allPoints },
                 endDate           = today,
                 rangeToggle       = rangeToggle,
+                regularity        = regularity,
                 selectedPointDate = selectedPoint,
-                onSnapToDate      = viewModel::setSelectedPoint,
+                onSnapToDate      = viewModel::moveCursor,
                 scrollEnabled     = rangeToggle == RangeToggle.ALL,
                 modifier          = Modifier
                     .fillMaxWidth()
@@ -234,10 +229,10 @@ fun HistoryScreen(
 
 @Composable
 private fun HistoryChart(
-    allSeries: List<List<ChartEntry>>,
-    allDataEntries: List<ChartEntry>,
+    allSeries: List<List<AggregatedPoint>>,
     endDate: LocalDate,
     rangeToggle: RangeToggle,
+    regularity: Regularity,
     selectedPointDate: LocalDate,
     onSnapToDate: (LocalDate) -> Unit,
     scrollEnabled: Boolean = false,
@@ -247,7 +242,7 @@ private fun HistoryChart(
 
     val fromDate = remember(endDate, rangeToggle, allSeries) {
         if (rangeToggle == RangeToggle.ALL) {
-            allSeries.flatten().minOfOrNull { it.date } ?: endDate.minusDays(29)
+            allSeries.flatten().minOfOrNull { it.periodStart } ?: endDate.minusDays(29)
         } else {
             endDate.minusDays(rangeToggle.days - 1)
         }
@@ -257,39 +252,46 @@ private fun HistoryChart(
         ChronoUnit.DAYS.between(fromDate, endDate).toFloat()
     }
 
-    val labelXs = remember(lastX, rangeToggle) {
-        val lx = lastX.toDouble()
-        if (rangeToggle == RangeToggle.ALL) {
-            val weekly = generateSequence(0.0) { it + 7.0 }.takeWhile { it < lx }.toList()
-            if (weekly.isEmpty() || weekly.last() < lx) weekly + lx else weekly
-        } else {
-            listOf(0.0, lx / 4.0, lx / 2.0, 3.0 * lx / 4.0, lx)
-        }
+    val allPoints = remember(allSeries) {
+        allSeries.flatten().sortedBy { it.periodStart }.distinctBy { it.periodStart }
+    }
+
+    // Index within allPoints for each period — used by the non-Daily model producer.
+    val periodIndexMap = remember(allPoints) {
+        allPoints.mapIndexed { i, pt -> pt.periodStart to i }.toMap()
+    }
+
+    val labelXs = remember(allPoints) {
+        // Evenly spaced by period count for all regularities.
+        val positions = allPoints.indices.map { it.toDouble() }
+        val maxLabels = 5
+        if (positions.size <= maxLabels) positions
+        else (0 until maxLabels).map { i -> positions[i * (positions.size - 1) / (maxLabels - 1)] }.distinct()
     }
 
     val modelProducer = remember { CartesianChartModelProducer() }
 
-    LaunchedEffect(allSeries, fromDate, lastX) {
+    // Key is allSeries only — the data already reflects the active regularity, so we
+    // never need to branch on regularity here. This also avoids the state-race where
+    // `regularity` updates one frame before `allSeries` (metricTiles), which would
+    // otherwise briefly plot daily data points in index space and produce a jagged line.
+    LaunchedEffect(allSeries) {
         val populated = allSeries.filter { it.isNotEmpty() }
         if (populated.isEmpty()) return@LaunchedEffect
         modelProducer.runTransaction {
             lineSeries {
-                populated.forEach { entries ->
-                    val dataMap = entries.associate {
-                        ChronoUnit.DAYS.between(fromDate, it.date).toInt() to it.value
-                    }.toMutableMap()
-
-                    // Anchor x=0 so Vico doesn't clip the left-edge label.
-                    // Don't add a fake end anchor — the line ends at the last real data point.
-                    if (0 !in dataMap) {
-                        val y = entries.minByOrNull {
-                            ChronoUnit.DAYS.between(fromDate, it.date)
-                        }?.value ?: entries.first().value
-                        dataMap[0] = y
+                // Index-based x for all regularities — one unit per aggregated period.
+                // periodIndexMap aligns multiple overlaid series that may have different
+                // date ranges to the same shared x-axis positions.
+                populated.forEach { points ->
+                    val xs = mutableListOf<Float>()
+                    val ys = mutableListOf<Float>()
+                    points.forEach { pt ->
+                        val idx = periodIndexMap[pt.periodStart] ?: return@forEach
+                        xs.add(idx.toFloat())
+                        ys.add(pt.value)
                     }
-
-                    val sorted = dataMap.entries.sortedBy { it.key }
-                    series(x = sorted.map { it.key.toFloat() }, y = sorted.map { it.value })
+                    if (xs.isNotEmpty()) series(x = xs, y = ys)
                 }
             }
         }
@@ -332,9 +334,9 @@ private fun HistoryChart(
         }
     }
 
-    val axisFormatter = remember(fromDate) {
+    val axisFormatter = remember(allPoints) {
         CartesianValueFormatter { _, value, _ ->
-            fromDate.plusDays(value.roundToLong()).format(DATE_FORMATTER_SHORT)
+            allPoints.getOrNull(value.roundToLong().toInt())?.label ?: ""
         }
     }
 
@@ -363,10 +365,10 @@ private fun HistoryChart(
     var dragFraction by remember { mutableStateOf<Float?>(null) }
     var chartWidthPx by remember { mutableIntStateOf(1) }
 
-    val cursorFraction: Float? = remember(selectedPointDate, fromDate, lastX) {
-        val offset = ChronoUnit.DAYS.between(fromDate, selectedPointDate)
-        if (offset < 0 || offset > lastX) null
-        else offset.toFloat() / lastX
+    val cursorFraction: Float? = remember(selectedPointDate, allPoints) {
+        val idx = allPoints.indexOfLast { !it.periodStart.isAfter(selectedPointDate) }
+        val last = allPoints.size - 1
+        if (idx < 0 || last <= 0) null else idx.toFloat() / last
     }
 
     val scrubberColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
@@ -394,7 +396,7 @@ private fun HistoryChart(
             Canvas(
                 modifier = Modifier
                     .matchParentSize()
-                    .pointerInput(allDataEntries, fromDate, lastX) {
+                    .pointerInput(allPoints, fromDate, lastX, regularity) {
                         detectDragGestures(
                             onDrag = { change: PointerInputChange, _: Offset ->
                                 dragFraction = (change.position.x / chartWidthPx)
@@ -403,11 +405,17 @@ private fun HistoryChart(
                             },
                             onDragEnd = {
                                 dragFraction?.let { frac ->
-                                    val dataX = frac * lastX
-                                    val nearest = allDataEntries.minByOrNull { e ->
-                                        abs(ChronoUnit.DAYS.between(fromDate, e.date) - dataX.toLong())
+                                    val nearest = if (regularity == Regularity.DAILY) {
+                                        val dataX = frac * lastX
+                                        allPoints.minByOrNull { pt ->
+                                            abs(ChronoUnit.DAYS.between(fromDate, pt.periodStart) - dataX.toLong())
+                                        }
+                                    } else {
+                                        val targetIdx = (frac * allPoints.lastIndex + 0.5f).toInt()
+                                            .coerceIn(0, allPoints.lastIndex)
+                                        allPoints.getOrNull(targetIdx)
                                     }
-                                    nearest?.let { onSnapToDate(it.date) }
+                                    nearest?.let { onSnapToDate(it.periodStart) }
                                 }
                                 dragFraction = null
                             },
@@ -549,23 +557,44 @@ private fun SelectedValueTile(
         modifier  = Modifier
             .fillMaxWidth()
             .pointerInput(Unit) {
-                val swipeThreshold = viewConfiguration.touchSlop * 3f
+                val touchSlop = viewConfiguration.touchSlop
+                val swipeThreshold = touchSlop * 3f
                 awaitEachGesture {
                     val down = awaitFirstDown()
                     var dx = 0f
-                    drag(down.id) { change: PointerInputChange ->
-                        dx += change.positionChange().x
-                        change.consume()
+                    var dy = 0f
+                    var isHorizontal: Boolean? = null
+
+                    // Phase 1: determine direction without consuming events
+                    outer@ while (isHorizontal == null) {
+                        val event = awaitPointerEvent()
+                        for (change in event.changes) {
+                            if (change.id != down.id) continue
+                            if (!change.pressed) break@outer
+                            dx += change.positionChange().x
+                            dy += change.positionChange().y
+                            if (abs(dx) > touchSlop || abs(dy) > touchSlop) {
+                                isHorizontal = abs(dx) > abs(dy)
+                            }
+                        }
                     }
-                    when {
-                        dx < -swipeThreshold -> onStep(true)   // swipe left → newer
-                        dx > swipeThreshold  -> onStep(false)  // swipe right → older
+
+                    // Phase 2: only consume if the gesture is horizontal
+                    if (isHorizontal == true) {
+                        drag(down.id) { change ->
+                            dx += change.positionChange().x
+                            change.consume()
+                        }
+                        when {
+                            dx < -swipeThreshold -> onStep(true)
+                            dx > swipeThreshold  -> onStep(false)
+                        }
                     }
                 }
             },
     ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-            // Header: colour dot + name + remove button
+        Column(modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 0.dp, bottom = 12.dp)) {
+            // Header: colour dot + name + expand chevron + remove button
             Row(
                 modifier          = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -585,6 +614,16 @@ private fun SelectedValueTile(
                         .weight(1f)
                         .padding(start = 8.dp),
                 )
+                IconButton(onClick = { isExpanded = !isExpanded }) {
+                    Icon(
+                        imageVector        = Icons.Default.ExpandMore,
+                        contentDescription = if (isExpanded) "Collapse" else "Expand",
+                        tint               = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier           = Modifier
+                            .size(20.dp)
+                            .graphicsLayer { rotationZ = if (isExpanded) 180f else 0f },
+                    )
+                }
                 IconButton(onClick = onRemove) {
                     Icon(
                         imageVector        = Icons.Default.Close,
@@ -601,21 +640,6 @@ private fun SelectedValueTile(
                 style    = TypographyValue,
                 modifier = Modifier.padding(top = 4.dp),
             )
-
-            // Expand chevron
-            IconButton(
-                onClick  = { isExpanded = !isExpanded },
-                modifier = Modifier.align(Alignment.CenterHorizontally),
-            ) {
-                Icon(
-                    imageVector        = Icons.Default.ExpandMore,
-                    contentDescription = if (isExpanded) "Collapse" else "Expand",
-                    tint               = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier           = Modifier
-                        .size(20.dp)
-                        .graphicsLayer { rotationZ = if (isExpanded) 180f else 0f },
-                )
-            }
 
             // Expanded data table
             AnimatedVisibility(visible = isExpanded) {

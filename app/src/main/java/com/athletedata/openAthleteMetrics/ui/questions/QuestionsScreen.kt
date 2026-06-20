@@ -20,6 +20,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DragIndicator
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
@@ -59,7 +60,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import java.time.LocalDate
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.athletedata.openAthleteMetrics.data.model.QuestionCategory
 import com.athletedata.openAthleteMetrics.data.model.QuestionType
@@ -145,30 +146,21 @@ fun QuestionsScreen(
                     )
                 },
                 actions = {
-                    if (editMode) {
-                        TextButton(
-                            onClick = viewModel::exitEditMode,
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                        ) {
-                            Text("Done", style = TypographyMeta)
-                        }
-                    } else {
-                        if (selectedTab == Tab.HABITS) {
-                            IconButton(onClick = { showAddSheet = true }) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Add,
-                                    contentDescription = "Add habit",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                        IconButton(onClick = viewModel::enterEditMode) {
+                    if (editMode && selectedTab == Tab.HABITS) {
+                        IconButton(onClick = { showAddSheet = true }) {
                             Icon(
-                                imageVector = Icons.Outlined.Edit,
-                                contentDescription = "Edit",
+                                imageVector = Icons.Outlined.Add,
+                                contentDescription = "Add habit",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+                    }
+                    IconButton(onClick = if (editMode) viewModel::exitEditMode else viewModel::enterEditMode) {
+                        Icon(
+                            imageVector = if (editMode) Icons.Outlined.Check else Icons.Outlined.Edit,
+                            contentDescription = if (editMode) "Done" else "Edit",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 },
             )

@@ -4,59 +4,61 @@ agp                     = "9.2.1"
 kotlin                  = "2.2.10"
 # KSP version MUST match Kotlin version exactly (major.minor.patch).
 # Check https://github.com/google/ksp/releases for the latest 2.2.10-x.x.x tag.
+# NOTE: Kotlin 2.4.0 is not yet supported by KSP (google/ksp#2965); bump Kotlin+KSP together.
 ksp                     = "2.2.10-2.0.2"
 
 # ── AndroidX core ────────────────────────────────────────────────────────────
-coreKtx                 = "1.16.0"
+coreKtx                 = "1.19.0"
 
 # ── Compose ──────────────────────────────────────────────────────────────────
 # The BOM pins every androidx.compose.* version in one place.
-composeBom              = "2026.02.01"
-activityCompose         = "1.10.1"
+composeBom              = "2026.06.00"
+activityCompose         = "1.13.0"
 
 # ── Lifecycle / ViewModel ────────────────────────────────────────────────────
-lifecycle               = "2.9.1"
+lifecycle               = "2.11.0"
 
 # ── Navigation ───────────────────────────────────────────────────────────────
-navigationCompose       = "2.9.0"
+navigationCompose       = "2.9.8"
 
 # ── Room (SQLite ORM) ────────────────────────────────────────────────────────
-room                    = "2.7.1"
+room                    = "2.8.4"
 
 # ── Hilt (dependency injection) ──────────────────────────────────────────────
 hilt                    = "2.59.2"
 # hiltAndroidX covers all androidx.hilt:* artifacts (navigation-compose, work, hilt-compiler)
-hiltAndroidX            = "1.2.0"
+hiltAndroidX            = "1.3.0"
 
 # ── Coroutines ───────────────────────────────────────────────────────────────
-coroutines              = "1.10.1"
+coroutines              = "1.11.0"
 
 # ── DataStore (key-value preferences) ────────────────────────────────────────
-datastore               = "1.1.4"
+datastore               = "1.2.1"
 
 # ── WorkManager ──────────────────────────────────────────────────────────────
-workManager             = "2.10.1"
+workManager             = "2.11.2"
 
 # ── Vico (Compose-native charts) ─────────────────────────────────────────────
+# compose/compose-m3 jump to 3.2.2 — defer major-version upgrade to a separate task.
 vico                    = "2.1.2"
 
 # ── Reorderable (drag-and-drop for Lazy lists/grids) ─────────────────────────
-reorderable             = "2.5.1"
+reorderable             = "3.1.0"
 
 # ── Timber (logging) ─────────────────────────────────────────────────────────
 timber                  = "5.0.1"
 
 # ── Chicory (pure-Java WASM interpreter) ─────────────────────────────────────
-chicory                 = "1.4.0"
+chicory                 = "1.7.5"
 
 # ── kotlinx.serialization ────────────────────────────────────────────────────
-kotlinx-serialization   = "1.8.0"
+kotlinx-serialization   = "1.11.0"
 
 # ── Testing ──────────────────────────────────────────────────────────────────
 junit                   = "4.13.2"
-junitVersion            = "1.2.1"
-espressoCore            = "3.6.1"
-mockk                   = "1.13.12"
+junitVersion            = "1.3.0"
+espressoCore            = "3.7.0"
+mockk                   = "1.14.11"
 
 
 [libraries]
@@ -139,7 +141,6 @@ mockk                   = { group = "io.mockk", name = "mockk", version.ref = "m
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-kotlin-android      = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose      = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 ksp                 = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 hilt                = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }

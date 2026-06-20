@@ -1,2 +1,18 @@
 1. Time handling for devices that request time. it may impact device readings
-3. sync popup build up and error handling
+2. sync popup build up and error handling
+3. Full documentation write up
+4. widget shake in the edit menu should only when a widget is being moved and not the widget that is being moved
+5. widget X button replaced to match the X to disconnect from a conencted device
+6. intra day data handling and ui
+7. widget design
+8. daily detail design and consistancy and question handling
+9. seeder audit
+10. data paths check
+11. Ble permission popup not showing
+12. driver tile not being removed despite driver being removed
+13. widgets dragging geting in the way of scrolling
+14. settings colour in topbar - matching upgrade
+15. settings tiles designs
+16. sub page selection in questons and in devices plus matching the too
+17. topnav font size smaller
+18. devies/settings title/subpage selection alignment

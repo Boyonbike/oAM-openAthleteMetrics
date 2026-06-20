@@ -13,7 +13,7 @@ import javax.inject.Singleton
 
 @Singleton
 class DriverStorage @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private val validator = ManifestValidator()

@@ -42,9 +42,11 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -53,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.athletedata.openAthleteMetrics.data.model.DailyContext
+import com.athletedata.openAthleteMetrics.data.model.WidgetLayout
 import com.athletedata.openAthleteMetrics.data.model.WidgetSize
 import com.athletedata.openAthleteMetrics.data.model.WidgetType
 import com.athletedata.openAthleteMetrics.ui.components.DataPageDatePickerDialog
@@ -122,13 +125,34 @@ fun DashboardScreen(
     )
     val effectiveWiggle = if (uiState.isEditMode) wiggleAngle else 0f
 
+    // Local snapshot list — Calvin library mutates this directly during drag.
+    // Syncing from uiState is blocked while a drag is active to avoid
+    // mid-drag recompositions that confuse the library's item tracking.
+    val localWidgets = remember { mutableStateListOf<WidgetLayout>() }
+    val isDraggingActive = remember { mutableStateOf(false) }
+    val currentHasSeederData = rememberUpdatedState(uiState.hasSeederData)
+
+    LaunchedEffect(uiState.widgets) {
+        if (!isDraggingActive.value) {
+            localWidgets.clear()
+            localWidgets.addAll(uiState.widgets)
+        }
+    }
+
     val lazyGridState = rememberLazyGridState()
     val reorderState = rememberReorderableLazyGridState(lazyGridState) { from, to ->
-        viewModel.onReorderLocal(from.index, to.index)
+        // Subtract the offset of non-widget DSL items that precede the items() block.
+        val offset = if (currentHasSeederData.value) 1 else 0
+        val fromIdx = from.index - offset
+        val toIdx = to.index - offset
+        if (fromIdx in localWidgets.indices && toIdx in localWidgets.indices) {
+            localWidgets.add(toIdx, localWidgets.removeAt(fromIdx))
+        }
     }
 
     Scaffold(
         modifier = modifier.horizontalDateSwipe(
+            enabled = !uiState.isEditMode,
             onDayForward = { viewModel.stepDate(true) },
             onDayBack    = { viewModel.stepDate(false) },
         ),
@@ -190,23 +214,26 @@ fun DashboardScreen(
             }
 
             items(
-                items = uiState.widgets,
+                items = localWidgets,
                 key = { it.id },
                 span = { widget -> GridItemSpan(if (widget.size == WidgetSize.WIDE) 2 else 1) },
             ) { widget ->
-                ReorderableItem(state = reorderState, key = widget.id) { isDragging ->
+                ReorderableItem(state = reorderState, key = widget.id, enabled = uiState.isEditMode) { isDraggingItem ->
                     WidgetHost(
                         widget = widget,
                         date = uiState.date,
                         isEditMode = uiState.isEditMode,
-                        isDragging = isDragging,
+                        isDragging = isDraggingItem,
                         wiggleAngle = effectiveWiggle,
                         onTap = { viewModel.onWidgetTap(widget) },
                         onRemove = { viewModel.removeWidget(widget.id) },
                         onWeightEditTap = { showWeightSheet = true },
                         draggableHandleModifier = Modifier.draggableHandle(
-                            enabled = uiState.isEditMode,
-                            onDragStopped = { viewModel.onReorderPersist() },
+                            onDragStarted = { isDraggingActive.value = true },
+                            onDragStopped = {
+                                isDraggingActive.value = false
+                                viewModel.onReorderPersist(localWidgets.toList())
+                            },
                         ),
                     )
                 }

@@ -511,6 +511,7 @@ class BleEngine @Inject constructor(
     // -------------------------------------------------------------------------
 
     @SuppressLint("MissingPermission")
+    @Suppress("DEPRECATION")
     private fun connect(device: BluetoothDevice, manifest: WasmDriverManifest, resetRetries: Boolean) {
         silentSyncTimeoutJob?.cancel()
         silentSyncTimeoutJob = null

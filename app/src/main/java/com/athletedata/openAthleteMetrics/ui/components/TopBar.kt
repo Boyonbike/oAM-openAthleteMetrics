@@ -38,10 +38,12 @@ import kotlin.math.abs
 private val DATE_FORMATTER = DateTimeFormatter.ofPattern("d MMM yyyy")
 
 fun Modifier.horizontalDateSwipe(
+    enabled: Boolean = true,
     onDayForward: () -> Unit,
     onDayBack: () -> Unit,
-): Modifier = pointerInput(onDayForward, onDayBack) {
-    val threshold = 60.dp.toPx()
+): Modifier = pointerInput(enabled, onDayForward, onDayBack) {
+    if (!enabled) return@pointerInput
+    val threshold = 25.dp.toPx()
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false)
         var dx = 0f
@@ -50,7 +52,7 @@ fun Modifier.horizontalDateSwipe(
             dx += change.positionChange().x
             dy += change.positionChange().y
         }
-        if (abs(dx) > threshold && abs(dx) > abs(dy) * 1.5f) {
+        if (abs(dx) > threshold && abs(dx) > abs(dy) * 5f) {
             if (dx < 0) onDayForward() else onDayBack()
         }
     }

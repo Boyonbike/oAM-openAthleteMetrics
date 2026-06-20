@@ -39,7 +39,7 @@ sealed interface SettingsEffect {
 class SettingsViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val appDatabase: AppDatabase,
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
 ) : ViewModel() {
 
     val themePreference: StateFlow<ThemePreference> = settingsRepository

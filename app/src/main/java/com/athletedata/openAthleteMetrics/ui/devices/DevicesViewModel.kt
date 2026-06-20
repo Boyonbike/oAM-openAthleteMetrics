@@ -18,6 +18,7 @@ import com.athletedata.openAthleteMetrics.data.repository.SyncSessionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -212,7 +213,7 @@ class DevicesViewModel @Inject constructor(
                 _snackbarEvents.send("Reprocess failed: ${e.message}")
             } finally {
                 _reprocessingDeviceId.value = null
-                delay(3_000)
+                delay(3.seconds)
                 if (_reprocessState.value !is ReprocessState.Running) {
                     _reprocessState.value = ReprocessState.Idle
                 }

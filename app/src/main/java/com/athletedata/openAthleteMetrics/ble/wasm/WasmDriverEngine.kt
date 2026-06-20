@@ -243,9 +243,10 @@ class WasmDriverEngine @Inject constructor() {
                 if (stale > 0) memory.write(IN_OFFSET_V2 + data.size, ByteArray(stale))
             } else {
                 Timber.w(
-                    "WasmDriverEngine: driver ${manifest.id} uses spec v1 layout — " +
+                    "WasmDriverEngine: driver %s uses spec v1 layout — " +
                     "metadata not available. Update to specVersion 2 for " +
-                    "syncStartMs and utcOffsetMinutes support."
+                    "syncStartMs and utcOffsetMinutes support.",
+                    manifest.id
                 )
                 memory.write(IN_OFFSET_V1, data)
             }

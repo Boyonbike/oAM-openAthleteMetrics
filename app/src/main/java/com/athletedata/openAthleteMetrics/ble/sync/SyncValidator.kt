@@ -1,6 +1,5 @@
 package com.athletedata.openAthleteMetrics.ble.sync
 
-import android.util.Log
 import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import com.athletedata.openAthleteMetrics.data.model.MetricType
@@ -8,12 +7,11 @@ import com.athletedata.openAthleteMetrics.data.model.SleepSession
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
-import java.time.ZoneOffset
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.abs
+import timber.log.Timber
 
-private const val TAG = "SyncValidator"
 private val EARLIEST_VALID_TIMESTAMP: Instant = Instant.parse("2020-01-01T00:00:00Z")
 
 @Singleton
@@ -37,7 +35,7 @@ class SyncValidator @Inject constructor() {
                 else -> null
             }
             if (reason != null) {
-                Log.w(TAG, "Rejected MetricReading: $reason")
+                Timber.w("Rejected MetricReading: $reason")
                 ValidationResult.Rejected(reading, reason)
             } else {
                 ValidationResult.Accepted(reading)
@@ -71,12 +69,12 @@ class SyncValidator @Inject constructor() {
                 else -> null
             }
             if (reason != null) {
-                Log.w(TAG, "Rejecting sleep session [$dateIso]: $reason")
+                Timber.w("Rejecting sleep session [$dateIso]: $reason")
                 ValidationResult.Rejected(session, reason)
             } else {
                 val expectedDate = session.sleepEndMs.atZone(ZoneId.systemDefault()).toLocalDate()
                 val corrected = if (session.date != expectedDate) {
-                    Log.w(TAG, "Correcting sleep session date from ${session.date} to $expectedDate (sleepEndMs=${session.sleepEndMs})")
+                    Timber.w("Correcting sleep session date from ${session.date} to $expectedDate (sleepEndMs=${session.sleepEndMs})")
                     session.copy(date = expectedDate)
                 } else {
                     session
@@ -101,7 +99,7 @@ class SyncValidator @Inject constructor() {
                 else -> null
             }
             if (reason != null) {
-                Log.w(TAG, "Rejecting activity [${activity.deviceName}]: $reason")
+                Timber.w("Rejecting activity [${activity.deviceName}]: $reason")
                 ValidationResult.Rejected(activity, reason)
             } else {
                 ValidationResult.Accepted(activity)

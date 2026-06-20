@@ -35,13 +35,20 @@ import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BluetoothConnected
+import androidx.compose.material.icons.automirrored.outlined.Article
+import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.Bluetooth
+import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
@@ -58,9 +65,6 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.text.PlatformTextStyle
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.Velocity
@@ -135,6 +139,7 @@ fun BottomNavBar(
     connectionState: BleConnectionState,
     batteryPct: Int?,
     onDashboardTapped: () -> Unit,
+    onDailyDetailTapped: () -> Unit,
     onQuestionsTapped: () -> Unit,
     onHistoryTapped: () -> Unit,
     onSettingsTapped: () -> Unit,
@@ -157,8 +162,11 @@ fun BottomNavBar(
         navBarBottomPx + 16.dp.toPx() + barHeightDp.toPx()
     }
 
-    val isAlwaysVisible = currentRoute == ROUTE_SETTINGS || currentRoute == ROUTE_DEVICES
-    val targetOffsetY = if (isAlwaysVisible || scrollBehavior.isVisible) 0f else hiddenOffsetPx
+    val targetOffsetY = if (
+        currentRoute != ROUTE_SETTINGS &&
+        currentRoute != ROUTE_DEVICES &&
+        scrollBehavior.isVisible
+    ) 0f else hiddenOffsetPx
 
     val slideSpec: AnimationSpec<Float> = spring(
         dampingRatio = Spring.DampingRatioNoBouncy,
@@ -172,36 +180,36 @@ fun BottomNavBar(
 
     // Active indicator geometry
     val centerZoneWidth = pillWidth - 128.dp
-    val itemSlotWidth = centerZoneWidth / 3
+    val itemSlotWidth = centerZoneWidth / 4
 
     val targetCenterX: Dp
     val targetWidth: Dp
     val targetHeight: Dp
     when (currentRoute) {
-        ROUTE_SETTINGS -> {
-            targetCenterX = 32.dp
-            targetWidth = 48.dp
+        Page.DASHBOARD.name -> {
+            targetCenterX = 64.dp + itemSlotWidth * 0.5f
+            targetWidth = itemSlotWidth
             targetHeight = 48.dp
         }
-        Page.QUESTIONS.name -> {
+        Page.DAILY_DETAIL.name -> {
             targetCenterX = 64.dp + itemSlotWidth * 1.5f
             targetWidth = itemSlotWidth
             targetHeight = 48.dp
         }
-        Page.HISTORY.name -> {
+        Page.QUESTIONS.name -> {
             targetCenterX = 64.dp + itemSlotWidth * 2.5f
             targetWidth = itemSlotWidth
             targetHeight = 48.dp
         }
-        ROUTE_DEVICES -> {
-            targetCenterX = pillWidth - 32.dp
-            targetWidth = 48.dp
-            targetHeight = 48.dp
-        }
-        else -> { // DASHBOARD (default)
-            targetCenterX = 64.dp + itemSlotWidth * 0.5f
+        Page.HISTORY.name -> {
+            targetCenterX = 64.dp + itemSlotWidth * 3.5f
             targetWidth = itemSlotWidth
             targetHeight = 48.dp
+        }
+        else -> { // ROUTE_SETTINGS, ROUTE_DEVICES — no pill
+            targetCenterX = 64.dp + itemSlotWidth * 0.5f
+            targetWidth = 0.dp
+            targetHeight = 0.dp
         }
     }
 
@@ -276,55 +284,24 @@ fun BottomNavBar(
                                 modifier = Modifier.size(22.dp),
                             )
                         }
-                        // Centre zone — tab labels
+                        // Centre zone — icon tabs
                         Row(
                             modifier = Modifier
                                 .weight(1f)
-                                .fillMaxHeight(),
+                                .fillMaxHeight()
+                                .drawBehind {
+                                    val top = 12.dp.toPx()
+                                    val bottom = size.height - 12.dp.toPx()
+                                    val c = outline.copy(alpha = 0.35f)
+                                    drawLine(c, Offset(0f, top), Offset(0f, bottom), 0.5.dp.toPx())
+                                    drawLine(c, Offset(size.width, top), Offset(size.width, bottom), 0.5.dp.toPx())
+                                },
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            val labelStyle = MaterialTheme.typography.labelMedium.merge(
-                                TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
-                            )
-                            Text(
-                                text = Page.DASHBOARD.label,
-                                style = labelStyle,
-                                color = if (currentRoute == Page.DASHBOARD.name) activeColor else inactiveColor,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clickable(
-                                        onClick = onDashboardTapped,
-                                        indication = null,
-                                        interactionSource = remember { MutableInteractionSource() },
-                                    ),
-                            )
-                            Text(
-                                text = Page.QUESTIONS.label,
-                                style = labelStyle,
-                                color = if (currentRoute == Page.QUESTIONS.name) activeColor else inactiveColor,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clickable(
-                                        onClick = onQuestionsTapped,
-                                        indication = null,
-                                        interactionSource = remember { MutableInteractionSource() },
-                                    ),
-                            )
-                            Text(
-                                text = Page.HISTORY.label,
-                                style = labelStyle,
-                                color = if (currentRoute == Page.HISTORY.name) activeColor else inactiveColor,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clickable(
-                                        onClick = onHistoryTapped,
-                                        indication = null,
-                                        interactionSource = remember { MutableInteractionSource() },
-                                    ),
-                            )
+                            NavIcon(Icons.Outlined.Home, "Dashboard", currentRoute == Page.DASHBOARD.name, activeColor, inactiveColor, onDashboardTapped, Modifier.weight(1f).fillMaxHeight())
+                            NavIcon(Icons.AutoMirrored.Outlined.Article, "Daily Detail", currentRoute == Page.DAILY_DETAIL.name, activeColor, inactiveColor, onDailyDetailTapped, Modifier.weight(1f).fillMaxHeight())
+                            NavIcon(Icons.Outlined.Checklist, "Questions", currentRoute == Page.QUESTIONS.name, activeColor, inactiveColor, onQuestionsTapped, Modifier.weight(1f).fillMaxHeight())
+                            NavIcon(Icons.Outlined.BarChart, "History", currentRoute == Page.HISTORY.name, activeColor, inactiveColor, onHistoryTapped, Modifier.weight(1f).fillMaxHeight())
                         }
                         // Right end cap — Devices
                         DevicesButton(
@@ -416,5 +393,33 @@ private fun DevicesButton(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun NavIcon(
+    icon: ImageVector,
+    contentDesc: String,
+    isActive: Boolean,
+    activeColor: androidx.compose.ui.graphics.Color,
+    inactiveColor: androidx.compose.ui.graphics.Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .clickable(
+                onClick = onClick,
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDesc,
+            tint = if (isActive) activeColor else inactiveColor,
+            modifier = Modifier.size(22.dp),
+        )
     }
 }

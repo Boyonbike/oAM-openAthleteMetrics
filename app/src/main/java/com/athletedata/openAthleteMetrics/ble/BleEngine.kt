@@ -37,7 +37,7 @@ import com.athletedata.openAthleteMetrics.worker.enqueueSummaryWorker
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.LocalDate
 import java.time.ZoneId
-import java.time.ZoneOffset
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -212,7 +212,7 @@ class BleEngine @Inject constructor(
 
     @SuppressLint("MissingPermission")
     fun startScan() {
-        Timber.d("BleEngine: startScan() called", Exception("startScan stack trace"))
+        Timber.w(Exception("startScan stack trace"), "BleEngine: startScan() called")
         val current = _connectionState.value
         if (current !is BleConnectionState.Idle && current !is BleConnectionState.Error &&
             current !is BleConnectionState.GattCacheError) return
@@ -265,7 +265,7 @@ class BleEngine @Inject constructor(
         }
 
         scanTimeoutJob = scope.launch {
-            delay(SCAN_TIMEOUT_MS)
+            delay(SCAN_TIMEOUT_MS.milliseconds)
             if (_connectionState.value is BleConnectionState.Scanning) {
                 stopScan()
                 if (_discoveredCandidates.value.isEmpty()) {
@@ -411,7 +411,7 @@ class BleEngine @Inject constructor(
         if (_connectionState.value is BleConnectionState.Connected) {
             _connectionState.value = BleConnectionState.Connected(address, manifest.displayName, count, false)
             quiescenceJob = scope.launch {
-                delay(STREAM_QUIESCENCE_MS)
+                delay(STREAM_QUIESCENCE_MS.milliseconds)
                 if (_connectionState.value is BleConnectionState.Connected) {
                     isQuiescent = true
                     _connectionState.value = BleConnectionState.Connected(address, manifest.displayName, count, true)
@@ -734,7 +734,7 @@ class BleEngine @Inject constructor(
             _connectionState.value = BleConnectionState.Connected(address, manifest.displayName)
             silentSyncTimeoutJob?.cancel()
             silentSyncTimeoutJob = scope.launch {
-                delay(SILENT_SYNC_TIMEOUT_MS)
+                delay(SILENT_SYNC_TIMEOUT_MS.milliseconds)
                 if (_connectionState.value !is BleConnectionState.Connected || packetCount > 0) return@launch
                 val gatt = activeGatt ?: return@launch
                 val capturedAddress = activeDeviceAddress ?: return@launch
@@ -807,7 +807,7 @@ class BleEngine @Inject constructor(
             }
             is SyncCommand.Delay -> {
                 scope.launch {
-                    delay(cmd.millis)
+                    delay(cmd.millis.milliseconds)
                     commandIndex++
                     executeNextSyncCommand()
                 }
@@ -835,7 +835,7 @@ class BleEngine @Inject constructor(
         Timber.d("BleEngine: retry $retryCount/$MAX_RETRIES in ${delayMs}ms")
         _connectionState.value = BleConnectionState.Connecting(address)
         retryJob = scope.launch {
-            delay(delayMs)
+            delay(delayMs.milliseconds)
             val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)
                 ?.adapter ?: return@launch
             @Suppress("MissingPermission")
@@ -863,7 +863,7 @@ class BleEngine @Inject constructor(
      * [MetricType.SLEEP_STAGE] → metric_readings_staging with a pending_sleep_stage flag.
      *   Grouping those staged rows into SleepSession + SleepStage rows once a complete night
      *   is available is handled by [com.athletedata.openAthleteMetrics.worker.SleepStagePromoter],
-     *   which is invoked by both [DeviceSyncProcessor] and [DeviceReprocessor].
+     *   which is invoked by both [DeviceSyncProcessor] and [com.athletedata.openAthleteMetrics.ble.sync.DeviceReprocessor].
      * [MetricType.BLOOD_PRESSURE] → blood_pressure_readings when metaJson["diastolic"] is
      *   present and parseable; falls back to metric_readings_staging otherwise.
      * All other types → metric_readings_staging (catch-all for unknown metrics).

@@ -3,8 +3,11 @@ package com.athletedata.openAthleteMetrics.ui.settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,11 +18,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -35,8 +40,13 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -58,7 +68,6 @@ fun SettingsScreen(
     val uiState by settingsViewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // Collect one-shot effects: snackbars (suspending — waits for dismissal) then navigation.
     LaunchedEffect(Unit) {
         settingsViewModel.effects.collect { effect ->
             when (effect) {
@@ -68,7 +77,6 @@ fun SettingsScreen(
         }
     }
 
-    // SAF launchers must be registered in the composable, results forwarded to the VM.
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/octet-stream"),
     ) { uri -> uri?.let { settingsViewModel.exportDatabase(it) } }
@@ -170,48 +178,38 @@ fun SettingsScreen(
                 .padding(horizontal = 16.dp, vertical = 8.dp)
                 .padding(bottom = 80.dp),
         ) {
-            // ── Section 1: Theme ──────────────────────────────────────────────
-            SectionHeader("Theme")
+            // ── Section: Settings ─────────────────────────────────────────────
+            SectionHeader("Settings")
             Spacer(Modifier.height(8.dp))
-            ThemeSelector(current = theme, onSelect = settingsViewModel::setTheme)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                AppearanceTile(
+                    theme = theme,
+                    onSelect = settingsViewModel::setTheme,
+                )
+                BackupTile(
+                    isBusy = uiState.isBusy,
+                    onExport = { exportLauncher.launch("athlete_data_export_${LocalDate.now()}.db") },
+                    onImport = { importLauncher.launch(arrayOf("*/*")) },
+                )
+                DangerTile(
+                    isBusy = uiState.isBusy,
+                    onReset = settingsViewModel::onResetClicked,
+                )
+            }
 
-            // ── Section 2: Backup ─────────────────────────────────────────────
+            // ── Section: Experimental ─────────────────────────────────────────
             Spacer(Modifier.height(24.dp))
-            HorizontalDivider()
-            Spacer(Modifier.height(16.dp))
-            SectionHeader("Backup")
-            Spacer(Modifier.height(8.dp))
-            BackupSection(
-                isBusy = uiState.isBusy,
-                onExport = {
-                    exportLauncher.launch("athlete_data_export_${LocalDate.now()}.db")
-                },
-                onImport = {
-                    importLauncher.launch(arrayOf("*/*"))
-                },
-            )
+            SectionHeader("Experimental")
+            // No tiles yet.
 
-            // ── Section 3: Danger zone ────────────────────────────────────────
-            Spacer(Modifier.height(24.dp))
-            HorizontalDivider()
-            Spacer(Modifier.height(16.dp))
-            SectionHeader("Danger zone", color = MaterialTheme.colorScheme.error)
-            Spacer(Modifier.height(8.dp))
-            DangerSection(
-                isBusy = uiState.isBusy,
-                onReset = settingsViewModel::onResetClicked,
-            )
-
-            // ── Section 4: Developer (debug builds only) ──────────────────────
+            // ── Section: Developer (debug builds only) ────────────────────────
             if (BuildConfig.DEBUG) {
                 val seederViewModel: SeederViewModel = hiltViewModel()
                 val seederState by seederViewModel.state.collectAsStateWithLifecycle()
                 Spacer(Modifier.height(24.dp))
-                HorizontalDivider()
-                Spacer(Modifier.height(16.dp))
                 SectionHeader("Developer")
                 Spacer(Modifier.height(8.dp))
-                SeederSection(
+                SeederTile(
                     state = seederState,
                     onSeedThirtyDays = seederViewModel::seedThirtyDays,
                     onSeedToday = seederViewModel::seedToday,
@@ -221,6 +219,182 @@ fun SettingsScreen(
             }
         }
     }
+}
+
+// ── Generic tile shell ────────────────────────────────────────────────────────
+
+@Composable
+private fun SettingsCategoryTile(
+    title: String,
+    titleColor: Color = Color.Unspecified,
+    collapsedSummary: @Composable () -> Unit,
+    expandedContent: @Composable ColumnScope.() -> Unit,
+) {
+    var isExpanded by remember { mutableStateOf(false) }
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (isExpanded) 180f else 0f,
+        label = "chevron_$title",
+    )
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { isExpanded = !isExpanded }
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = titleColor,
+                )
+                Icon(
+                    imageVector = Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.graphicsLayer { rotationZ = chevronRotation },
+                )
+            }
+            AnimatedVisibility(visible = !isExpanded) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp)
+                        .padding(bottom = 10.dp),
+                ) {
+                    collapsedSummary()
+                }
+            }
+            AnimatedVisibility(visible = isExpanded) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp)
+                        .padding(bottom = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    expandedContent()
+                }
+            }
+        }
+    }
+}
+
+// ── Appearance tile ───────────────────────────────────────────────────────────
+
+@Composable
+private fun AppearanceTile(
+    theme: ThemePreference,
+    onSelect: (ThemePreference) -> Unit,
+) {
+    SettingsCategoryTile(
+        title = "Appearance",
+        collapsedSummary = {
+            Text(
+                text = when (theme) {
+                    ThemePreference.LIGHT  -> "Light"
+                    ThemePreference.DARK   -> "Dark"
+                    ThemePreference.SYSTEM -> "System"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        expandedContent = {
+            ThemeSelector(current = theme, onSelect = onSelect)
+        },
+    )
+}
+
+// ── Backup tile ───────────────────────────────────────────────────────────────
+
+@Composable
+private fun BackupTile(
+    isBusy: Boolean,
+    onExport: () -> Unit,
+    onImport: () -> Unit,
+) {
+    SettingsCategoryTile(
+        title = "Backup",
+        collapsedSummary = {
+            Text(
+                text = "Export or import your database",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        expandedContent = {
+            BackupSection(isBusy = isBusy, onExport = onExport, onImport = onImport)
+        },
+    )
+}
+
+// ── Danger tile ───────────────────────────────────────────────────────────────
+
+@Composable
+private fun DangerTile(
+    isBusy: Boolean,
+    onReset: () -> Unit,
+) {
+    SettingsCategoryTile(
+        title = "Danger zone",
+        titleColor = MaterialTheme.colorScheme.error,
+        collapsedSummary = {
+            Text(
+                text = "Reset all app data",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        expandedContent = {
+            DangerSection(isBusy = isBusy, onReset = onReset)
+        },
+    )
+}
+
+// ── Seeder tile ───────────────────────────────────────────────────────────────
+
+@Composable
+private fun SeederTile(
+    state: SeederState,
+    onSeedThirtyDays: () -> Unit,
+    onSeedToday: () -> Unit,
+    onClearData: () -> Unit,
+    onDismissResult: () -> Unit,
+) {
+    val collapsedLabel = when (state) {
+        is SeederState.Idle           -> "Idle"
+        is SeederState.Running        -> "${(state.progress * 100).toInt()}% complete"
+        is SeederState.Done           -> "Done"
+        is SeederState.PartialSuccess -> "Partial: ${state.failedDates.size} day(s) failed"
+        is SeederState.Error          -> "Error: ${state.message}"
+    }
+    SettingsCategoryTile(
+        title = "Seeder",
+        collapsedSummary = {
+            Text(
+                text = collapsedLabel,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        expandedContent = {
+            SeederSection(
+                state = state,
+                onSeedThirtyDays = onSeedThirtyDays,
+                onSeedToday = onSeedToday,
+                onClearData = onClearData,
+                onDismissResult = onDismissResult,
+            )
+        },
+    )
 }
 
 // ── Theme selector ────────────────────────────────────────────────────────────
@@ -337,7 +511,7 @@ private fun SeederSection(
 
         val statusText = when (state) {
             is SeederState.Idle           -> "Idle"
-            is SeederState.Running        -> null  // shown inline via progress above
+            is SeederState.Running        -> null
             is SeederState.Done           -> "Done"
             is SeederState.PartialSuccess -> "Partial: ${state.failedDates.size} day(s) failed"
             is SeederState.Error          -> "Error: ${state.message}"

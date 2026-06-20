@@ -124,6 +124,9 @@ dependencies {
     implementation(libs.vico.compose.m3)
     implementation(libs.vico.core)
 
+    // ── Reorderable (drag-and-drop for LazyVerticalGrid) ──────────────────
+    implementation(libs.reorderable)
+
     // ── Testing ────────────────────────────────────────────────────────────
     testImplementation(libs.junit)
     testImplementation(libs.mockk)

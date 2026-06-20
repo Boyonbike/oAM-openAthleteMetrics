@@ -1,23 +1,107 @@
 package com.athletedata.openAthleteMetrics.ui.dailydetail
 
-import com.athletedata.openAthleteMetrics.data.model.DailyContext
-import com.athletedata.openAthleteMetrics.data.model.DailySummary
 import com.athletedata.openAthleteMetrics.data.model.QuestionCategory
+import com.athletedata.openAthleteMetrics.data.model.SleepStage
 import com.athletedata.openAthleteMetrics.data.model.UserCategory
 import java.time.LocalDate
 
 sealed class DailyDetailUiState {
     object Loading : DailyDetailUiState()
+    data class Error(val message: String) : DailyDetailUiState()
     data class Success(
         val date: LocalDate,
-        val summary: DailySummary?,
-        val context: DailyContext?,
-        val activities: List<ActivityUiItem>,
+        val tileOrder: List<TileConfig>,
+        val cardiovascular: CardiovascularData?,
+        val sleep: SleepData?,
+        val activity: ActivityData?,
+        val body: BodyData?,
         val questionGroups: List<QuestionGroup>,
-        val sleep: SleepUiItem?,
+        val isIll: Boolean,
+        val illnessNotes: String?,
+        val habitsJson: String?,
+        val contextScores: ContextScores?,
+        val activities: List<ActivityUiItem>,
+        val rawReadings: RawReadingsForDay,
     ) : DailyDetailUiState()
-    data class Error(val message: String) : DailyDetailUiState()
 }
+
+data class TileConfig(val id: String, val isVisible: Boolean, val sortOrder: Int)
+
+val DEFAULT_TILE_ORDER = listOf(
+    TileConfig("cardiovascular", true, 0),
+    TileConfig("sleep", true, 1),
+    TileConfig("activity", true, 2),
+    TileConfig("body", true, 3),
+    TileConfig("questions", true, 4),
+    TileConfig("activities", true, 5),
+)
+
+data class CardiovascularData(
+    val avgHrBpm: Double?,
+    val restingHrBpm: Double?,
+    val morningHrvMs: Double?,
+    val avgHrvMs: Double?,
+    val hrvMinMs: Double?,
+    val hrvMaxMs: Double?,
+    val avgSpo2Pct: Double?,
+    val spo2MinPct: Double?,
+    val spo2MaxPct: Double?,
+)
+
+data class SleepData(
+    val formattedDuration: String,
+    val totalMinutes: Int,
+    val deepMinutes: Int?,
+    val lightMinutes: Int?,
+    val remMinutes: Int?,
+    val awakeMinutes: Int?,
+    val sleepStartMs: Long?,
+    val sleepEndMs: Long?,
+    val hypnogramSegments: List<HypnogramSegment>,
+)
+
+data class HypnogramSegment(
+    val stage: SleepStage,
+    val startMs: Long,
+    val endMs: Long,
+)
+
+data class ActivityData(
+    val steps: Int?,
+    val activeCalories: Double?,
+    val exerciseMinutes: Int?,
+)
+
+data class BodyData(
+    val weightKg: Double?,
+    val bodyFatPct: Double?,
+    val respirationAvg: Double?,
+    val totalCalories: Double?,
+)
+
+data class ContextScores(
+    val fatigue: Int?,
+    val stress: Int?,
+    val motivation: Int?,
+    val sleepQuality: Int?,
+    val performanceFeel: Int?,
+)
+
+data class RawReadingsForDay(
+    val hrReadings: List<TimestampedReading> = emptyList(),
+    val hrvReadings: List<TimestampedReading> = emptyList(),
+    val spo2Readings: List<TimestampedReading> = emptyList(),
+    val respirationReadings: List<TimestampedReading> = emptyList(),
+    val stepsReadings: List<TimestampedReading> = emptyList(),
+    val activeCalorieReadings: List<TimestampedReading> = emptyList(),
+    val totalCalorieReadings: List<TimestampedReading> = emptyList(),
+)
+
+data class TimestampedReading(
+    val timeLabel: String,
+    val value: String,
+    val unit: String,
+)
 
 data class ActivityUiItem(
     val id: Long,
@@ -26,17 +110,6 @@ data class ActivityUiItem(
     val formattedDuration: String,
     val avgHrBpm: Double?,
     val notes: String?,
-)
-
-data class SleepUiItem(
-    val formattedDuration: String,
-    val stages: SleepStages?,
-)
-
-data class SleepStages(
-    val deepMinutes: Int,
-    val lightMinutes: Int,
-    val remMinutes: Int,
 )
 
 data class QuestionGroup(

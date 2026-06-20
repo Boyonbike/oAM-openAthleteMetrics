@@ -35,7 +35,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Bluetooth
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -77,6 +76,7 @@ import com.athletedata.openAthleteMetrics.ui.theme.TypographyMeta
 import com.athletedata.openAthleteMetrics.ui.theme.TypographyTitle
 import com.athletedata.openAthleteMetrics.ui.theme.space4
 import com.athletedata.openAthleteMetrics.ui.theme.space8
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -861,7 +861,7 @@ private fun BleBanner(
                         )
                     }
                     LaunchedEffect(state) {
-                        delay(3_000)
+                        delay(3.seconds)
                         onDisconnectDismissed()
                     }
                 }

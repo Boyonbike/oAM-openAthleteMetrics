@@ -1,7 +1,6 @@
 package com.athletedata.openAthleteMetrics.ui.questions
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -11,27 +10,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.material.icons.outlined.KeyboardArrowLeft
-import androidx.compose.material.icons.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
-import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -43,13 +34,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
+import com.athletedata.openAthleteMetrics.ui.components.DataPageDatePickerDialog
+import com.athletedata.openAthleteMetrics.ui.components.DataPageTopBar
+import com.athletedata.openAthleteMetrics.ui.components.PillSelector
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -61,11 +53,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalFocusManager
-import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneId
-import java.time.ZoneOffset
-import java.time.format.DateTimeFormatter
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -80,8 +68,6 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import com.athletedata.openAthleteMetrics.ui.nav.LocalBottomNavScrollBehavior
 import com.athletedata.openAthleteMetrics.ui.nav.rememberBottomNavNestedScrollConnection
-
-private val DATE_FORMATTER = DateTimeFormatter.ofPattern("d MMM yyyy")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -130,39 +116,21 @@ fun QuestionsScreen(
         contentWindowInsets = WindowInsets.navigationBars,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            DateNavigationRow(
+            DataPageTopBar(
                 date = localDate,
-                today = today,
-                onPrevDay = { viewModel.setDate(localDate.minusDays(1)) },
-                onNextDay = { viewModel.setDate(localDate.plusDays(1)) },
                 onDateClick = { showDatePicker = true },
-            )
-        },
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .nestedScroll(nestedScrollConnection),
-        ) {
-            // ── Tab selector with inline action icons ─────────────────────────
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(end = 4.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                TabSelector(
-                    selectedTab = selectedTab,
-                    onSelect = {
-                        selectedTab = it
-                        if (editMode) viewModel.exitEditMode()
-                    },
-                )
-                Row(
-                    modifier = Modifier.align(Alignment.CenterEnd),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+                centre = {
+                    PillSelector(
+                        tabs = listOf("Lifestyle", "Habits"),
+                        selectedIndex = Tab.entries.indexOf(selectedTab),
+                        onSelect = { i ->
+                            val tab = Tab.entries[i]
+                            selectedTab = tab
+                            if (editMode) viewModel.exitEditMode()
+                        },
+                    )
+                },
+                actions = {
                     if (editMode) {
                         TextButton(
                             onClick = viewModel::exitEditMode,
@@ -172,33 +140,32 @@ fun QuestionsScreen(
                         }
                     } else {
                         if (selectedTab == Tab.HABITS) {
-                            IconButton(
-                                onClick = { showAddSheet = true },
-                                modifier = Modifier.size(36.dp),
-                            ) {
+                            IconButton(onClick = { showAddSheet = true }) {
                                 Icon(
                                     imageVector = Icons.Outlined.Add,
                                     contentDescription = "Add habit",
-                                    modifier = Modifier.size(20.dp),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                         }
-                        IconButton(
-                            onClick = viewModel::enterEditMode,
-                            modifier = Modifier.size(36.dp),
-                        ) {
+                        IconButton(onClick = viewModel::enterEditMode) {
                             Icon(
                                 imageVector = Icons.Outlined.Edit,
                                 contentDescription = "Edit",
-                                modifier = Modifier.size(20.dp),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
-                }
-            }
-
+                },
+            )
+        },
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .nestedScroll(nestedScrollConnection),
+        ) {
             // ── Tab content ───────────────────────────────────────────────────
             Column(
                 modifier = Modifier
@@ -212,7 +179,6 @@ fun QuestionsScreen(
                     Tab.LIFESTYLE -> {
                         val displayItems = if (editMode) lifestyleItems
                                            else lifestyleItems.filter { it.definition.isVisible }
-                        val starredCount = lifestyleItems.count { it.definition.isStarred }
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             displayItems.forEachIndexed { index, item ->
                                 Card(
@@ -252,24 +218,6 @@ fun QuestionsScreen(
                                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 )
                                             }
-                                            // Star: adds this question to the dashboard lifestyle bar (max 5)
-                                            IconButton(
-                                                onClick = { viewModel.toggleStar(item.definition.id) },
-                                                enabled = item.definition.isVisible &&
-                                                    (item.definition.isStarred || starredCount < 5),
-                                            ) {
-                                                Icon(
-                                                    imageVector = if (item.definition.isStarred)
-                                                                      Icons.Filled.Star
-                                                                  else Icons.Outlined.Star,
-                                                    contentDescription = if (item.definition.isStarred)
-                                                                              "Unstar from dashboard"
-                                                                          else "Star for dashboard",
-                                                    tint = if (item.definition.isStarred)
-                                                               MaterialTheme.colorScheme.primary
-                                                           else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                )
-                                            }
                                             ReorderButtons(
                                                 canMoveUp = index > 0,
                                                 canMoveDown = index < displayItems.lastIndex,
@@ -290,7 +238,6 @@ fun QuestionsScreen(
                     Tab.HABITS -> {
                         val displayItems = if (editMode) customItems
                                            else customItems.filter { it.definition.isVisible }
-                        val starredCount = customItems.count { it.definition.isStarred }
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             displayItems.forEachIndexed { index, item ->
                                 Card(
@@ -358,24 +305,6 @@ fun QuestionsScreen(
                                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 )
                                             }
-                                            // Star: adds this habit to the dashboard habits bar (max 5)
-                                            IconButton(
-                                                onClick = { viewModel.toggleStar(item.definition.id) },
-                                                enabled = item.definition.isVisible &&
-                                                    (item.definition.isStarred || starredCount < 5),
-                                            ) {
-                                                Icon(
-                                                    imageVector = if (item.definition.isStarred)
-                                                                      Icons.Filled.Star
-                                                                  else Icons.Outlined.Star,
-                                                    contentDescription = if (item.definition.isStarred)
-                                                                             "Unstar from dashboard"
-                                                                         else "Star for dashboard",
-                                                    tint = if (item.definition.isStarred)
-                                                               MaterialTheme.colorScheme.primary
-                                                           else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                )
-                                            }
                                             ReorderButtons(
                                                 canMoveUp = index > 0,
                                                 canMoveDown = index < displayItems.lastIndex,
@@ -400,7 +329,7 @@ fun QuestionsScreen(
     }
 
     if (showDatePicker) {
-        QuestionsDatePickerDialog(
+        DataPageDatePickerDialog(
             currentDate = localDate,
             today = today,
             onConfirm = { date ->
@@ -440,111 +369,11 @@ fun QuestionsScreen(
     }
 }
 
-// ── Date navigation row ───────────────────────────────────────────────────────
-
-@Composable
-private fun DateNavigationRow(
-    date: LocalDate,
-    today: LocalDate,
-    onPrevDay: () -> Unit,
-    onNextDay: () -> Unit,
-    onDateClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        IconButton(onClick = onPrevDay) {
-            Icon(Icons.Outlined.KeyboardArrowLeft, contentDescription = "Previous day")
-        }
-        TextButton(onClick = onDateClick) {
-            Text(
-                text = date.format(DATE_FORMATTER),
-                style = MaterialTheme.typography.titleMedium,
-            )
-        }
-        IconButton(onClick = onNextDay, enabled = date < today) {
-            Icon(Icons.Outlined.KeyboardArrowRight, contentDescription = "Next day")
-        }
-    }
-}
-
-// ── Date picker dialog ────────────────────────────────────────────────────────
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun QuestionsDatePickerDialog(
-    currentDate: LocalDate,
-    today: LocalDate,
-    onConfirm: (LocalDate) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val datePickerState = rememberDatePickerState(
-        initialSelectedDateMillis = currentDate
-            .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli(),
-        selectableDates = object : SelectableDates {
-            override fun isSelectableDate(utcTimeMillis: Long): Boolean {
-                val picked = Instant.ofEpochMilli(utcTimeMillis)
-                    .atZone(ZoneId.systemDefault()).toLocalDate()
-                return !picked.isAfter(today)
-            }
-        },
-    )
-    DatePickerDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {
-            TextButton(onClick = {
-                datePickerState.selectedDateMillis?.let { ms ->
-                    val picked = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).toLocalDate()
-                    onConfirm(picked)
-                } ?: onDismiss()
-            }) { Text("OK") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        },
-    ) {
-        DatePicker(state = datePickerState)
-    }
-}
-
-// ── Tab enum + centered selector ──────────────────────────────────────────────
+// ── Tab enum ──────────────────────────────────────────────────────────────────
 
 private enum class Tab(val label: String) {
     LIFESTYLE("Lifestyle"),
     HABITS("Habits"),
-}
-
-@Composable
-private fun TabSelector(
-    selectedTab: Tab,
-    onSelect: (Tab) -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.Center,
-    ) {
-        Tab.entries.forEach { tab ->
-            val selected = tab == selectedTab
-            TextButton(
-                onClick = { onSelect(tab) },
-                colors = ButtonDefaults.textButtonColors(
-                    contentColor = if (selected) MaterialTheme.colorScheme.primary
-                                   else MaterialTheme.colorScheme.onSurfaceVariant,
-                ),
-            ) {
-                Text(
-                    text = tab.label,
-                    style = if (selected) MaterialTheme.typography.labelLarge else TypographyMeta,
-                )
-            }
-        }
-    }
 }
 
 // ── Question row ──────────────────────────────────────────────────────────────

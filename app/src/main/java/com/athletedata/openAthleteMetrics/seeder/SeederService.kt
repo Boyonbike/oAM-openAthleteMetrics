@@ -563,7 +563,7 @@ class SeederService @Inject constructor(
         if (stages.isNotEmpty()) {
             val surplus = stages.sumOf { it.durationMinutes } - sessionMinutes
             if (surplus != 0) {
-                val last = stages.removeLast()
+                val last = stages.removeAt(stages.lastIndex)
                 stages += last.copy(durationMinutes = last.durationMinutes - surplus)
             }
         }

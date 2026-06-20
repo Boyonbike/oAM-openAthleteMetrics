@@ -24,6 +24,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.LocalDate
+import java.time.Period
+import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 
 // ── Public data models ────────────────────────────────────────────────────────
@@ -37,7 +39,22 @@ enum class RangeToggle(val days: Long, val label: String) {
     ALL(Long.MAX_VALUE, "All"),
 }
 
+enum class Regularity(val label: String) {
+    HOURLY("Hourly"),   // disabled in this pass; requires raw reading repos + LocalDateTime x-axis
+    DAILY("Daily"),
+    WEEKLY("Weekly"),
+    MONTHLY("Monthly"),
+}
+
+enum class AggregationType { AVG, SUM, SINGLE }
+
 data class ChartEntry(val date: LocalDate, val value: Float)
+
+data class AggregatedPoint(
+    val periodStart: LocalDate,
+    val value: Float,
+    val label: String,
+)
 
 data class SeriesData(
     val metricKey: String,
@@ -46,18 +63,16 @@ data class SeriesData(
     val isBooleanType: Boolean = false,
 )
 
-data class SummaryData(
-    val value: Float?,
-    val unit: String,
-    val deltaVs30DayAvg: Float?,
-)
-
 data class MetricTile(
     val metricKey: String,
     val displayName: String,
-    val summary: SummaryData,
+    val selectedValue: Float?,
+    val unit: String,
     val questionType: QuestionType?,
     val seriesColor: Color,
+    val aggregationType: AggregationType,
+    val allPoints: List<AggregatedPoint>,
+    val selectedIndex: Int,
 )
 
 data class OverlayOption(
@@ -90,6 +105,12 @@ class HistoryViewModel @Inject constructor(
 
     private val _rangeToggle = MutableStateFlow(RangeToggle.DAYS_30)
     val rangeToggle: StateFlow<RangeToggle> = _rangeToggle.asStateFlow()
+
+    private val _regularity = MutableStateFlow(Regularity.DAILY)
+    val regularity: StateFlow<Regularity> = _regularity.asStateFlow()
+
+    private val _selectedPointDate = MutableStateFlow(sessionState.date)
+    val selectedPointDate: StateFlow<LocalDate> = _selectedPointDate.asStateFlow()
 
     private val allQuestions: Flow<List<QuestionDefinition>> = combine(
         questionRepo.getLifestyleQuestions(),
@@ -128,16 +149,38 @@ class HistoryViewModel @Inject constructor(
         combine(flows) { it.toList() }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    private data class TileInputs(
+        val series: List<SeriesData>,
+        val endDate: LocalDate,
+        val selDate: LocalDate,
+        val range: RangeToggle,
+        val reg: Regularity,
+    )
+
     val metricTiles: StateFlow<List<MetricTile>> = combine(
-        seriesList, _localDate, allQuestions,
-    ) { series, date, questions ->
-        series.mapIndexed { idx, s ->
+        combine(seriesList, _localDate, _selectedPointDate, _rangeToggle, _regularity) { s, d, sd, rt, reg ->
+            TileInputs(s, d, sd, rt, reg)
+        },
+        allQuestions,
+    ) { inputs, questions ->
+        val from = if (inputs.range == RangeToggle.ALL) LocalDate.of(2000, 1, 1)
+                   else inputs.endDate.minusDays(inputs.range.days - 1)
+
+        inputs.series.mapIndexed { idx, s ->
+            val points   = aggregateEntries(s.metricKey, s.entries, inputs.reg, from, inputs.endDate)
+            val selIdx   = points.indexOfLast { !it.periodStart.isAfter(inputs.selDate) }
+                .coerceAtLeast(0)
+            val selValue = points.getOrNull(selIdx)?.value
             MetricTile(
-                metricKey    = s.metricKey,
-                displayName  = s.displayName,
-                summary      = computeSummary(s.metricKey, date, s.entries),
-                questionType = questionTypeForKey(s.metricKey, questions),
-                seriesColor  = SeriesColors[idx.coerceAtMost(SeriesColors.lastIndex)],
+                metricKey       = s.metricKey,
+                displayName     = s.displayName,
+                selectedValue   = selValue,
+                unit            = metricUnit(s.metricKey),
+                questionType    = questionTypeForKey(s.metricKey, questions),
+                seriesColor     = SeriesColors[idx.coerceAtMost(SeriesColors.lastIndex)],
+                aggregationType = aggregationTypeFor(s.metricKey),
+                allPoints       = points,
+                selectedIndex   = selIdx,
             )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -154,10 +197,45 @@ class HistoryViewModel @Inject constructor(
 
     fun moveCursor(date: LocalDate) {
         _localDate.value = date
+        _selectedPointDate.value = date
         sessionState.date = date
     }
 
     fun setRange(range: RangeToggle) { _rangeToggle.value = range }
+
+    fun setRegularity(reg: Regularity) { _regularity.value = reg }
+
+    fun setSelectedPoint(date: LocalDate) { _selectedPointDate.value = date }
+
+    fun stepSelectedPoint(forward: Boolean) {
+        val r = _regularity.value
+        val cur = _selectedPointDate.value
+        val next: LocalDate = when (r) {
+            Regularity.DAILY   -> if (forward) cur.plusDays(1) else cur.minusDays(1)
+            Regularity.WEEKLY  -> if (forward) cur.plusWeeks(1) else cur.minusWeeks(1)
+            Regularity.MONTHLY -> if (forward) cur.plusMonths(1) else cur.minusMonths(1)
+            Regularity.HOURLY  -> cur
+        }
+        val today = LocalDate.now()
+        val from = windowStart()
+        when {
+            next > today -> {
+                val step = stepPeriod(r)
+                val shifted = (_localDate.value + step).coerceAtMost(today)
+                _localDate.value = shifted
+                sessionState.date = shifted
+                _selectedPointDate.value = shifted
+            }
+            next < from -> {
+                val step = stepPeriod(r)
+                val shifted = _localDate.value - step
+                _localDate.value = shifted
+                sessionState.date = shifted
+                _selectedPointDate.value = next
+            }
+            else -> _selectedPointDate.value = next
+        }
+    }
 
     fun addMetric(key: String) {
         val current = _metricKeys.value
@@ -177,10 +255,24 @@ class HistoryViewModel @Inject constructor(
         sessionState.metricKey = metricKey
         val date = runCatching { LocalDate.parse(dateString ?: "") }.getOrDefault(LocalDate.now())
         _localDate.value = date
+        _selectedPointDate.value = date
         sessionState.date = date
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
+
+    private fun windowStart(): LocalDate {
+        val rt = _rangeToggle.value
+        return if (rt == RangeToggle.ALL) LocalDate.of(2000, 1, 1)
+        else _localDate.value.minusDays(rt.days - 1)
+    }
+
+    private fun stepPeriod(r: Regularity): Period = when (r) {
+        Regularity.DAILY   -> Period.ofDays(1)
+        Regularity.WEEKLY  -> Period.ofWeeks(1)
+        Regularity.MONTHLY -> Period.ofMonths(1)
+        Regularity.HOURLY  -> Period.ZERO
+    }
 
     private fun fetchSeriesFlow(key: String, endDate: LocalDate, days: Long): Flow<List<ChartEntry>> {
         val from = if (days == Long.MAX_VALUE) LocalDate.of(2000, 1, 1) else endDate.minusDays(days - 1)
@@ -214,19 +306,6 @@ class HistoryViewModel @Inject constructor(
                 }.sortedBy { it.date }
             }
         }
-    }
-
-    private fun computeSummary(key: String, date: LocalDate, entries: List<ChartEntry>): SummaryData {
-        val cardValue = entries.find { it.date == date }?.value
-            ?: entries.filter { !it.date.isAfter(date) }.maxByOrNull { it.date }?.value
-        val window30 = entries.filter {
-            !it.date.isAfter(date) && !it.date.isBefore(date.minusDays(29))
-        }
-        val avg30 = if (window30.isNotEmpty()) window30.map { it.value }.average().toFloat() else null
-        val delta = if (cardValue != null && avg30 != null && avg30 != 0f) {
-            (cardValue - avg30) / avg30 * 100f
-        } else null
-        return SummaryData(cardValue, metricUnit(key), delta)
     }
 
     private fun questionTypeForKey(key: String, questions: List<QuestionDefinition>): QuestionType? {
@@ -276,6 +355,53 @@ private data class SeriesFetchParams(
     val range: RangeToggle,
     val questions: List<QuestionDefinition>,
 )
+
+fun aggregationTypeFor(key: String): AggregationType = when (key) {
+    "STEPS", "SLEEP" -> AggregationType.SUM
+    "WEIGHT"         -> AggregationType.SINGLE
+    else             -> AggregationType.AVG
+}
+
+private val FMT_DAY   = DateTimeFormatter.ofPattern("d MMM")
+private val FMT_WEEK  = DateTimeFormatter.ofPattern("'W/C' d MMM")
+private val FMT_MONTH = DateTimeFormatter.ofPattern("MMM yyyy")
+
+fun aggregateEntries(
+    key: String,
+    entries: List<ChartEntry>,
+    regularity: Regularity,
+    from: LocalDate,
+    to: LocalDate,
+): List<AggregatedPoint> {
+    val inRange = entries.filter { !it.date.isBefore(from) && !it.date.isAfter(to) }
+    if (inRange.isEmpty()) return emptyList()
+
+    val grouped: Map<LocalDate, List<ChartEntry>> = when (regularity) {
+        Regularity.DAILY, Regularity.HOURLY -> inRange.groupBy { it.date }
+        Regularity.WEEKLY -> inRange.groupBy { entry ->
+            // ISO week Monday as bucket key
+            val dow = entry.date.dayOfWeek.value   // Mon=1 … Sun=7
+            entry.date.minusDays((dow - 1).toLong())
+        }
+        Regularity.MONTHLY -> inRange.groupBy { it.date.withDayOfMonth(1) }
+    }
+
+    val fmt = when (regularity) {
+        Regularity.DAILY, Regularity.HOURLY -> FMT_DAY
+        Regularity.WEEKLY                   -> FMT_WEEK
+        Regularity.MONTHLY                  -> FMT_MONTH
+    }
+
+    val aggType = aggregationTypeFor(key)
+    return grouped.entries.sortedBy { it.key }.map { (periodStart, pts) ->
+        val value = when (aggType) {
+            AggregationType.AVG    -> pts.map { it.value }.average().toFloat()
+            AggregationType.SUM    -> pts.sumOf { it.value.toDouble() }.toFloat()
+            AggregationType.SINGLE -> pts.last().value
+        }
+        AggregatedPoint(periodStart, value, periodStart.format(fmt))
+    }
+}
 
 fun metricDisplayName(key: String, questions: List<QuestionDefinition> = emptyList()): String = when {
     key == "HR"     -> "Heart Rate"

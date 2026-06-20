@@ -64,6 +64,9 @@ import com.athletedata.openAthleteMetrics.data.repository.SpO2ReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.StepsReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.SyncSessionRepository
 import com.athletedata.openAthleteMetrics.data.repository.TotalCalorieReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.WidgetLayoutRepository
+import com.athletedata.openAthleteMetrics.data.repository.RoomWidgetLayoutRepository
+import com.athletedata.openAthleteMetrics.data.db.WidgetLayoutDao
 import dagger.Binds
 import dagger.Module
 import dagger.Provides
@@ -138,6 +141,9 @@ abstract class DatabaseModule {
     @Binds @Singleton
     abstract fun bindSleepStageRepository(impl: RoomSleepStageRepository): SleepStageRepository
 
+    @Binds @Singleton
+    abstract fun bindWidgetLayoutRepository(impl: RoomWidgetLayoutRepository): WidgetLayoutRepository
+
     companion object {
 
         // ── Database & DAO providers ──────────────────────────────────────────
@@ -162,6 +168,7 @@ abstract class DatabaseModule {
                 AppDatabase.MIGRATION_9_10,
                 AppDatabase.MIGRATION_10_11,
                 AppDatabase.MIGRATION_11_12,
+                AppDatabase.MIGRATION_12_13,
             )
             .build()
 
@@ -229,5 +236,8 @@ abstract class DatabaseModule {
 
         @Provides @Singleton
         fun provideSleepStageDao(db: AppDatabase): SleepStageDao = db.sleepStageDao()
+
+        @Provides @Singleton
+        fun provideWidgetLayoutDao(db: AppDatabase): WidgetLayoutDao = db.widgetLayoutDao()
     }
 }

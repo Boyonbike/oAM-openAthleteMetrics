@@ -21,7 +21,6 @@ import com.athletedata.openAthleteMetrics.worker.enqueueSummaryWorker
 import timber.log.Timber
 import java.time.Instant
 import java.time.ZoneId
-import java.time.ZoneOffset
 import javax.inject.Inject
 import javax.inject.Singleton
 

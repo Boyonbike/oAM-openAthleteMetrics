@@ -24,6 +24,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *       metric_readings_staging
  *  12 — QuestionResponseEntity.date re-typed from String to LocalDate in Kotlin; no SQLite schema
  *       change (TypeConverter stores LocalDate as ISO-8601 TEXT, identical to prior storage)
+ *  13 — added widget_layout table for configurable Dashboard widget grid; seeded with default layout
  */
 @Database(
     entities = [
@@ -48,8 +49,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ActiveCalorieReadingEntity::class,
         TotalCalorieReadingEntity::class,
         SleepStageEntity::class,
+        WidgetLayoutEntity::class,
     ],
-    version = 12,
+    version = 13,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -76,6 +78,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun activeCalorieReadingDao(): ActiveCalorieReadingDao
     abstract fun totalCalorieReadingDao(): TotalCalorieReadingDao
     abstract fun sleepStageDao(): SleepStageDao
+    abstract fun widgetLayoutDao(): WidgetLayoutDao
 
     companion object {
         const val DATABASE_NAME = "athlete_data.db"
@@ -792,6 +795,40 @@ abstract class AppDatabase : RoomDatabase() {
                 // Kotlin. The TypeConverter stores LocalDate as ISO-8601 TEXT ("YYYY-MM-DD"),
                 // which is exactly the format the old String field already used. The SQLite
                 // column definition stays `TEXT NOT NULL` — no data rewriting is required.
+            }
+        }
+
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `widget_layout` (
+                        `id`          INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `widget_type` TEXT NOT NULL,
+                        `size`        TEXT NOT NULL,
+                        `sort_order`  INTEGER NOT NULL,
+                        `extra_id`    INTEGER
+                    )
+                    """.trimIndent()
+                )
+                val defaults = listOf(
+                    Triple("HR",                 "SMALL", 0),
+                    Triple("HRV",                "SMALL", 1),
+                    Triple("RHR",                "SMALL", 2),
+                    Triple("SLEEP",              "SMALL", 3),
+                    Triple("SPO2",               "SMALL", 4),
+                    Triple("STEPS",              "SMALL", 5),
+                    Triple("WEIGHT",             "WIDE",  6),
+                    Triple("STARRED_LIFESTYLE",  "WIDE",  7),
+                    Triple("STARRED_HABITS",     "WIDE",  8),
+                    Triple("ACTIVITIES",         "WIDE",  9),
+                )
+                defaults.forEach { (type, size, order) ->
+                    db.execSQL(
+                        "INSERT INTO widget_layout (widget_type, size, sort_order) VALUES (?, ?, ?)",
+                        arrayOf(type, size, order)
+                    )
+                }
             }
         }
     }

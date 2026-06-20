@@ -1,6 +1,7 @@
 package com.athletedata.openAthleteMetrics.data.repository
 
 import com.athletedata.openAthleteMetrics.data.model.ThemePreference
+import com.athletedata.openAthleteMetrics.ui.dailydetail.TileConfig
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -25,4 +26,10 @@ interface SettingsRepository {
 
     /** Persist the metric key (or null to clear) so History survives process death. */
     suspend fun setHistoryMetricKey(key: String?)
+
+    /** Live stream of Daily Detail tile ordering and visibility. */
+    fun getDailyDetailTileConfig(): Flow<List<TileConfig>>
+
+    /** Persist the full tile config list. */
+    suspend fun setDailyDetailTileConfig(configs: List<TileConfig>)
 }

@@ -5,8 +5,12 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.athletedata.openAthleteMetrics.data.model.ThemePreference
+import com.athletedata.openAthleteMetrics.ui.dailydetail.DEFAULT_TILE_ORDER
+import com.athletedata.openAthleteMetrics.ui.dailydetail.TileConfig
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import org.json.JSONArray
+import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -50,8 +54,45 @@ class DataStoreSettingsRepository @Inject constructor(
         }
     }
 
+    override fun getDailyDetailTileConfig(): Flow<List<TileConfig>> =
+        dataStore.data.map { prefs ->
+            val raw = prefs[DAILY_DETAIL_TILE_CONFIG_KEY] ?: return@map DEFAULT_TILE_ORDER
+            parseTileConfig(raw) ?: DEFAULT_TILE_ORDER
+        }
+
+    override suspend fun setDailyDetailTileConfig(configs: List<TileConfig>) {
+        dataStore.edit { prefs ->
+            prefs[DAILY_DETAIL_TILE_CONFIG_KEY] = encodeTileConfig(configs)
+        }
+    }
+
     private companion object {
-        val THEME_KEY          = stringPreferencesKey("theme_preference")
-        val HISTORY_METRIC_KEY = stringPreferencesKey("history_metric_key")
+        val THEME_KEY                    = stringPreferencesKey("theme_preference")
+        val HISTORY_METRIC_KEY           = stringPreferencesKey("history_metric_key")
+        val DAILY_DETAIL_TILE_CONFIG_KEY = stringPreferencesKey("daily_detail_tile_config")
+
+        fun encodeTileConfig(configs: List<TileConfig>): String {
+            val arr = JSONArray()
+            configs.forEach { c ->
+                arr.put(JSONObject().apply {
+                    put("id", c.id)
+                    put("visible", c.isVisible)
+                    put("order", c.sortOrder)
+                })
+            }
+            return arr.toString()
+        }
+
+        fun parseTileConfig(raw: String): List<TileConfig>? = runCatching {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).map { i ->
+                val obj = arr.getJSONObject(i)
+                TileConfig(
+                    id = obj.getString("id"),
+                    isVisible = obj.getBoolean("visible"),
+                    sortOrder = obj.getInt("order"),
+                )
+            }
+        }.getOrNull()
     }
 }

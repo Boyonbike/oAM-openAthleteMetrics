@@ -1,4 +1,2 @@
 1. Time handling for devices that request time. it may impact device readings
-
 3. sync popup build up and error handling
-4. multi driver handling

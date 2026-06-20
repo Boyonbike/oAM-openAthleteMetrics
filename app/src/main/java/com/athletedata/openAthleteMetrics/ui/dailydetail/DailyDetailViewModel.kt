@@ -81,6 +81,11 @@ class DailyDetailViewModel @Inject constructor(
 
     fun setDate(date: LocalDate) { _localDate.value = date }
 
+    fun stepDate(forward: Boolean) {
+        val today = LocalDate.now()
+        _localDate.update { if (forward) it.plusDays(1).coerceAtMost(today) else it.minusDays(1) }
+    }
+
     fun toggleTile(id: String) {
         expandedTiles.update { current ->
             if (id in current) current - id else current + id

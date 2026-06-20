@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -117,11 +118,19 @@ fun WidgetCatalogueSheet(
                                                 selected = selectedSize == WidgetSize.SMALL,
                                                 onClick = { sizeSelections[disc] = WidgetSize.SMALL },
                                                 label = { Text("Small") },
+                                                colors = FilterChipDefaults.filterChipColors(
+                                                    selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                                    selectedLabelColor     = MaterialTheme.colorScheme.onPrimary,
+                                                ),
                                             )
                                             FilterChip(
                                                 selected = selectedSize == WidgetSize.WIDE,
                                                 onClick = { sizeSelections[disc] = WidgetSize.WIDE },
                                                 label = { Text("Wide") },
+                                                colors = FilterChipDefaults.filterChipColors(
+                                                    selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                                    selectedLabelColor     = MaterialTheme.colorScheme.onPrimary,
+                                                ),
                                             )
                                         }
                                     }

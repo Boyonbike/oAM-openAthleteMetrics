@@ -1,12 +1,18 @@
 package com.athletedata.openAthleteMetrics.ui.components
 
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -19,13 +25,36 @@ import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.unit.dp
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlin.math.abs
 
 private val DATE_FORMATTER = DateTimeFormatter.ofPattern("d MMM yyyy")
+
+fun Modifier.horizontalDateSwipe(
+    onDayForward: () -> Unit,
+    onDayBack: () -> Unit,
+): Modifier = pointerInput(onDayForward, onDayBack) {
+    val threshold = 60.dp.toPx()
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        var dx = 0f
+        var dy = 0f
+        drag(down.id) { change: PointerInputChange ->
+            dx += change.positionChange().x
+            dy += change.positionChange().y
+        }
+        if (abs(dx) > threshold && abs(dx) > abs(dy) * 1.5f) {
+            if (dx < 0) onDayForward() else onDayBack()
+        }
+    }
+}
 
 @Composable
 fun DataPageTopBar(
@@ -35,7 +64,7 @@ fun DataPageTopBar(
     actions: @Composable RowScope.() -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier.fillMaxWidth()) {
+    Column(modifier = modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars)) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()

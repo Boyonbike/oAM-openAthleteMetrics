@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import timber.log.Timber
 import java.time.LocalDate
@@ -44,6 +45,11 @@ class QuestionsViewModel @Inject constructor(
 
     fun setDate(date: LocalDate) {
         _localDate.value = date
+    }
+
+    fun stepDate(forward: Boolean) {
+        val today = LocalDate.now()
+        _localDate.update { if (forward) it.plusDays(1).coerceAtMost(today) else it.minusDays(1) }
     }
 
     private val sharedResponses = _localDate

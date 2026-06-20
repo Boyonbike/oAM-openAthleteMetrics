@@ -59,6 +59,7 @@ import com.athletedata.openAthleteMetrics.data.model.SleepStage
 import com.athletedata.openAthleteMetrics.data.model.UserCategory
 import com.athletedata.openAthleteMetrics.ui.components.DataPageDatePickerDialog
 import com.athletedata.openAthleteMetrics.ui.components.DataPageTopBar
+import com.athletedata.openAthleteMetrics.ui.components.horizontalDateSwipe
 import com.athletedata.openAthleteMetrics.ui.nav.LocalBottomNavScrollBehavior
 import com.athletedata.openAthleteMetrics.ui.nav.rememberBottomNavNestedScrollConnection
 import com.athletedata.openAthleteMetrics.ui.theme.TypographyMeta
@@ -74,7 +75,6 @@ import com.patrykandpatrick.vico.core.cartesian.axis.VerticalAxis
 import com.patrykandpatrick.vico.core.cartesian.data.CartesianChartModelProducer
 import com.patrykandpatrick.vico.core.cartesian.data.CartesianValueFormatter
 import com.patrykandpatrick.vico.core.cartesian.data.lineSeries
-import org.json.JSONObject
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 import java.time.LocalDate
@@ -106,7 +106,10 @@ fun DailyDetailScreen(
     }
 
     Scaffold(
-        modifier = modifier,
+        modifier = modifier.horizontalDateSwipe(
+            onDayForward = { viewModel.stepDate(true) },
+            onDayBack    = { viewModel.stepDate(false) },
+        ),
         topBar = {
             DataPageTopBar(
                 date = localDate,
@@ -740,9 +743,7 @@ private fun QuestionsTile(
     isExpanded: Boolean,
     onToggle: () -> Unit,
 ) {
-    val hasData = state.isIll || state.questionGroups.isNotEmpty() ||
-        state.contextScores != null || !state.habitsJson.isNullOrBlank()
-    val habitsCount = parseHabitCounts(state.habitsJson)
+    val hasData = state.isIll || state.questionGroups.isNotEmpty() || state.contextScores != null
 
     CategoryTile(
         title = "Check-in",
@@ -756,7 +757,6 @@ private fun QuestionsTile(
                     if (state.isIll) add("Illness noted")
                     state.contextScores?.stress?.let { add("Stress $it/5") }
                     state.contextScores?.motivation?.let { add("Motivation $it/5") }
-                    habitsCount?.let { (done, total) -> add("Habits $done/$total") }
                 }
                 Text(
                     text = if (parts.isEmpty()) "Data recorded" else parts.joinToString(" · "),
@@ -810,34 +810,12 @@ private fun QuestionsTile(
                         }
                     }
                 }
-                val habits = parseHabits(state.habitsJson)
-                if (habits.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("Habits", style = TypographyTitle)
-                        habits.forEach { (name, done) ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                            ) {
-                                Text(
-                                    name.replaceFirstChar { it.uppercase() },
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                                Text(
-                                    if (done) "Yes" else "No",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-                }
                 state.questionGroups.forEachIndexed { index, group ->
                     if (index > 0) HorizontalDivider()
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         val label = when (group.category) {
                             QuestionCategory.LIFESTYLE -> "Lifestyle"
-                            QuestionCategory.CUSTOM    -> "Custom"
+                            QuestionCategory.CUSTOM    -> "Habits"
                         }
                         Text(label, style = TypographyTitle)
                         group.items.forEach { item ->
@@ -1209,29 +1187,6 @@ private fun formatDurationShort(minutes: Int): String {
     }
 }
 
-private fun parseHabitCounts(habitsJson: String?): Pair<Int, Int>? {
-    if (habitsJson.isNullOrBlank()) return null
-    return runCatching {
-        val obj = JSONObject(habitsJson)
-        var total = 0
-        var done = 0
-        obj.keys().forEach { key ->
-            total++
-            if (obj.optBoolean(key, false)) done++
-        }
-        Pair(done, total)
-    }.getOrNull()
-}
-
-private fun parseHabits(habitsJson: String?): List<Pair<String, Boolean>> {
-    if (habitsJson.isNullOrBlank()) return emptyList()
-    return runCatching {
-        val obj = JSONObject(habitsJson)
-        obj.keys().asSequence().map { key ->
-            Pair(key, obj.optBoolean(key, false))
-        }.toList()
-    }.getOrElse { emptyList() }
-}
 
 // Extension needed for ColumnScope reference in tile content lambdas
 private typealias ColumnScope = androidx.compose.foundation.layout.ColumnScope

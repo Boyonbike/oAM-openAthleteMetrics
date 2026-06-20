@@ -201,6 +201,13 @@ class HistoryViewModel @Inject constructor(
         sessionState.date = date
     }
 
+    fun stepDate(forward: Boolean) {
+        val today = LocalDate.now()
+        val newDate = if (forward) _localDate.value.plusDays(1).coerceAtMost(today)
+                      else _localDate.value.minusDays(1)
+        moveCursor(newDate)
+    }
+
     fun setRange(range: RangeToggle) { _rangeToggle.value = range }
 
     fun setRegularity(reg: Regularity) { _regularity.value = reg }

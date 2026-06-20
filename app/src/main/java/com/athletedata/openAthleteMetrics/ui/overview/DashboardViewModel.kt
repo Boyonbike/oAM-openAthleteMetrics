@@ -77,6 +77,11 @@ class DashboardViewModel @Inject constructor(
         _date.value = date
     }
 
+    fun stepDate(forward: Boolean) {
+        val today = LocalDate.now()
+        _date.update { if (forward) it.plusDays(1).coerceAtMost(today) else it.minusDays(1) }
+    }
+
     fun toggleEditMode() {
         _isEditMode.update { !it }
     }

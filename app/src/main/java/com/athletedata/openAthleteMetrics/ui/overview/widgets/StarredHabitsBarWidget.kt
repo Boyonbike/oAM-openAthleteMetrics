@@ -64,7 +64,7 @@ class StarredHabitsBarViewModel @Inject constructor(
 
     val uiState: StateFlow<StarredHabitsBarUiState> = _date.flatMapLatest { date ->
         combine(
-            questionRepo.getStarredHabitsQuestions(),
+            questionRepo.getCustomQuestions(),
             questionRepo.getResponsesForDate(date),
         ) { questions, responses ->
             val responseMap = responses.associateBy { it.questionId }
@@ -109,7 +109,7 @@ fun StarredHabitsBarWidget(
                 Text(text = "Habits", style = TypographyTitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (uiState.items.isEmpty()) {
                     Text(
-                        text = "Star habits to show them here",
+                        text = "No habits yet — add them in the Habits tab",
                         style = TypographyMeta,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.clickable { onTap() },

@@ -10,19 +10,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.DragIndicator
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -41,6 +43,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import com.athletedata.openAthleteMetrics.ui.components.DataPageDatePickerDialog
 import com.athletedata.openAthleteMetrics.ui.components.DataPageTopBar
+import com.athletedata.openAthleteMetrics.ui.components.horizontalDateSwipe
 import com.athletedata.openAthleteMetrics.ui.components.PillSelector
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -92,6 +95,14 @@ fun QuestionsScreen(
     var editingItem by remember { mutableStateOf<QuestionItem?>(null) }
     val scrollBehavior = LocalBottomNavScrollBehavior.current
     val nestedScrollConnection = rememberBottomNavNestedScrollConnection(scrollBehavior)
+    val lazyListStateLifestyle = rememberLazyListState()
+    val lazyListStateHabits    = rememberLazyListState()
+    val reorderLifestyle = rememberReorderableLazyListState(lazyListStateLifestyle) { from, to ->
+        viewModel.reorder(QuestionCategory.LIFESTYLE, from.index, to.index)
+    }
+    val reorderHabits = rememberReorderableLazyListState(lazyListStateHabits) { from, to ->
+        viewModel.reorder(QuestionCategory.CUSTOM, from.index, to.index)
+    }
 
     LaunchedEffect(Unit) {
         viewModel.errors.collect { snackbarHostState.showSnackbar(it) }
@@ -112,7 +123,10 @@ fun QuestionsScreen(
     }
 
     Scaffold(
-        modifier = modifier,
+        modifier = modifier.horizontalDateSwipe(
+            onDayForward = { viewModel.stepDate(true) },
+            onDayBack    = { viewModel.stepDate(false) },
+        ),
         contentWindowInsets = WindowInsets.navigationBars,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
@@ -166,21 +180,19 @@ fun QuestionsScreen(
                 .padding(innerPadding)
                 .nestedScroll(nestedScrollConnection),
         ) {
-            // ── Tab content ───────────────────────────────────────────────────
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-                    .padding(bottom = 80.dp),
-            ) {
-                when (selectedTab) {
-                    Tab.LIFESTYLE -> {
-                        val displayItems = if (editMode) lifestyleItems
-                                           else lifestyleItems.filter { it.definition.isVisible }
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            displayItems.forEachIndexed { index, item ->
+            when (selectedTab) {
+                Tab.LIFESTYLE -> {
+                    val displayItems = if (editMode) lifestyleItems
+                                       else lifestyleItems.filter { it.definition.isVisible }
+                    LazyColumn(
+                        state = lazyListStateLifestyle,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 80.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(displayItems, key = { it.definition.id }) { item ->
+                            ReorderableItem(reorderLifestyle, key = item.definition.id) { _ ->
+                                val dragHandleMod = Modifier.draggableHandle()
                                 Card(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -204,7 +216,6 @@ fun QuestionsScreen(
                                         },
                                         editMode = editMode,
                                         editControls = {
-                                            // Eye: normal eye = visible, strikethrough eye = hidden
                                             IconButton(
                                                 onClick = { viewModel.toggleVisibility(item.definition.id) },
                                             ) {
@@ -218,15 +229,11 @@ fun QuestionsScreen(
                                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 )
                                             }
-                                            ReorderButtons(
-                                                canMoveUp = index > 0,
-                                                canMoveDown = index < displayItems.lastIndex,
-                                                onMoveUp = {
-                                                    viewModel.reorder(QuestionCategory.LIFESTYLE, index, index - 1)
-                                                },
-                                                onMoveDown = {
-                                                    viewModel.reorder(QuestionCategory.LIFESTYLE, index, index + 1)
-                                                },
+                                            Icon(
+                                                imageVector = Icons.Outlined.DragIndicator,
+                                                contentDescription = "Drag to reorder",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = dragHandleMod,
                                             )
                                         },
                                     )
@@ -234,12 +241,20 @@ fun QuestionsScreen(
                             }
                         }
                     }
+                }
 
-                    Tab.HABITS -> {
-                        val displayItems = if (editMode) customItems
-                                           else customItems.filter { it.definition.isVisible }
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            displayItems.forEachIndexed { index, item ->
+                Tab.HABITS -> {
+                    val displayItems = if (editMode) customItems
+                                       else customItems.filter { it.definition.isVisible }
+                    LazyColumn(
+                        state = lazyListStateHabits,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 80.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(displayItems, key = { it.definition.id }) { item ->
+                            ReorderableItem(reorderHabits, key = item.definition.id) { _ ->
+                                val dragHandleMod = Modifier.draggableHandle()
                                 Card(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -273,7 +288,6 @@ fun QuestionsScreen(
                                         },
                                         editMode = editMode,
                                         editControls = {
-                                            // Delete
                                             IconButton(
                                                 onClick = { viewModel.deleteCustomQuestion(item.definition.id) },
                                             ) {
@@ -283,7 +297,6 @@ fun QuestionsScreen(
                                                     tint = MaterialTheme.colorScheme.error,
                                                 )
                                             }
-                                            // Edit (open pre-populated sheet, stay in edit mode)
                                             IconButton(onClick = { editingItem = item }) {
                                                 Icon(
                                                     Icons.Outlined.Edit,
@@ -291,7 +304,6 @@ fun QuestionsScreen(
                                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 )
                                             }
-                                            // Eye: normal eye = visible, strikethrough = hidden
                                             IconButton(
                                                 onClick = { viewModel.toggleVisibility(item.definition.id) },
                                             ) {
@@ -305,15 +317,11 @@ fun QuestionsScreen(
                                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 )
                                             }
-                                            ReorderButtons(
-                                                canMoveUp = index > 0,
-                                                canMoveDown = index < displayItems.lastIndex,
-                                                onMoveUp = {
-                                                    viewModel.reorder(QuestionCategory.CUSTOM, index, index - 1)
-                                                },
-                                                onMoveDown = {
-                                                    viewModel.reorder(QuestionCategory.CUSTOM, index, index + 1)
-                                                },
+                                            Icon(
+                                                imageVector = Icons.Outlined.DragIndicator,
+                                                contentDescription = "Drag to reorder",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = dragHandleMod,
                                             )
                                         },
                                     )
@@ -322,8 +330,6 @@ fun QuestionsScreen(
                         }
                     }
                 }
-
-                Spacer(Modifier.height(16.dp))
             }
         }
     }
@@ -506,23 +512,6 @@ private fun TextInput(
             .fillMaxWidth()
             .imePadding(),
     )
-}
-
-// ── Reorder up/down buttons ───────────────────────────────────────────────────
-
-@Composable
-private fun ReorderButtons(
-    canMoveUp: Boolean,
-    canMoveDown: Boolean,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
-) {
-    IconButton(onClick = onMoveUp, enabled = canMoveUp) {
-        Icon(Icons.Outlined.KeyboardArrowUp, contentDescription = "Move up")
-    }
-    IconButton(onClick = onMoveDown, enabled = canMoveDown) {
-        Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = "Move down")
-    }
 }
 
 // ── Shared habit sheet (used for both create and edit) ────────────────────────

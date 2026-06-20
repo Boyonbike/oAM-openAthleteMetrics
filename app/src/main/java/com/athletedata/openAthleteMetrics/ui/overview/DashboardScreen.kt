@@ -57,6 +57,7 @@ import com.athletedata.openAthleteMetrics.data.model.WidgetSize
 import com.athletedata.openAthleteMetrics.data.model.WidgetType
 import com.athletedata.openAthleteMetrics.ui.components.DataPageDatePickerDialog
 import com.athletedata.openAthleteMetrics.ui.components.DataPageTopBar
+import com.athletedata.openAthleteMetrics.ui.components.horizontalDateSwipe
 import com.athletedata.openAthleteMetrics.ui.dailydetail.DailyDetailSection
 import com.athletedata.openAthleteMetrics.ui.nav.LocalBottomNavScrollBehavior
 import com.athletedata.openAthleteMetrics.ui.nav.rememberBottomNavNestedScrollConnection
@@ -127,7 +128,10 @@ fun DashboardScreen(
     }
 
     Scaffold(
-        modifier = modifier,
+        modifier = modifier.horizontalDateSwipe(
+            onDayForward = { viewModel.stepDate(true) },
+            onDayBack    = { viewModel.stepDate(false) },
+        ),
         contentWindowInsets = WindowInsets.navigationBars,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {

@@ -40,6 +40,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import com.athletedata.openAthleteMetrics.ui.components.DataPageDatePickerDialog
 import com.athletedata.openAthleteMetrics.ui.components.DataPageTopBar
+import com.athletedata.openAthleteMetrics.ui.components.horizontalDateSwipe
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -135,7 +136,10 @@ fun HistoryScreen(
     val nestedScrollConnection = rememberBottomNavNestedScrollConnection(scrollBehavior)
 
     Scaffold(
-        modifier = modifier,
+        modifier = modifier.horizontalDateSwipe(
+            onDayForward = { viewModel.stepDate(true) },
+            onDayBack    = { viewModel.stepDate(false) },
+        ),
         contentWindowInsets = WindowInsets.navigationBars,
         topBar = {
             DataPageTopBar(
@@ -556,7 +560,6 @@ private fun SelectedValueTile(
                     when {
                         dx < -swipeThreshold -> onStep(true)   // swipe left → newer
                         dx > swipeThreshold  -> onStep(false)  // swipe right → older
-                        else                 -> isExpanded = !isExpanded
                     }
                 }
             },
@@ -600,15 +603,19 @@ private fun SelectedValueTile(
             )
 
             // Expand chevron
-            Icon(
-                imageVector        = Icons.Default.ExpandMore,
-                contentDescription = if (isExpanded) "Collapse" else "Expand",
-                tint               = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier           = Modifier
-                    .size(20.dp)
-                    .align(Alignment.CenterHorizontally)
-                    .graphicsLayer { rotationZ = if (isExpanded) 180f else 0f },
-            )
+            IconButton(
+                onClick  = { isExpanded = !isExpanded },
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            ) {
+                Icon(
+                    imageVector        = Icons.Default.ExpandMore,
+                    contentDescription = if (isExpanded) "Collapse" else "Expand",
+                    tint               = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier           = Modifier
+                        .size(20.dp)
+                        .graphicsLayer { rotationZ = if (isExpanded) 180f else 0f },
+                )
+            }
 
             // Expanded data table
             AnimatedVisibility(visible = isExpanded) {

@@ -24,7 +24,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.LocalDate
-import java.time.Period
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 
@@ -34,9 +33,7 @@ enum class RangeToggle(val days: Long, val label: String) {
     DAYS_7(7L, "7d"),
     DAYS_30(30L, "30d"),
     DAYS_90(90L, "90d"),
-    DAYS_180(180L, "180d"),
     DAYS_365(365L, "1y"),
-    ALL(Long.MAX_VALUE, "All"),
 }
 
 enum class Regularity(val label: String) {
@@ -73,6 +70,8 @@ data class MetricTile(
     val aggregationType: AggregationType,
     val allPoints: List<AggregatedPoint>,
     val selectedIndex: Int,
+    val canStepBack: Boolean,
+    val canStepForward: Boolean,
 )
 
 data class OverlayOption(
@@ -100,17 +99,19 @@ class HistoryViewModel @Inject constructor(
     private val _metricKeys = MutableStateFlow<List<String>>(emptyList())
     val metricKeys: StateFlow<List<String>> = _metricKeys.asStateFlow()
 
-    private val _localDate = MutableStateFlow(sessionState.date)
-    val localDate: StateFlow<LocalDate> = _localDate.asStateFlow()
+    // Right edge of the graph window. Only changed by the TopBar date picker.
+    private val _pageDate = MutableStateFlow(sessionState.date)
+    val pageDate: StateFlow<LocalDate> = _pageDate.asStateFlow()
+
+    // Selected period cursor shown in the tile. Changed by slider drag or tile arrows.
+    private val _tileDate = MutableStateFlow(sessionState.date)
+    val tileDate: StateFlow<LocalDate> = _tileDate.asStateFlow()
 
     private val _rangeToggle = MutableStateFlow(RangeToggle.DAYS_30)
     val rangeToggle: StateFlow<RangeToggle> = _rangeToggle.asStateFlow()
 
     private val _regularity = MutableStateFlow(Regularity.DAILY)
     val regularity: StateFlow<Regularity> = _regularity.asStateFlow()
-
-    private val _selectedPointDate = MutableStateFlow(sessionState.date)
-    val selectedPointDate: StateFlow<LocalDate> = _selectedPointDate.asStateFlow()
 
     private val allQuestions: Flow<List<QuestionDefinition>> = combine(
         questionRepo.getLifestyleQuestions(),
@@ -129,18 +130,20 @@ class HistoryViewModel @Inject constructor(
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    // Always fetch from the beginning of history regardless of range — the graph
+    // needs the full dataset to support left-scroll to older data.
     val seriesList: StateFlow<List<SeriesData>> = combine(
-        _metricKeys, _rangeToggle, allQuestions,
-    ) { keys, range, questions ->
-        SeriesFetchParams(keys, LocalDate.now(), range, questions)
-    }.flatMapLatest { params ->
-        if (params.keys.isEmpty()) return@flatMapLatest flowOf(emptyList())
-        val flows = params.keys.map { key ->
-            val isBoolean = params.questions.find { "q:${it.id}" == key }?.type == QuestionType.BOOLEAN
-            fetchSeriesFlow(key, params.date, params.range.days).map { entries ->
+        _metricKeys, allQuestions,
+    ) { keys, questions ->
+        keys to questions
+    }.flatMapLatest { (keys, questions) ->
+        if (keys.isEmpty()) return@flatMapLatest flowOf(emptyList())
+        val flows = keys.map { key ->
+            val isBoolean = questions.find { "q:${it.id}" == key }?.type == QuestionType.BOOLEAN
+            fetchSeriesFlow(key, LocalDate.now(), Long.MAX_VALUE).map { entries ->
                 SeriesData(
                     metricKey     = key,
-                    displayName   = metricDisplayName(key, params.questions),
+                    displayName   = metricDisplayName(key, questions),
                     entries       = entries,
                     isBooleanType = isBoolean,
                 )
@@ -151,24 +154,23 @@ class HistoryViewModel @Inject constructor(
 
     private data class TileInputs(
         val series: List<SeriesData>,
-        val endDate: LocalDate,
-        val selDate: LocalDate,
-        val range: RangeToggle,
+        val pageDate: LocalDate,
+        val tileDate: LocalDate,
         val reg: Regularity,
     )
 
     val metricTiles: StateFlow<List<MetricTile>> = combine(
-        combine(seriesList, _localDate, _selectedPointDate, _rangeToggle, _regularity) { s, d, sd, rt, reg ->
-            TileInputs(s, d, sd, rt, reg)
+        combine(seriesList, _pageDate, _tileDate, _regularity) { s, pd, td, reg ->
+            TileInputs(s, pd, td, reg)
         },
         allQuestions,
     ) { inputs, questions ->
-        val from = if (inputs.range == RangeToggle.ALL) LocalDate.of(2000, 1, 1)
-                   else inputs.endDate.minusDays(inputs.range.days - 1)
+        val from = LocalDate.of(2000, 1, 1)
+        val to   = inputs.pageDate
 
         inputs.series.mapIndexed { idx, s ->
-            val points   = aggregateEntries(s.metricKey, s.entries, inputs.reg, from, inputs.endDate)
-            val selIdx   = points.indexOfLast { !it.periodStart.isAfter(inputs.selDate) }
+            val points   = aggregateEntries(s.metricKey, s.entries, inputs.reg, from, to)
+            val selIdx   = points.indexOfLast { !it.periodStart.isAfter(inputs.tileDate) }
                 .coerceAtLeast(0)
             val selValue = points.getOrNull(selIdx)?.value
             MetricTile(
@@ -181,6 +183,8 @@ class HistoryViewModel @Inject constructor(
                 aggregationType = aggregationTypeFor(s.metricKey),
                 allPoints       = points,
                 selectedIndex   = selIdx,
+                canStepBack     = points.size > 1 && selIdx > 0,
+                canStepForward  = points.size > 1 && selIdx < points.lastIndex,
             )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -195,54 +199,29 @@ class HistoryViewModel @Inject constructor(
 
     // ── Mutations ─────────────────────────────────────────────────────────────
 
-    fun moveCursor(date: LocalDate) {
-        _localDate.value = date
-        _selectedPointDate.value = date
+    /** Called by the TopBar date picker. Shifts the graph's right edge; does not move the tile cursor. */
+    fun setPageDate(date: LocalDate) {
+        _pageDate.value = date
         sessionState.date = date
     }
 
-    fun stepDate(forward: Boolean) {
-        val today = LocalDate.now()
-        val newDate = if (forward) _localDate.value.plusDays(1).coerceAtMost(today)
-                      else _localDate.value.minusDays(1)
-        moveCursor(newDate)
+    /** Called by the slider drag. Moves the tile cursor; does not change the page date. */
+    fun setTileDate(date: LocalDate) {
+        _tileDate.value = date
+    }
+
+    /** Called by the tile left/right arrows. Steps by one period in the aggregated point list. */
+    fun stepTileDate(forward: Boolean) {
+        val tiles = metricTiles.value.ifEmpty { return }
+        val points = tiles.first().allPoints.ifEmpty { return }
+        val nextIdx = (tiles.first().selectedIndex + if (forward) 1 else -1)
+            .coerceIn(0, points.lastIndex)
+        _tileDate.value = points[nextIdx].periodStart
     }
 
     fun setRange(range: RangeToggle) { _rangeToggle.value = range }
 
     fun setRegularity(reg: Regularity) { _regularity.value = reg }
-
-    fun setSelectedPoint(date: LocalDate) { _selectedPointDate.value = date }
-
-    fun stepSelectedPoint(forward: Boolean) {
-        val r = _regularity.value
-        val cur = _selectedPointDate.value
-        val next: LocalDate = when (r) {
-            Regularity.DAILY   -> if (forward) cur.plusDays(1) else cur.minusDays(1)
-            Regularity.WEEKLY  -> if (forward) cur.plusWeeks(1) else cur.minusWeeks(1)
-            Regularity.MONTHLY -> if (forward) cur.plusMonths(1) else cur.minusMonths(1)
-            Regularity.HOURLY  -> cur
-        }
-        val today = LocalDate.now()
-        val from = windowStart()
-        when {
-            next > today -> {
-                val step = stepPeriod(r)
-                val shifted = (_localDate.value + step).coerceAtMost(today)
-                _localDate.value = shifted
-                sessionState.date = shifted
-                _selectedPointDate.value = shifted
-            }
-            next < from -> {
-                val step = stepPeriod(r)
-                val shifted = _localDate.value - step
-                _localDate.value = shifted
-                sessionState.date = shifted
-                _selectedPointDate.value = next
-            }
-            else -> _selectedPointDate.value = next
-        }
-    }
 
     fun addMetric(key: String) {
         val current = _metricKeys.value
@@ -261,25 +240,12 @@ class HistoryViewModel @Inject constructor(
         _metricKeys.value = listOf(metricKey)
         sessionState.metricKey = metricKey
         val date = runCatching { LocalDate.parse(dateString ?: "") }.getOrDefault(LocalDate.now())
-        _localDate.value = date
-        _selectedPointDate.value = date
+        _pageDate.value = date
+        _tileDate.value = date
         sessionState.date = date
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
-
-    private fun windowStart(): LocalDate {
-        val rt = _rangeToggle.value
-        return if (rt == RangeToggle.ALL) LocalDate.of(2000, 1, 1)
-        else _localDate.value.minusDays(rt.days - 1)
-    }
-
-    private fun stepPeriod(r: Regularity): Period = when (r) {
-        Regularity.DAILY   -> Period.ofDays(1)
-        Regularity.WEEKLY  -> Period.ofWeeks(1)
-        Regularity.MONTHLY -> Period.ofMonths(1)
-        Regularity.HOURLY  -> Period.ZERO
-    }
 
     private fun fetchSeriesFlow(key: String, endDate: LocalDate, days: Long): Flow<List<ChartEntry>> {
         val from = if (days == Long.MAX_VALUE) LocalDate.of(2000, 1, 1) else endDate.minusDays(days - 1)
@@ -356,13 +322,6 @@ class HistoryViewModel @Inject constructor(
 
 // ── Package-level helpers (shared with Screen) ────────────────────────────────
 
-private data class SeriesFetchParams(
-    val keys: List<String>,
-    val date: LocalDate,
-    val range: RangeToggle,
-    val questions: List<QuestionDefinition>,
-)
-
 fun aggregationTypeFor(key: String): AggregationType = when (key) {
     "STEPS", "SLEEP" -> AggregationType.SUM
     "WEIGHT"         -> AggregationType.SINGLE
@@ -372,6 +331,9 @@ fun aggregationTypeFor(key: String): AggregationType = when (key) {
 private val FMT_DAY   = DateTimeFormatter.ofPattern("d MMM")
 private val FMT_WEEK  = DateTimeFormatter.ofPattern("'W/C' d MMM")
 private val FMT_MONTH = DateTimeFormatter.ofPattern("MMM yyyy")
+
+private val FMT_TILE_DAY   = DateTimeFormatter.ofPattern("d MMM")
+private val FMT_TILE_MONTH = DateTimeFormatter.ofPattern("MMM yyyy")
 
 fun aggregateEntries(
     key: String,
@@ -386,7 +348,6 @@ fun aggregateEntries(
     val grouped: Map<LocalDate, List<ChartEntry>> = when (regularity) {
         Regularity.DAILY, Regularity.HOURLY -> inRange.groupBy { it.date }
         Regularity.WEEKLY -> inRange.groupBy { entry ->
-            // ISO week Monday as bucket key
             val dow = entry.date.dayOfWeek.value   // Mon=1 … Sun=7
             entry.date.minusDays((dow - 1).toLong())
         }
@@ -407,6 +368,19 @@ fun aggregateEntries(
             AggregationType.SINGLE -> pts.last().value
         }
         AggregatedPoint(periodStart, value, periodStart.format(fmt))
+    }
+}
+
+fun formatTileDate(date: LocalDate, regularity: Regularity): String = when (regularity) {
+    Regularity.DAILY, Regularity.HOURLY -> date.format(FMT_TILE_DAY)
+    Regularity.MONTHLY -> date.format(FMT_TILE_MONTH)
+    Regularity.WEEKLY -> {
+        val weekEnd = date.plusDays(6)
+        val startStr = if (date.month != weekEnd.month)
+            date.format(FMT_TILE_DAY)
+        else
+            date.format(DateTimeFormatter.ofPattern("d"))
+        "$startStr–${weekEnd.format(FMT_TILE_DAY)}"   // en-dash
     }
 }
 

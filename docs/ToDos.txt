@@ -16,3 +16,9 @@
 16. sub page selection in questons and in devices plus matching the too
 17. topnav font size smaller
 18. devies/settings title/subpage selection alignment
+
+
+-------------------
+
+need to add a way to give data to the device for sync procedures
+!!!!!!!!!!!!!!!!!!!!!!

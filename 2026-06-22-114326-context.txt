@@ -1,0 +1,582 @@
+╭─── Claude Code v2.1.185 ─────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting        │
+│                  Welcome back bob!                 │ started                 │
+│                                                    │ Run /init to create a … │
+│                       ▐▛███▜▌                      │ ─────────────────────── │
+│                      ▝▜█████▛▘                     │ What's new              │
+│                        ▘▘ ▝▝                       │ The stream-stall hint … │
+│   Sonnet 4.6 · Claude Pro ·                        │ Improved auto mode saf… │
+│   innesmcdonaldracing@outlook.com's Organization   │ Added a warning when t… │
+│                ~/StudioProjects/OAM                │ /release-notes for more │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+❯ CONTEXT                                                                       
+  I am building a local-first athlete performance tracking Android app.         
+  Package: com.athletedata.app                                                  
+  Stack: Kotlin, Jetpack Compose, MVVM, Room, Hilt, Coroutines, Flow.           
+  Paste both the Master Plan and MVP Build Spec documents before this prompt.   
+                                                                                
+  TASK — User profile database layer                                            
+                                                                                
+  Create the following. Do not copy this as-is — use it as a specification      
+  only.                                                                         
+                                                                                
+  1. UserProfileEntity (Room @Entity, tableName = "user_profile")               
+     Single-row table enforced by hardcoded primary key id = 1.                 
+     Columns:                                                                   
+     - id: Int, @PrimaryKey, default 1                                          
+     - name: String?                                                            
+     - date_of_birth: String? (ISO date YYYY-MM-DD)                             
+     - biological_sex: String? (values: MALE, FEMALE, OTHER)                    
+     - height_cm: Double?                                                       
+     - weight_kg: Double? (auto-synced from daily weight log, do not expose for 
+  direct edit)                                                                  
+     - stride_length_cm: Double?                                                
+     - wrist_circumference_mm: Double?                                          
+     - resting_metabolic_rate: Double?                                          
+     - vo2_max: Double?                                                         
+     - max_hr: Int?                                                             
+     - hr_zones_json: String? (JSON array of HrZone objects)                    
+     - updated_at: Long (epoch ms, default System.currentTimeMillis())          
+                                                                                
+  2. HrZone domain model (plain data class, not a Room entity)                  
+     Fields: zone: Int (1–5), lowerBpm: Int, upperBpm: Int                      
+                                                                                
+  3. UserProfile domain model (plain data class, not a Room entity)             
+     Mirrors UserProfileEntity but with hrZones: List<HrZone> instead of        
+  hrZonesJson: String?                                                          
+     Include a toEntity() extension and a UserProfileEntity.toDomain()          
+  extension for conversion.                                                     
+     Use Gson or kotlinx.serialization (whichever is already in the project)    
+  for HrZone list serialisation.                                                
+                                                                                
+  4. UserProfileDao                                                             
+     Methods:                                                                   
+     - observe(): Flow<UserProfileEntity?> — SELECT WHERE id = 1                
+     - get(): suspend fun returning UserProfileEntity?                          
+     - upsert(entity: UserProfileEntity): suspend fun, OnConflict.REPLACE       
+     - updateWeight(weightKg: Double, updatedAt: Long): suspend fun             
+       UPDATE SET weight_kg, updated_at WHERE id = 1                            
+                                                                                
+  5. UserProfileRepository interface                                            
+     Methods:                                                                   
+     - observe(): Flow<UserProfile?>                                            
+     - get(): suspend fun returning UserProfile?                                
+     - upsert(profile: UserProfile): suspend fun                                
+     - updateWeight(weightKg: Double): suspend fun                              
+                                                                                
+  6. RoomUserProfileRepository implementing UserProfileRepository               
+     Injected via Hilt. Handles entity<->domain conversion internally.          
+                                                                                
+  7. Add UserProfileDao to AppDatabase.kt alongside existing DAOs.              
+                                                                                
+  8. Add UserProfileDao provision and UserProfileRepository binding to the      
+  existing Hilt DatabaseModule.                                                 
+                                                                                
+  Show all files in full. Add a one-line KDoc comment to every public function  
+  explaining what calls it.                                                     
+
+● I'll explore the existing codebase in parallel to understand the project
+  structure before planning.
+
+● 2 Explore agents finished (ctrl+o to expand)
+   ├ Explore project structure and existing database layer · 0 tool uses
+   │ ⎿  Done
+   └ Explore build config and dependencies · 0 tool uses
+     ⎿  Done
+
+● Let me read the critical files to understand the exact patterns before
+  planning.
+
+  Read 2 files (ctrl+o to expand)
+
+● Let me check one non-generic repository to see the entity↔domain conversion
+  pattern used for complex types.
+
+  Read 3 files, ran 1 shell command (ctrl+o to expand)
+
+● Now I have all the context I need. Let me write the plan.
+
+● Updated plan
+  ⎿  /plan to preview
+
+● User approved Claude's plan
+  ⎿  Plan saved to: ~/.claude/plans/context-i-am-building-serialized-donut.md · 
+     /plan to edit
+     Plan: UserProfile database layer
+
+     Context
+
+     The app tracks athlete performance data. Currently there is no persistent
+     user profile (name, biometrics, training zones). This layer stores a
+     single-row profile that other features (calorie estimation, HRV zone
+     display, weight sync) will read. The weight_kg column is intentionally
+     write-protected at the UI level — only updateWeight() touches it, fed from
+     the daily weight log.
+
+     ---
+     Key codebase facts
+
+     - Package: com.athletedata.openAthleteMetrics
+     - Serialization: kotlinx.serialization 1.11.0 (already in project — Gson is
+     NOT present)
+     - DB version: currently 13; this task bumps it to 14
+     - Entity pattern: entity + both mappers (toModel()/toEntity()) live
+     together in data/db/XEntity.kt
+     - Domain models: plain data classes in data/model/
+     - Repository pattern: interface in data/repository/, Room impl named Room*
+     - Hilt: @Binds abstract for interfaces, @Provides companion for DAOs
+
+     ---
+     Files to create (6 new)
+
+     1. data/model/HrZone.kt
+
+     Plain @Serializable data class (needed by kotlinx.serialization for JSON
+     roundtrip):
+     @Serializable
+     data class HrZone(val zone: Int, val lowerBpm: Int, val upperBpm: Int)
+
+     2. data/model/UserProfile.kt
+
+     Domain model mirroring the entity but with hrZones: List<HrZone> (not
+     JSON):
+     data class UserProfile(
+         val id: Int = 1,
+         val name: String? = null,
+         val dateOfBirth: String? = null,        // ISO YYYY-MM-DD
+         val biologicalSex: String? = null,      // MALE | FEMALE | OTHER
+         val heightCm: Double? = null,
+         val weightKg: Double? = null,
+         val strideLengthCm: Double? = null,
+         val wristCircumferenceMm: Double? = null,
+         val restingMetabolicRate: Double? = null,
+         val vo2Max: Double? = null,
+         val maxHr: Int? = null,
+         val hrZones: List<HrZone> = emptyList(),
+         val updatedAt: Long = System.currentTimeMillis(),
+     )
+
+     3. data/db/UserProfileEntity.kt
+
+     Room @Entity, plus toDomain() and UserProfile.toEntity() extension
+     functions.
+     Serialization of hrZones ↔ hrZonesJson uses Json.encodeToString /
+     Json.decodeFromString<List<HrZone>>.
+     updatedAt is stamped in the repository, not defaulted here (to avoid clock
+     skew surprises on reads).
+
+     @Entity(tableName = "user_profile")
+     data class UserProfileEntity(
+         @PrimaryKey val id: Int = 1,
+         @ColumnInfo(name = "name") val name: String? = null,
+         @ColumnInfo(name = "date_of_birth") val dateOfBirth: String? = null,
+         @ColumnInfo(name = "biological_sex") val biologicalSex: String? = null,
+         @ColumnInfo(name = "height_cm") val heightCm: Double? = null,
+         @ColumnInfo(name = "weight_kg") val weightKg: Double? = null,
+         @ColumnInfo(name = "stride_length_cm") val strideLengthCm: Double? =
+     null,
+         @ColumnInfo(name = "wrist_circumference_mm") val wristCircumferenceMm:
+     Double? = null,
+         @ColumnInfo(name = "resting_metabolic_rate") val restingMetabolicRate:
+     Double? = null,
+         @ColumnInfo(name = "vo2_max") val vo2Max: Double? = null,
+         @ColumnInfo(name = "max_hr") val maxHr: Int? = null,
+         @ColumnInfo(name = "hr_zones_json") val hrZonesJson: String? = null,
+         @ColumnInfo(name = "updated_at") val updatedAt: Long =
+     System.currentTimeMillis(),
+     )
+
+     fun UserProfileEntity.toDomain(): UserProfile = UserProfile(
+         ...,
+         hrZones = hrZonesJson?.let { Json.decodeFromString(it) } ?:
+     emptyList(),
+     )
+
+     fun UserProfile.toEntity(): UserProfileEntity = UserProfileEntity(
+         ...,
+         hrZonesJson = hrZones.takeIf { it.isNotEmpty() }?.let {
+     Json.encodeToString(it) },
+     )
+
+     4. data/db/UserProfileDao.kt
+
+     @Dao
+     interface UserProfileDao {
+         @Query("SELECT * FROM user_profile WHERE id = 1")
+         fun observe(): Flow<UserProfileEntity?>
+
+         @Query("SELECT * FROM user_profile WHERE id = 1")
+         suspend fun get(): UserProfileEntity?
+
+         @Insert(onConflict = OnConflictStrategy.REPLACE)
+         suspend fun upsert(entity: UserProfileEntity)
+
+         @Query("UPDATE user_profile SET weight_kg = :weightKg, updated_at =
+     :updatedAt WHERE id = 1")
+         suspend fun updateWeight(weightKg: Double, updatedAt: Long)
+     }
+
+     5. data/repository/UserProfileRepository.kt
+
+     interface UserProfileRepository {
+         fun observe(): Flow<UserProfile?>
+         suspend fun get(): UserProfile?
+         suspend fun upsert(profile: UserProfile)
+         suspend fun updateWeight(weightKg: Double)
+     }
+
+     6. data/repository/RoomUserProfileRepository.kt
+
+     @Singleton, @Inject constructor(private val dao: UserProfileDao).
+     - observe() → dao.observe().map { it?.toDomain() }
+     - get() → dao.get()?.toDomain()
+     - upsert() → stamps updatedAt = System.currentTimeMillis() on the entity
+     before saving
+     - updateWeight() → dao.updateWeight(weightKg, System.currentTimeMillis())
+     - Error logging via Timber.e(...) with rethrow, consistent with
+     RoomDailyContextRepository
+
+     ---
+     Files to modify (2 existing)
+
+     7. data/db/AppDatabase.kt
+
+     - Add UserProfileEntity::class to the entities = [...] list
+     - Bump version = 13 → version = 14
+     - Add schema comment: 14 — added user_profile table (single-row athlete 
+     profile)
+     - Add abstract fun userProfileDao(): UserProfileDao
+     - Add MIGRATION_13_14 companion val:
+     CREATE TABLE IF NOT EXISTS `user_profile` (
+         `id` INTEGER NOT NULL PRIMARY KEY,
+         `name` TEXT,
+         `date_of_birth` TEXT,
+         `biological_sex` TEXT,
+         `height_cm` REAL,
+         `weight_kg` REAL,
+         `stride_length_cm` REAL,
+         `wrist_circumference_mm` REAL,
+         `resting_metabolic_rate` REAL,
+         `vo2_max` REAL,
+         `max_hr` INTEGER,
+         `hr_zones_json` TEXT,
+         `updated_at` INTEGER NOT NULL DEFAULT 0
+     )
+
+     8. di/DatabaseModule.kt
+
+     - Add @Binds @Singleton abstract fun bindUserProfileRepository(impl: 
+     RoomUserProfileRepository): UserProfileRepository
+     - Add @Provides @Singleton fun provideUserProfileDao(db: AppDatabase): 
+     UserProfileDao = db.userProfileDao()
+     - Add all required imports
+
+     ---
+     Verification
+
+     1. Run ./gradlew :app:kspDebugKotlin — KSP must generate
+     UserProfileDao_Impl with no errors
+     2. Run ./gradlew :app:compileDebugKotlin — clean compile
+     3. On a device/emulator with an existing DB at v13, launch the app — Room
+     should auto-run MIGRATION_13_14 and user_profile table will exist (visible
+     via Database Inspector)
+     4. On a fresh install, Room builds v14 from scratch — table is present
+     immediately
+
+● Creating all 6 new files in parallel now.
+
+● Write(app/src/main/java/com/athletedata/openAthleteMetrics/data/model/HrZone.k
+       t)
+  ⎿  Wrote 14 lines to app/src/main/java/com/athletedata/openAthleteMetrics
+     /data/model/HrZone.kt
+       1 package com.athletedata.openAthleteMetrics.data.model
+       2 
+       3 import kotlinx.serialization.Serializable
+       4 
+       5 /** A single heart-rate training zone, stored as part of [UserPr
+       6 @Serializable
+       7 data class HrZone(
+       8     /** Zone number 1–5. */
+       9     val zone: Int,
+      10     /** Lower bound of this zone in bpm (inclusive). */
+     … +5 lines (ctrl+o to expand)
+
+● Write(app/src/main/java/com/athletedata/openAthleteMetrics/data/model/UserProf
+       ile.kt)
+  ⎿  Wrote 34 lines to app/src/main/java/com/athletedata/openAthleteMetrics
+     /data/model/UserProfile.kt
+       1 package com.athletedata.openAthleteMetrics.data.model
+       2 
+       3 /**
+       4  * Single-row athlete profile. [weightKg] is managed by the dail
+         y weight-log sync;
+       6  */
+       7 data class UserProfile(
+       8     /** Always 1 — enforces the single-row constraint. */
+       9     val id: Int = 1,
+      10     /** Athlete's display name. */
+     … +27 lines (ctrl+o to expand)
+
+● Write(app/src/main/java/com/athletedata/openAthleteMetrics/data/db/UserProfile
+       Dao.kt)
+  ⎿  Wrote 27 lines to app/src/main/java/com/athletedata/openAthleteMetrics
+     /data/db/UserProfileDao.kt
+       1 package com.athletedata.openAthleteMetrics.data.db
+       2 
+       3 import androidx.room.Dao
+       4 import androidx.room.Insert
+       5 import androidx.room.OnConflictStrategy
+       6 import androidx.room.Query
+       7 import kotlinx.coroutines.flow.Flow
+       8 
+       9 @Dao
+      10 interface UserProfileDao {
+     … +25 lines (ctrl+o to expand)
+
+● Write(app/src/main/java/com/athletedata/openAthleteMetrics/data/repository/Use
+       rProfileRepository.kt)
+  ⎿  Wrote 19 lines to app/src/main/java/com/athletedata/openAthleteMetrics
+     /data/repository/UserProfileRepository.kt
+      1 package com.athletedata.openAthleteMetrics.data.repository
+      2 
+      3 import com.athletedata.openAthleteMetrics.data.model.UserProfile
+      4 import kotlinx.coroutines.flow.Flow
+      5 
+      6 interface UserProfileRepository {
+      7 
+      8     /** Subscribed to by ViewModels that display or react to prof
+        ile changes. */
+      9     fun observe(): Flow<UserProfile?>
+     … +13 lines (ctrl+o to expand)
+
+● Write(app/src/main/java/com/athletedata/openAthleteMetrics/data/repository/Roo
+       mUserProfileRepository.kt)
+  ⎿  Wrote 43 lines to app/src/main/java/com/athletedata/openAthleteMetrics
+     /data/repository/RoomUserProfileRepository.kt
+       1 package com.athletedata.openAthleteMetrics.data.repository
+       2 
+       3 import com.athletedata.openAthleteMetrics.data.db.UserProfileDao
+       4 import com.athletedata.openAthleteMetrics.data.db.toDomain
+       5 import com.athletedata.openAthleteMetrics.data.db.toEntity
+       6 import com.athletedata.openAthleteMetrics.data.model.UserProfile
+       7 import kotlinx.coroutines.flow.Flow
+       8 import kotlinx.coroutines.flow.map
+       9 import timber.log.Timber
+      10 import javax.inject.Inject
+     … +39 lines (ctrl+o to expand)
+
+● Now creating UserProfileEntity.kt (the most complex new file) and then
+  modifying the two existing files.
+
+● Write(app/src/main/java/com/athletedata/openAthleteMetrics/data/db/UserProfile
+       Entity.kt)
+  ⎿  Wrote 75 lines to app/src/main/java/com/athletedata/openAthleteMetrics
+     /data/db/UserProfileEntity.kt
+      1 package com.athletedata.openAthleteMetrics.data.db
+      2 
+      3 import androidx.room.ColumnInfo
+      4 import androidx.room.Entity
+      5 import androidx.room.PrimaryKey
+      6 import com.athletedata.openAthleteMetrics.data.model.HrZone
+      7 import com.athletedata.openAthleteMetrics.data.model.UserProfile
+      8 import kotlinx.serialization.encodeToString
+      9 import kotlinx.serialization.json.Json
+     … +72 lines (ctrl+o to expand)
+
+● Now modifying AppDatabase.kt — bump version, add entity, add DAO method, add
+  migration.
+
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/data/db/AppDatabas
+        e.kt)
+  ⎿  Added 3 lines, removed 1 line
+      25   *  12 — QuestionResponseEntity.date re-typed from String to Lo
+          calDate in Kotlin; no SQLite schema
+      26   *       change (TypeConverter stores LocalDate as ISO-8601 TEX
+          T, identical to prior storage)
+      27   *  13 — added widget_layout table for configurable Dashboard w
+          idget grid; seeded with default layout
+      28 + *  14 — added user_profile table (single-row athlete profile w
+         +ith biometrics and HR zones)                                   
+      29   */
+      30  @Database(
+      31      entities = [
+     ...
+      51          TotalCalorieReadingEntity::class,
+      52          SleepStageEntity::class,
+      53          WidgetLayoutEntity::class,
+      54 +        UserProfileEntity::class,                              
+      55      ],
+      54 -    version = 13,                                              
+      56 +    version = 14,                                              
+      57      exportSchema = true,
+      58  )
+      59  @TypeConverters(Converters::class)
+
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/data/db/AppDatabas
+        e.kt)
+  ⎿  Added 3 lines
+      82      abstract fun sleepStageDao(): SleepStageDao
+      83      abstract fun widgetLayoutDao(): WidgetLayoutDao
+      84  
+      85 +    /** Provides DAO access to the single-row athlete profile t
+         +able. */                                                       
+      86 +    abstract fun userProfileDao(): UserProfileDao              
+      87 +                                                               
+      88      companion object {
+      89          const val DATABASE_NAME = "athlete_data.db"
+      90  
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/data/db/AppDatabas
+        e.kt)
+  ⎿  Added 24 lines
+      803              }
+      804          }
+      805  
+      806 +        val MIGRATION_13_14 = object : Migration(13, 14) {    
+      807 +            override fun migrate(db: SupportSQLiteDatabase) { 
+      808 +                db.execSQL(                                   
+      809 +                    """                                       
+      810 +                    CREATE TABLE IF NOT EXISTS `user_profile` 
+          +(                                                             
+      811 +                        `id`                     INTEGER NOT N
+          +ULL PRIMARY KEY,                                              
+      812 +                        `name`                   TEXT,        
+      813 +                        `date_of_birth`          TEXT,        
+      814 +                        `biological_sex`         TEXT,        
+      815 +                        `height_cm`              REAL,        
+      816 +                        `weight_kg`              REAL,        
+      817 +                        `stride_length_cm`       REAL,        
+      818 +                        `wrist_circumference_mm` REAL,        
+      819 +                        `resting_metabolic_rate` REAL,        
+      820 +                        `vo2_max`                REAL,        
+      821 +                        `max_hr`                 INTEGER,     
+      822 +                        `hr_zones_json`          TEXT,        
+      823 +                        `updated_at`             INTEGER NOT N
+          +ULL DEFAULT 0                                                 
+      824 +                    )                                         
+      825 +                    """.trimIndent()                          
+      826 +                )                                             
+      827 +            }                                                 
+      828 +        }                                                     
+      829 +                                                              
+      830          val MIGRATION_12_13 = object : Migration(12, 13) {
+      831              override fun migrate(db: SupportSQLiteDatabase) {
+      832                  db.execSQL(
+
+● Now register MIGRATION_13_14 in the DatabaseModule builder and add the DAO
+  provider + repository binding.
+
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/di/DatabaseModule.
+        kt)
+  ⎿  Added 3 lines
+      67  import com.athletedata.openAthleteMetrics.data.repository.Widge
+          tLayoutRepository
+      68  import com.athletedata.openAthleteMetrics.data.repository.RoomW
+          idgetLayoutRepository
+      69  import com.athletedata.openAthleteMetrics.data.db.WidgetLayoutD
+          ao
+      70 +import com.athletedata.openAthleteMetrics.data.db.UserProfileDa
+         +o                                                              
+      71 +import com.athletedata.openAthleteMetrics.data.repository.UserP
+         +rofileRepository                                               
+      72 +import com.athletedata.openAthleteMetrics.data.repository.RoomU
+         +serProfileRepository                                           
+      73  import dagger.Binds
+      74  import dagger.Module
+      75  import dagger.Provides
+
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/di/DatabaseModule.
+        kt)
+  ⎿  Added 3 lines
+      147      @Binds @Singleton
+      148      abstract fun bindWidgetLayoutRepository(impl: RoomWidgetLa
+           youtRepository): WidgetLayoutRepository
+      149  
+      150 +    @Binds @Singleton                                         
+      151 +    abstract fun bindUserProfileRepository(impl: RoomUserProfi
+          +leRepository): UserProfileRepository                          
+      152 +                                                              
+      153      companion object {
+      154  
+      155          // ── Database & DAO providers ───────────────────────
+           ───────────────────
+
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/di/DatabaseModule.
+        kt)
+  ⎿  Added 1 line
+      175                  AppDatabase.MIGRATION_10_11,
+      176                  AppDatabase.MIGRATION_11_12,
+      177                  AppDatabase.MIGRATION_12_13,
+      178 +                AppDatabase.MIGRATION_13_14,                  
+      179              )
+      180              .build()
+      181  
+
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/di/DatabaseModule.
+        kt)
+  ⎿  Added 3 lines
+      246  
+      247          @Provides @Singleton
+      248          fun provideWidgetLayoutDao(db: AppDatabase): WidgetLay
+           outDao = db.widgetLayoutDao()
+      249 +                                                              
+      250 +        @Provides @Singleton                                  
+      251 +        fun provideUserProfileDao(db: AppDatabase): UserProfil
+          +eDao = db.userProfileDao()                                    
+      252      }
+      253  }
+
+● All edits are done. Let me do a quick sanity check on the two modified files
+  to confirm everything looks right.
+
+  Read 2 files (ctrl+o to expand)
+
+● Everything looks correct. Let me verify the MIGRATION_13_14 placement in
+  AppDatabase and the tail of DatabaseModule:
+
+  Searched for 1 pattern, read 2 files (ctrl+o to expand)
+
+● All wired up correctly. Here's a complete summary of every file produced:
+
+  ---
+  What was created
+
+  6 new files:
+
+  File: data/model/HrZone.kt
+  Purpose: @Serializable data class — zone, lowerBpm, upperBpm
+  ────────────────────────────────────────
+  File: data/model/UserProfile.kt
+  Purpose: Domain model with hrZones: List<HrZone>
+  ────────────────────────────────────────
+  File: data/db/UserProfileEntity.kt
+  Purpose: Room @Entity(tableName = "user_profile") + toDomain() / toEntity()
+    mappers using kotlinx.serialization.json.Json
+  ────────────────────────────────────────
+  File: data/db/UserProfileDao.kt
+  Purpose: observe(), get(), upsert(), updateWeight()
+  ────────────────────────────────────────
+  File: data/repository/UserProfileRepository.kt
+  Purpose: Interface
+  ────────────────────────────────────────
+  File: data/repository/RoomUserProfileRepository.kt
+  Purpose: @Singleton impl — stamps updatedAt in upsert() and updateWeight(),
+    logs errors via Timber
+
+  2 modified files:
+
+  - AppDatabase.kt — version bumped 13 → 14, UserProfileEntity::class added to
+  entities list, abstract fun userProfileDao() added, MIGRATION_13_14 defined
+  (plain CREATE TABLE)
+  - DatabaseModule.kt — @Binds bindUserProfileRepository, @Provides 
+  provideUserProfileDao, and MIGRATION_13_14 added to the builder chain
+
+  To verify: run ./gradlew :app:kspDebugKotlin — KSP should generate
+  UserProfileDao_Impl cleanly. Then ./gradlew :app:compileDebugKotlin for a full
+  compile check.
+
+✻ Sautéed for 5m 33s
+
+❯ /export                                                                       
+  ⎿  Conversation copied to clipboard

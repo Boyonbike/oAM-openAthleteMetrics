@@ -25,6 +25,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *  12 — QuestionResponseEntity.date re-typed from String to LocalDate in Kotlin; no SQLite schema
  *       change (TypeConverter stores LocalDate as ISO-8601 TEXT, identical to prior storage)
  *  13 — added widget_layout table for configurable Dashboard widget grid; seeded with default layout
+ *  14 — added user_profile table (single-row athlete profile with biometrics and HR zones)
  */
 @Database(
     entities = [
@@ -50,8 +51,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TotalCalorieReadingEntity::class,
         SleepStageEntity::class,
         WidgetLayoutEntity::class,
+        UserProfileEntity::class,
     ],
-    version = 13,
+    version = 14,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -79,6 +81,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun totalCalorieReadingDao(): TotalCalorieReadingDao
     abstract fun sleepStageDao(): SleepStageDao
     abstract fun widgetLayoutDao(): WidgetLayoutDao
+
+    /** Provides DAO access to the single-row athlete profile table. */
+    abstract fun userProfileDao(): UserProfileDao
 
     companion object {
         const val DATABASE_NAME = "athlete_data.db"
@@ -795,6 +800,30 @@ abstract class AppDatabase : RoomDatabase() {
                 // Kotlin. The TypeConverter stores LocalDate as ISO-8601 TEXT ("YYYY-MM-DD"),
                 // which is exactly the format the old String field already used. The SQLite
                 // column definition stays `TEXT NOT NULL` — no data rewriting is required.
+            }
+        }
+
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `user_profile` (
+                        `id`                     INTEGER NOT NULL PRIMARY KEY,
+                        `name`                   TEXT,
+                        `date_of_birth`          TEXT,
+                        `biological_sex`         TEXT,
+                        `height_cm`              REAL,
+                        `weight_kg`              REAL,
+                        `stride_length_cm`       REAL,
+                        `wrist_circumference_mm` REAL,
+                        `resting_metabolic_rate` REAL,
+                        `vo2_max`                REAL,
+                        `max_hr`                 INTEGER,
+                        `hr_zones_json`          TEXT,
+                        `updated_at`             INTEGER NOT NULL DEFAULT 0
+                    )
+                    """.trimIndent()
+                )
             }
         }
 

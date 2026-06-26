@@ -18,6 +18,7 @@ import android.os.ParcelUuid
 import androidx.annotation.RequiresApi
 import androidx.work.WorkManager
 import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
+import com.athletedata.openAthleteMetrics.ble.driver.ParsingConfig
 import com.athletedata.openAthleteMetrics.ble.driver.SyncCommand
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
 import com.athletedata.openAthleteMetrics.ble.sync.DeviceSyncProcessor
@@ -36,7 +37,6 @@ import com.athletedata.openAthleteMetrics.data.repository.RawDeviceDataRepositor
 import com.athletedata.openAthleteMetrics.worker.enqueueSummaryWorker
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.LocalDate
-import java.time.ZoneId
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -54,6 +54,9 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -68,6 +71,7 @@ data class DiscoveredCandidate(
 class BleEngine @Inject constructor(
     @param:ApplicationContext val context: Context,
     private val driverRegistry: DriverRegistry,
+    private val syncContextFactory: SyncContextFactory, // CHANGED
     private val syncProcessor: DeviceSyncProcessor,
     private val validator: SyncValidator,
     private val deviceRepository: DeviceRepository,
@@ -717,11 +721,58 @@ class BleEngine @Inject constructor(
     // Sync command execution
     // -------------------------------------------------------------------------
 
-    /** Builds effective sync commands (static + any dynamic prepend) then starts execution. */
+    // CHANGED: resolves static manifest commands + any context-aware commands, then executes.
     private suspend fun beginSyncCommandExecution() {
         val manifest = activeManifest ?: return
-        effectiveSyncCommands = driverRegistry.buildEffectiveSyncCommands(manifest)
+        val staticCmds = manifest.syncCommands                   // CHANGED
+        val contextCmds = resolveContextCommands(manifest)       // CHANGED
+        effectiveSyncCommands = staticCmds + contextCmds         // CHANGED
         executeNextSyncCommand()
+    }
+
+    // CHANGED: reads syncRequirements, builds the appropriate SyncContext (with or without a
+    // DB fetch), and calls the driver's buildSyncCommands WASM export. Returns emptyList when
+    // the export is absent or SyncContextFactory throws — the connection is never aborted.
+    private suspend fun resolveContextCommands(
+        manifest: WasmDriverManifest,
+    ): List<SyncCommand.Write> {
+        val wasm = manifest.parsing as? ParsingConfig.WasmParsing ?: return emptyList()
+        if (wasm.exports.buildSyncCommands == null) return emptyList()
+
+        val req = manifest.syncRequirements
+        val needsUserData = req != null && (req.datetime || req.userProfile.isNotEmpty())
+
+        val syncContext = if (needsUserData) {
+            try {
+                syncContextFactory.build()
+            } catch (e: Exception) {
+                Timber.e(e, "BleEngine: SyncContextFactory.build() failed — continuing with static commands only")
+                return emptyList()
+            }
+        } else {
+            buildMinimalContext()
+        }
+
+        return driverRegistry.buildSyncCommands(manifest, syncContext)
+    }
+
+    // CHANGED: constructs a time-only SyncContext without hitting the DB.
+    private fun buildMinimalContext(): SyncContext {
+        val epochMs = System.currentTimeMillis()
+        val instant = Instant.ofEpochMilli(epochMs)
+        val zone = ZoneId.systemDefault()
+        val utcOffsetMinutes = zone.rules.getOffset(instant).totalSeconds / 60
+        val isoDateTime = DateTimeFormatter.ISO_LOCAL_DATE_TIME
+            .format(LocalDateTime.ofInstant(instant, zone))
+        return SyncContext(
+            epochMs = epochMs,
+            utcOffsetMinutes = utcOffsetMinutes,
+            isoDateTime = isoDateTime,
+            name = null, dateOfBirth = null, biologicalSex = null,
+            heightCm = null, weightKg = null, strideLengthCm = null,
+            wristCircumferenceMm = null, restingMetabolicRate = null,
+            vo2Max = null, maxHr = null, hrZones = emptyList(),
+        )
     }
 
     @SuppressLint("MissingPermission")

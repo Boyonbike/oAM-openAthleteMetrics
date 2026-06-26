@@ -10,6 +10,13 @@
 > are not intended for external contributors to implement. If you found these
 > interfaces while reading the source, please use the WASM path described here.
 
+> **Note — specVersion 3:** `"specVersion": "3"` adds `syncRequirements` and a
+> revised `buildSyncCommands` WASM export that receives a full `SyncContext` JSON
+> argument including user profile data. Drivers at `specVersion: "2"` continue to
+> work unchanged. To opt in, set `"specVersion": "3"` and add the `syncRequirements`
+> block and/or the specVersion 3 `buildSyncCommands` export described in the
+> [specVersion 3](#specversion-3) section below.
+
 This document contains everything needed to write a device driver for the app —
 either as a human developer or as an AI given a device protocol document alongside
 this guide.
@@ -821,8 +828,8 @@ Offset 16+:  zeroed (no characteristic bytes for command-build calls)
 
 Each object maps to a `SyncCommand.Write`. `characteristic` is a role name from
 `ble.characteristics`. `bytes` is a space-separated hex string (same format as static
-`syncCommands` WRITE entries). Dynamic commands are prepended before any static
-`syncCommands` — they execute first.
+`syncCommands` WRITE entries). Dynamic commands are appended to the **end** of the static
+`syncCommands` list — static commands execute first.
 
 ---
 
@@ -1156,6 +1163,224 @@ This example shows a device that supports metrics, sleep, and activities. Note
 
 ---
 
+## specVersion 3
+
+### syncRequirements
+
+The `syncRequirements` block declares what data the app must assemble and pass to
+the driver at connect time. The app reads this block before initiating the connection
+and will warn the user if any declared required fields are missing from their profile.
+
+```json
+"syncRequirements": {
+  "datetime": true,
+  "userProfile": ["weight_kg", "height_cm", "max_hr"]
+}
+```
+
+| Key | Type | Required | Description |
+|---|---|---|---|
+| `datetime` | boolean | no | If `true`, the app populates `epochMs`, `utcOffsetMinutes`, and `isoDateTime` in the `SyncContext`. If `false` or omitted, those fields are absent. |
+| `userProfile` | string[] | no | List of user profile field keys to include in the `SyncContext`. Only declared keys are passed to the WASM runtime. |
+
+**Valid `userProfile` field keys:**
+
+| Key | Type | Description |
+|---|---|---|
+| `name` | string | User display name |
+| `date_of_birth` | string | ISO date `YYYY-MM-DD` |
+| `biological_sex` | string | `MALE`, `FEMALE`, or `OTHER` |
+| `height_cm` | number | Height in centimetres |
+| `weight_kg` | number | Latest synced weight in kg |
+| `stride_length_cm` | number | Walking/running stride length |
+| `wrist_circumference_mm` | number | Wrist circumference for optical HR calibration |
+| `resting_metabolic_rate` | number | RMR in kcal/day |
+| `vo2_max` | number | VO2 max in ml/kg/min |
+| `max_hr` | integer | Maximum heart rate in bpm |
+| `hr_zones` | array | List of HR zones: `{"zone": 1, "lowerBpm": 100, "upperBpm": 130}` |
+
+> **Fields not declared in `userProfile` are not passed to the WASM runtime.** If a
+> driver declares `["weight_kg", "max_hr"]`, the `SyncContext` will contain only those
+> two fields — all other profile keys will be absent from the JSON.
+
+> **If `datetime` is `false` or omitted**, `epochMs`, `utcOffsetMinutes`, and
+> `isoDateTime` are not populated in the `SyncContext`.
+
+> **The `syncRequirements` block is optional.** Omitting it entirely is equivalent to
+> `{ "datetime": false, "userProfile": [] }` — no datetime, no profile data.
+
+---
+
+### buildSyncCommands (specVersion 3)
+
+> **This is the specVersion 3 variant of `buildSyncCommands`.** It has a different
+> function signature and a different memory contract from the specVersion 2 variant
+> documented in [Dynamic Sync Commands](#dynamic-sync-commands-buildSyncCommands) above.
+> In specVersion 3, dynamic commands are also **appended after** static `syncCommands`
+> rather than prepended before them.
+
+The `buildSyncCommands` export is optional. When present, the app calls it at connect
+time with a `SyncContext` JSON string. The function returns a pointer to a JSON array
+of Write commands, which the app appends to the end of the static `syncCommands` list
+and executes in order.
+
+**Function signature:**
+
+```
+(func (param i32 i32) (result i32))
+  param 1 — memory offset of the SyncContext JSON string (contextJsonPtr)
+  param 2 — byte length of the SyncContext JSON string (contextJsonLen)
+  result  — byte count of the JSON written at memory offset 1024 (0x400); return 0 for no commands
+```
+
+The output JSON must be written at memory offset 1024. This matches the specVersion 2
+`buildSyncCommands` output convention.
+
+**SyncContext JSON schema:**
+
+The app serialises the assembled context and writes it to WASM linear memory before
+calling the function. Fields that were not declared in `syncRequirements` are absent
+from the object — do not assume any field is present; check before reading.
+
+```json
+{
+  "epochMs": 1750000000000,
+  "utcOffsetMinutes": 60,
+  "isoDateTime": "2026-06-21T14:32:00",
+  "name": "Alex",
+  "dateOfBirth": "1990-03-15",
+  "biologicalSex": "MALE",
+  "heightCm": 178.0,
+  "weightKg": 72.4,
+  "strideLengthCm": 78.0,
+  "wristCircumferenceMm": 165.0,
+  "restingMetabolicRate": 1850.0,
+  "vo2Max": 52.0,
+  "maxHr": 192,
+  "hrZones": [
+    { "zone": 1, "lowerBpm": 100, "upperBpm": 130 },
+    { "zone": 2, "lowerBpm": 131, "upperBpm": 148 },
+    { "zone": 3, "lowerBpm": 149, "upperBpm": 163 },
+    { "zone": 4, "lowerBpm": 164, "upperBpm": 174 },
+    { "zone": 5, "lowerBpm": 175, "upperBpm": 200 }
+  ]
+}
+```
+
+| Field | Type | Present when |
+|---|---|---|
+| `epochMs` | int64 | `datetime: true` in `syncRequirements` |
+| `utcOffsetMinutes` | integer | `datetime: true` in `syncRequirements` |
+| `isoDateTime` | string | `datetime: true` in `syncRequirements` |
+| `name` | string | `"name"` declared in `userProfile` |
+| `dateOfBirth` | string | `"date_of_birth"` declared in `userProfile` |
+| `biologicalSex` | string | `"biological_sex"` declared in `userProfile` |
+| `heightCm` | number | `"height_cm"` declared in `userProfile` |
+| `weightKg` | number | `"weight_kg"` declared in `userProfile` |
+| `strideLengthCm` | number | `"stride_length_cm"` declared in `userProfile` |
+| `wristCircumferenceMm` | number | `"wrist_circumference_mm"` declared in `userProfile` |
+| `restingMetabolicRate` | number | `"resting_metabolic_rate"` declared in `userProfile` |
+| `vo2Max` | number | `"vo2_max"` declared in `userProfile` |
+| `maxHr` | integer | `"max_hr"` declared in `userProfile` |
+| `hrZones` | array | `"hr_zones"` declared in `userProfile` |
+
+**Return value:**
+
+Return a pointer to a UTF-8 JSON array written somewhere in WASM linear memory. The
+array must contain only Write commands — `ENABLE_NOTIFY` and `DELAY` are not supported
+in `buildSyncCommands` return values and will be ignored.
+
+```json
+[
+  { "characteristic": "write", "bytes": "0x01 0x02 0x03" }
+]
+```
+
+`characteristic` is a role name from `ble.characteristics`. `bytes` is a
+space-separated hex string (same format as static `syncCommands` WRITE entries).
+
+Return `0` to produce no dynamic commands. The static `syncCommands` will still run.
+
+**Execution order:**
+
+The app appends dynamic commands to the **end** of the static `syncCommands` list.
+Static commands execute first; dynamic commands execute after.
+
+**Omit or null:**
+
+If the driver does not need dynamic commands, omit the export entirely or set it to
+`null` in the manifest. The app handles both cases identically — no dynamic commands
+are issued and no error is logged.
+
+**Manifest declaration:**
+
+```json
+"exports": {
+  "parseMetrics": "parseMetrics",
+  "parseSleep": "parseSleep",
+  "parseActivity": null,
+  "buildSyncCommands": "buildSyncCommands"
+}
+```
+
+---
+
+### Complete specVersion 3 Manifest Example
+
+A minimal manifest that declares datetime and three user profile fields, exports
+`buildSyncCommands` alongside `parseMetrics`, and has two static sync commands.
+
+```json
+{
+  "id": "example_device_v3",
+  "displayName": "Example Device (v3)",
+  "version": "1.0.0",
+  "specVersion": "3",
+  "author": "your-name",
+  "supportedMetrics": ["HR", "STEPS", "BATTERY"],
+  "ble": {
+    "matchByName": "ExampleDevice",
+    "matchByServiceUuid": "0000fee0-0000-1000-8000-00805f9b34fb",
+    "matchConfidence": "CERTAIN",
+    "services": ["0000fee0-0000-1000-8000-00805f9b34fb"],
+    "characteristics": {
+      "notify": "0000fee1-0000-1000-8000-00805f9b34fb",
+      "write":  "0000fee2-0000-1000-8000-00805f9b34fb"
+    }
+  },
+  "syncRequirements": {
+    "datetime": true,
+    "userProfile": ["weight_kg", "height_cm", "max_hr"]
+  },
+  "syncCommands": [
+    { "type": "ENABLE_NOTIFY", "characteristic": "notify" },
+    { "type": "WRITE", "characteristic": "write", "bytes": "0xAA 0x01" }
+  ],
+  "parsing": {
+    "mode": "WASM",
+    "wasmBase64": "AGFzbQEAAAA...",
+    "exports": {
+      "parseMetrics": "parseMetrics",
+      "parseSleep": null,
+      "parseActivity": null,
+      "buildSyncCommands": "buildSyncCommands"
+    }
+  }
+}
+```
+
+---
+
+### Error Behaviour
+
+| Condition | App behaviour |
+|---|---|
+| Required `userProfile` field is missing from the user's profile | Logs a warning. The field is `null` in the `SyncContext`. Sync proceeds — the app does not block connection for missing profile data. |
+| `buildSyncCommands` WASM throws or returns malformed JSON | Logs the error. Falls back to static `syncCommands` only. Connection continues. |
+| `buildSyncCommands` is declared in `exports` but not found in the WASM binary | Treated as `null` — no dynamic commands are issued. No error is surfaced to the user. |
+
+---
+
 ## Validation Rules
 
 The app validates every manifest before loading it. A driver that fails any check
@@ -1170,7 +1395,7 @@ is rejected entirely with an error message shown to the user.
 | `parsing.mode` | Must be `"WASM"` |
 | `parsing.wasmBase64` | Must decode to a valid WASM binary (magic header check: first 4 bytes must be `0x00 0x61 0x73 0x6D`) |
 | `exports.parseMetrics` | Must not be blank |
-| `specVersion` | Only `"1"` and `"2"` produce defined behaviour. Other values fall back silently to spec v1 layout. No rejection. |
+| `specVersion` | Only `"1"`, `"2"`, and `"3"` produce defined behaviour. Other values fall back silently to spec v1 layout. No rejection. |
 
 > **Advisory (not enforced by the validator):** At least one of `matchByName` or
 > `matchByServiceUuid` should be present so the scanner can identify candidate

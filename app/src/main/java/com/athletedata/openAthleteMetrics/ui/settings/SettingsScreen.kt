@@ -55,7 +55,10 @@ import com.athletedata.openAthleteMetrics.BuildConfig
 import com.athletedata.openAthleteMetrics.data.model.ThemePreference
 import com.athletedata.openAthleteMetrics.seeder.SeederState
 import com.athletedata.openAthleteMetrics.seeder.SeederViewModel
+import com.athletedata.openAthleteMetrics.ui.components.PillSelector
 import com.athletedata.openAthleteMetrics.ui.components.SectionHeader
+import com.athletedata.openAthleteMetrics.ui.questions.DailyQuestionsViewModel
+import com.athletedata.openAthleteMetrics.ui.questions.WeightEntrySheet
 import java.time.LocalDate
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -68,6 +71,16 @@ fun SettingsScreen(
     val theme by settingsViewModel.themePreference.collectAsStateWithLifecycle()
     val uiState by settingsViewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    val profileViewModel: UserProfileViewModel = hiltViewModel()
+    val profile by profileViewModel.profile.collectAsStateWithLifecycle()
+
+    // DailyQuestionsViewModel scoped to this screen so WeightEntrySheet is not
+    // re-created on each open/close of the sheet.
+    val dailyQuestionsViewModel: DailyQuestionsViewModel = hiltViewModel()
+    var showWeightSheet by remember { mutableStateOf(false) }
+
+    var selectedTab by remember { mutableStateOf(0) }
 
     LaunchedEffect(Unit) {
         settingsViewModel.effects.collect { effect ->
@@ -155,6 +168,16 @@ fun SettingsScreen(
         )
     }
 
+    // WeightEntryBottomSheet is reused here rather than an inline editor because
+    // weight writes to a DailyContext entry (not directly to UserProfile) and
+    // includes body fat % and notes — reusing the canonical entry form.
+    if (showWeightSheet) {
+        WeightEntrySheet(
+            viewModel = dailyQuestionsViewModel,
+            onDismiss = { showWeightSheet = false },
+        )
+    }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
@@ -171,56 +194,90 @@ fun SettingsScreen(
                     },
                 )
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    PillSelector(
+                        tabs = listOf("Profile", "App"),
+                        selectedIndex = selectedTab,
+                        onSelect = { selectedTab = it },
+                    )
+                }
             }
         },
     ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .padding(innerPadding)
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-                .padding(bottom = 80.dp),
-        ) {
-            // ── Section: Settings ─────────────────────────────────────────────
-            SectionHeader("Settings")
-            Spacer(Modifier.height(8.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                AppearanceTile(
-                    theme = theme,
-                    onSelect = settingsViewModel::setTheme,
-                )
-                BackupTile(
-                    isBusy = uiState.isBusy,
-                    onExport = { exportLauncher.launch("athlete_data_export_${LocalDate.now()}.db") },
-                    onImport = { importLauncher.launch(arrayOf("*/*")) },
-                )
-                DangerTile(
-                    isBusy = uiState.isBusy,
-                    onReset = settingsViewModel::onResetClicked,
-                )
-            }
+        when (selectedTab) {
+            0 -> ProfileTab(
+                profile = profile,
+                onUpdate = profileViewModel::updateProfile,
+                onWeightTap = { showWeightSheet = true },
+                modifier = Modifier
+                    .padding(innerPadding)
+                    .fillMaxSize(),
+            )
+            else -> AppTab(
+                theme = theme,
+                onSelectTheme = settingsViewModel::setTheme,
+                isBusy = uiState.isBusy,
+                onExport = { exportLauncher.launch("athlete_data_export_${LocalDate.now()}.db") },
+                onImport = { importLauncher.launch(arrayOf("*/*")) },
+                onReset = settingsViewModel::onResetClicked,
+                modifier = Modifier
+                    .padding(innerPadding)
+                    .fillMaxSize(),
+            )
+        }
+    }
+}
 
-            // ── Section: Experimental ─────────────────────────────────────────
+// ── App tab (existing settings content) ──────────────────────────────────────
+
+@Composable
+private fun AppTab(
+    theme: ThemePreference,
+    onSelectTheme: (ThemePreference) -> Unit,
+    isBusy: Boolean,
+    onExport: () -> Unit,
+    onImport: () -> Unit,
+    onReset: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(bottom = 80.dp),
+    ) {
+        // ── Section: Settings ─────────────────────────────────────────────────
+        SectionHeader("Settings")
+        Spacer(Modifier.height(8.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            AppearanceTile(theme = theme, onSelect = onSelectTheme)
+            BackupTile(isBusy = isBusy, onExport = onExport, onImport = onImport)
+            DangerTile(isBusy = isBusy, onReset = onReset)
+        }
+
+        // ── Section: Experimental ─────────────────────────────────────────────
+        Spacer(Modifier.height(24.dp))
+        SectionHeader("Experimental")
+
+        // ── Section: Developer (debug builds only) ────────────────────────────
+        if (BuildConfig.DEBUG) {
+            val seederViewModel: SeederViewModel = hiltViewModel()
+            val seederState by seederViewModel.state.collectAsStateWithLifecycle()
             Spacer(Modifier.height(24.dp))
-            SectionHeader("Experimental")
-            // No tiles yet.
-
-            // ── Section: Developer (debug builds only) ────────────────────────
-            if (BuildConfig.DEBUG) {
-                val seederViewModel: SeederViewModel = hiltViewModel()
-                val seederState by seederViewModel.state.collectAsStateWithLifecycle()
-                Spacer(Modifier.height(24.dp))
-                SectionHeader("Developer")
-                Spacer(Modifier.height(8.dp))
-                SeederTile(
-                    state = seederState,
-                    onSeedThirtyDays = seederViewModel::seedThirtyDays,
-                    onSeedToday = seederViewModel::seedToday,
-                    onClearData = seederViewModel::clearSeederData,
-                    onDismissResult = seederViewModel::resetState,
-                )
-            }
+            SectionHeader("Developer")
+            Spacer(Modifier.height(8.dp))
+            SeederTile(
+                state = seederState,
+                onSeedThirtyDays = seederViewModel::seedThirtyDays,
+                onSeedToday = seederViewModel::seedToday,
+                onClearData = seederViewModel::clearSeederData,
+                onDismissResult = seederViewModel::resetState,
+            )
         }
     }
 }

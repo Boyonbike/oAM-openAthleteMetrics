@@ -14,6 +14,7 @@ import javax.inject.Singleton
 @Singleton
 class RoomDailyContextRepository @Inject constructor(
     private val dao: DailyContextDao,
+    private val userProfileRepository: UserProfileRepository,
 ) : DailyContextRepository {
 
     override suspend fun upsert(context: DailyContext) {
@@ -22,6 +23,16 @@ class RoomDailyContextRepository @Inject constructor(
         } catch (e: Exception) {
             Timber.e(e, "Failed to upsert daily context")
             throw e
+        }
+        // Only sync when weight was explicitly provided; null means "not entered",
+        // not "clear the profile weight".
+        context.weightKg?.let { kg ->
+            try {
+                userProfileRepository.updateWeight(kg)
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to sync weight to user profile")
+                // Swallow — a profile-sync failure must not roll back the daily context save.
+            }
         }
     }
 

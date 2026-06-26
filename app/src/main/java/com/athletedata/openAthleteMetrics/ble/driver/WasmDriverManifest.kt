@@ -11,6 +11,18 @@ import kotlinx.serialization.Serializable
  * schema documented in `app/src/main/assets/drivers/example_wasm.json`.
  * Use [ManifestValidator.validate] before trusting any field.
  */
+/**
+ * Declares which context fields a driver requires before building dynamic sync commands.
+ * Absent or empty means the WASM [WasmExports.buildSyncCommands] export receives only a
+ * minimal datetime context (no DB access). Set [datetime] or populate [userProfile] to
+ * trigger a full [SyncContext] fetch from the user-profile repository.
+ */
+@Serializable
+data class SyncRequirements(
+    val datetime: Boolean = false,
+    val userProfile: List<String> = emptyList(),
+)
+
 @Serializable
 data class WasmDriverManifest(
     /** Stable, globally unique driver identifier. Never change this after publishing. */
@@ -26,6 +38,8 @@ data class WasmDriverManifest(
     val syncCommands: List<SyncCommand> = emptyList(),
     val parsing: ParsingConfig,
     val specVersion: String = "1",
+    // CHANGED: optional block; absent = no context needed for sync command building
+    val syncRequirements: SyncRequirements? = null,
 )
 
 /**

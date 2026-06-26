@@ -1,5 +1,6 @@
 package com.athletedata.openAthleteMetrics.ble.driver
 
+import com.athletedata.openAthleteMetrics.ble.SyncContext
 import com.athletedata.openAthleteMetrics.ble.wasm.WasmDriverEngine
 import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.MetricReading
@@ -53,9 +54,13 @@ class DriverRegistry @Inject constructor(
         wasmEngine.startSync()
     }
 
-    suspend fun buildEffectiveSyncCommands(manifest: WasmDriverManifest): List<SyncCommand> {
-        ensureWasmLoaded(manifest)
-        return wasmEngine.buildEffectiveSyncCommands(manifest)
+    // CHANGED: context-aware variant; delegates to WasmDriverEngine.buildSyncCommands(context).
+    suspend fun buildSyncCommands(
+        manifest: WasmDriverManifest,
+        context: SyncContext,
+    ): List<SyncCommand.Write> {
+        if (!ensureWasmLoaded(manifest)) return emptyList()
+        return wasmEngine.buildSyncCommands(manifest, context)
     }
 
     fun allDrivers(): List<WasmDriverManifest> = _drivers.toList()

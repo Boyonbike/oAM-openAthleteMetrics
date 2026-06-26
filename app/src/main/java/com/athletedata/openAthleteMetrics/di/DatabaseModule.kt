@@ -67,6 +67,9 @@ import com.athletedata.openAthleteMetrics.data.repository.TotalCalorieReadingRep
 import com.athletedata.openAthleteMetrics.data.repository.WidgetLayoutRepository
 import com.athletedata.openAthleteMetrics.data.repository.RoomWidgetLayoutRepository
 import com.athletedata.openAthleteMetrics.data.db.WidgetLayoutDao
+import com.athletedata.openAthleteMetrics.data.db.UserProfileDao
+import com.athletedata.openAthleteMetrics.data.repository.UserProfileRepository
+import com.athletedata.openAthleteMetrics.data.repository.RoomUserProfileRepository
 import dagger.Binds
 import dagger.Module
 import dagger.Provides
@@ -144,6 +147,9 @@ abstract class DatabaseModule {
     @Binds @Singleton
     abstract fun bindWidgetLayoutRepository(impl: RoomWidgetLayoutRepository): WidgetLayoutRepository
 
+    @Binds @Singleton
+    abstract fun bindUserProfileRepository(impl: RoomUserProfileRepository): UserProfileRepository
+
     companion object {
 
         // ── Database & DAO providers ──────────────────────────────────────────
@@ -169,6 +175,7 @@ abstract class DatabaseModule {
                 AppDatabase.MIGRATION_10_11,
                 AppDatabase.MIGRATION_11_12,
                 AppDatabase.MIGRATION_12_13,
+                AppDatabase.MIGRATION_13_14,
             )
             .build()
 
@@ -239,5 +246,8 @@ abstract class DatabaseModule {
 
         @Provides @Singleton
         fun provideWidgetLayoutDao(db: AppDatabase): WidgetLayoutDao = db.widgetLayoutDao()
+
+        @Provides @Singleton
+        fun provideUserProfileDao(db: AppDatabase): UserProfileDao = db.userProfileDao()
     }
 }

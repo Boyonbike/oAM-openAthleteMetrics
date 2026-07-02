@@ -34,6 +34,9 @@ import java.time.LocalDate
  * @property stepsActiveMinutes Minutes with elevated step activity.
  * @property totalCalories Full-day calorie expenditure including resting metabolic rate.
  * @property activeCalories Calories burned during activity periods only.
+ * @property avgSystolicMmHg Average systolic blood pressure for the day (mmHg). Null if no BP readings. // BP-GLUCOSE-SUMMARY
+ * @property avgDiastolicMmHg Average diastolic blood pressure for the day (mmHg). Null if no BP readings. // BP-GLUCOSE-SUMMARY
+ * @property avgGlucoseMmolL Average blood glucose for the day, normalised to mmol/L. Null if no glucose readings. // BP-GLUCOSE-SUMMARY
  * @property computedByVersion Algorithm version that produced this row.
  * @property source Source of the underlying readings that produced this summary.
  * @property computedAt When this row was last written by the worker.
@@ -62,6 +65,12 @@ data class DailySummary(
     val stepsActiveMinutes: Int? = null,
     val totalCalories: Double? = null,
     val activeCalories: Double? = null,
+    /** Average systolic blood pressure across all readings for the day (mmHg). Null if no BP readings. */ // BP-GLUCOSE-SUMMARY
+    val avgSystolicMmHg: Double? = null, // BP-GLUCOSE-SUMMARY
+    /** Average diastolic blood pressure across all readings for the day (mmHg). Null if no BP readings. */ // BP-GLUCOSE-SUMMARY
+    val avgDiastolicMmHg: Double? = null, // BP-GLUCOSE-SUMMARY
+    /** Average blood glucose across all readings for the day, normalised to mmol/L. Null if no glucose readings. */ // BP-GLUCOSE-SUMMARY
+    val avgGlucoseMmolL: Double? = null, // BP-GLUCOSE-SUMMARY
     val computedByVersion: Int = 0,
     val source: DataSource,
     val computedAt: Instant,

@@ -5,11 +5,8 @@ import com.athletedata.openAthleteMetrics.ble.SyncContextSerializer
 import com.athletedata.openAthleteMetrics.ble.driver.ParsingConfig
 import com.athletedata.openAthleteMetrics.ble.driver.SyncCommand
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
-import com.athletedata.openAthleteMetrics.ble.driver.WasmExports
-import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.DataSource
 import com.athletedata.openAthleteMetrics.data.model.MetricReading
-import com.athletedata.openAthleteMetrics.data.model.SleepSession
 import com.dylibso.chicory.runtime.Instance
 import com.dylibso.chicory.wasm.ChicoryException
 import com.dylibso.chicory.wasm.Parser
@@ -17,13 +14,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.json.JSONArray
+import org.json.JSONObject
 import timber.log.Timber
 import java.time.Instant
-import java.time.LocalDate
-import java.time.temporal.ChronoUnit
+import java.util.Base64
 import java.util.TimeZone
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -40,7 +36,7 @@ import javax.inject.Singleton
  *   Bytes 10–15: reserved (zeroed)
  *
  * Offset 0x0010 ( 16)  INPUT REGION     ≤ 4,080 bytes
- *   Raw BLE characteristic bytes
+ *   Raw BLE characteristic bytes (legacy) or JSON-encoded input (parseSession / buildSyncCommands)
  *
  * Offset 0x1000 (4096) OUTPUT REGION    ≤ 61,440 bytes
  *   WASM writes UTF-8 JSON; returns byte count as i32
@@ -50,7 +46,7 @@ import javax.inject.Singleton
  *
  * ## Driver author contract
  * - Module must declare `(memory (export "memory") 1)` (at least 1 page = 65,536 bytes).
- * - All three export functions share the signature `(func (param i32 i32) (result i32))`.
+ * - All export functions share the signature `(func (param i32 i32) (result i32))`.
  * - Write JSON output at byte offset 4,096; return the number of bytes written.
  * - Return 0 to signal "no data" for this payload.
  */
@@ -58,6 +54,8 @@ import javax.inject.Singleton
 class WasmDriverEngine @Inject constructor(
     private val syncContextSerializer: SyncContextSerializer,
 ) {
+
+    private class WasmTrapException(message: String) : Exception(message) // WASM-RESULT
 
     private var instance: Instance? = null
     private var loadedManifest: WasmDriverManifest? = null
@@ -95,111 +93,76 @@ class WasmDriverEngine @Inject constructor(
     }
 
     /**
-     * Calls the WASM parseMetrics export with [data] and deserialises the result.
-     * Returns an empty list on any error or missing export — never throws.
+     * Parses a complete buffered sync session by passing all [frames] to the WASM parseSession export.
+     * Returns [WasmParseResult.EngineNotInitialised] if the driver is not loaded or lacks a parseSession export.
      */
-    suspend fun parseMetrics(
-        characteristicUuid: String,
-        data: ByteArray,
-        driverId: String,
-    ): List<MetricReading> =
-        callAndDecode(data, { it.parseMetrics }, "parseMetrics(driver=$driverId)") { jsonStr ->
-            val now = Instant.now()
-            json.decodeFromString<List<MetricWasmDto>>(jsonStr).map { dto ->
-                MetricReading(
-                    metricType = dto.metricType,
-                    value = dto.value,
-                    unit = dto.unit,
-                    recordedAt = Instant.ofEpochMilli(dto.recordedAtMs),
-                    createdAt = now,
-                    source = DataSource.DEVICE,
-                    driverId = driverId,
-                    confidence = dto.confidence,
-                    metaJson = dto.metaJson,
-                )
-            }
-        } ?: emptyList()
+    suspend fun parseSession(frames: List<SessionFrame>): WasmParseResult {
+        Timber.tag(TAG).d("parseSession: frames=%d", frames.size)
+        val framesJson = buildFramesJson(frames)
+        Timber.tag(TAG).d("parse-session input (first 500): %s", framesJson.take(500))
+        val framesBytes = framesJson.toByteArray(Charsets.UTF_8)
 
-    /**
-     * Calls the WASM parseSleep export if present.
-     * Duration is computed from (sleepEndMs − sleepStartMs); the DTO's durationMinutes field is ignored.
-     * Returns null if the export is absent, the payload has no data, or any error occurs.
-     */
-    suspend fun parseSleep(
-        characteristicUuid: String,
-        data: ByteArray,
-        driverId: String,
-    ): SleepSession? =
-        callAndDecode(data, { it.parseSleep }, "parseSleep(driver=$driverId)") { jsonStr ->
-            val dto = json.decodeFromString<SleepWasmDto>(jsonStr)
-            val startInstant = Instant.ofEpochMilli(dto.sleepStartMs)
-            // Extend end to cover stage blocks (e.g. AWAKE) that lie past the reported
-            // sleepEndMs — some drivers truncate sleepEndMs to the last non-AWAKE stage.
-            val endInstant = stageAwareEndInstant(dto.sleepEndMs, dto.stagesJson)
-            SleepSession(
-                date = LocalDate.parse(dto.dateIso),
-                sleepStartMs = startInstant,
-                sleepEndMs = endInstant,
-                durationMinutes = ChronoUnit.MINUTES.between(startInstant, endInstant).toInt(),
-                source = DataSource.DEVICE,
-                driverId = driverId,
-            )
-        }
+        return parseMutex.withLock {
+            val wasm = loadedManifest?.parsing as? ParsingConfig.WasmParsing
+                ?: return@withLock WasmParseResult.EngineNotInitialised
+            val exportName = wasm.exports.parseSession
+                ?: return@withLock WasmParseResult.EngineNotInitialised
+            if (instance == null) return@withLock WasmParseResult.EngineNotInitialised
 
-    /**
-     * Calls the WASM parseActivity export if present.
-     * Returns null if the export is absent, the payload has no data, or any error occurs.
-     */
-    suspend fun parseActivity(
-        characteristicUuid: String,
-        data: ByteArray,
-        driverId: String,
-    ): Activity? =
-        callAndDecode(data, { it.parseActivity }, "parseActivity(driver=$driverId)") { jsonStr ->
-            val dto = json.decodeFromString<ActivityWasmDto>(jsonStr)
-            val derivedDuration = ((dto.endTimeMs - dto.startTimeMs) / 60_000L).toInt()
-            if (derivedDuration <= 0) {
-                Timber.w(
-                    "WasmDriverEngine: Discarding activity ${dto.deviceName}: derived duration ≤ 0 " +
-                    "startMs=${dto.startTimeMs} endMs=${dto.endTimeMs}"
-                )
-                null
-            } else {
-                Activity(
-                    startTime = Instant.ofEpochMilli(dto.startTimeMs),
-                    endTime = Instant.ofEpochMilli(dto.endTimeMs),
-                    durationMinutes = derivedDuration,
-                    deviceName = dto.deviceName,
-                    source = DataSource.DEVICE,
-                    driverId = driverId,
-                    avgHrBpm = dto.avgHrBpm,
-                    maxHrBpm = dto.maxHrBpm,
-                    minHrBpm = dto.minHrBpm,
-                    calories = dto.calories,
-                    activeCalories = dto.activeCalories,
-                    distanceMeters = dto.distanceMeters,
-                    steps = dto.steps,
-                    hrZonesJson = dto.hrZonesJson,
-                )
+            // hume_band.wat's static lookup tables (scan patterns, base64 table, string
+            // constants) live on their own memory page (0x40000+), well clear of the input
+            // region below OUT_OFFSET, so oversized input no longer risks corrupting them.
+            // Chunking is still worth keeping as a conservative bound on JSON payload size
+            // and per-call parse-loop work for very large sessions.
+            val chunks = splitFrameChunks(frames, framesBytes)
+            Timber.tag(TAG).d("parseSession: chunks=%d totalBytes=%d", chunks.size, framesBytes.size)
+
+            try {
+                val manifest = loadedManifest!!
+                val now = Instant.now()
+                val allReadings = mutableListOf<MetricReading>()
+
+                for (chunkBytes in chunks) {
+                    val jsonStr = callParseSessionBytes(exportName, chunkBytes) ?: continue
+                    if (jsonStr == "[]") continue
+                    try {
+                        json.decodeFromString<List<MetricWasmDto>>(jsonStr).mapTo(allReadings) { dto ->
+                            MetricReading(
+                                metricType = dto.metricType,
+                                value = dto.value,
+                                unit = dto.unit,
+                                recordedAt = Instant.ofEpochMilli(dto.recordedAtMs),
+                                createdAt = now,
+                                source = DataSource.DEVICE,
+                                driverId = manifest.id,
+                                confidence = dto.confidence,
+                                metaJson = dto.metaJson,
+                            )
+                        }
+                    } catch (e: Exception) {
+                        return@withLock WasmParseResult.DeserialisationError(e.message ?: "unknown")
+                    }
+                }
+
+                Timber.tag(TAG).d("parseSession: readings=%d", allReadings.size)
+                if (allReadings.isEmpty()) WasmParseResult.Empty else WasmParseResult.Success(allReadings)
+            } catch (e: WasmTrapException) {
+                WasmParseResult.WasmTrap(e.message ?: "unknown trap")
             }
         }
+    }
 
-    private suspend fun <T> callAndDecode(
-        data: ByteArray,
-        getExportName: (WasmExports) -> String?,
-        logTag: String,
-        decode: (String) -> T,
-    ): T? = parseMutex.withLock {
-        val wasm = loadedManifest?.parsing as? ParsingConfig.WasmParsing ?: return@withLock null
-        val exportName = getExportName(wasm.exports) ?: return@withLock null
-        try {
-            val jsonStr = callParse(exportName, data)
-                ?.takeIf { it.isNotBlank() && it != "{}" }
-                ?: return@withLock null
-            decode(jsonStr)
-        } catch (e: Exception) {
-            Timber.w(e, "WasmDriverEngine: $logTag failed")
-            null
+    /**
+     * Splits [frames] into chunks whose JSON UTF-8 encoding stays within [WASM_SAFE_INPUT_BYTES].
+     * When the full session fits, returns a single-element list containing [fullBytes] directly
+     * to avoid rebuilding the JSON.
+     */
+    private fun splitFrameChunks(frames: List<SessionFrame>, fullBytes: ByteArray): List<ByteArray> {
+        if (fullBytes.size <= WASM_SAFE_INPUT_BYTES) return listOf(fullBytes)
+        val n = (fullBytes.size + WASM_SAFE_INPUT_BYTES - 1) / WASM_SAFE_INPUT_BYTES
+        val chunkSize = (frames.size + n - 1) / n
+        return frames.chunked(chunkSize).map { chunk ->
+            buildFramesJson(chunk).toByteArray(Charsets.UTF_8)
         }
     }
 
@@ -265,12 +228,51 @@ class WasmDriverEngine @Inject constructor(
             runCatching {
                 val wasm = loadedManifest?.parsing as? ParsingConfig.WasmParsing
                 if (wasm != null) instance = instantiate(wasm.wasmBytes)
-            }.onFailure { e ->
-                Timber.e(e, "WasmDriverEngine: re-instantiation failed after trap — clearing dead instance")
+            }.onFailure { ex ->
+                Timber.e(ex, "WasmDriverEngine: re-instantiation failed after trap — clearing dead instance")
                 instance = null
             }
-            null
+            throw WasmTrapException(e.message ?: "unknown trap") // WASM-RESULT
         } }
+    }
+
+    /**
+     * Writes [data] (JSON bytes) at [IN_OFFSET_V2], calls [functionName] with (offset, len),
+     * and returns the UTF-8 JSON string the WASM wrote at [OUT_OFFSET].
+     * Used for exports that receive JSON input rather than raw BLE bytes.
+     */
+    private suspend fun callParseSessionBytes(functionName: String, data: ByteArray): String? {
+        val inst = instance ?: return null
+        return withContext(Dispatchers.Default) {
+            try {
+                val memory = inst.memory()
+                Timber.tag(TAG).d("[WASM-INPUT] json bytes length=${data.size}")
+                memory.write(IN_OFFSET_V2, data)
+                val stale = previousPacketSize - data.size
+                if (stale > 0) memory.write(IN_OFFSET_V2 + data.size, ByteArray(stale))
+                previousPacketSize = data.size
+                val readback = memory.readBytes(IN_OFFSET_V2, minOf(data.size, 200))
+                Timber.tag(TAG).d("[WASM-READBACK] first 200 bytes as string: ${readback.toString(Charsets.UTF_8)}")
+                val result = inst.export(functionName).apply(IN_OFFSET_V2.toLong(), data.size.toLong())
+                val outLen = result[0].toInt()
+                Timber.tag(TAG).d("[WASM-RETURN] returnValue=$outLen inputPtr=$IN_OFFSET_V2 inputLen=${data.size}")
+                if (outLen <= 0) null else {
+                    val outputString = memory.readString(OUT_OFFSET, outLen)
+                    Timber.tag(TAG).d("[WASM-OUTPUT] first 200 chars: ${outputString.take(200)}")
+                    outputString
+                }
+            } catch (e: ChicoryException) {
+                Timber.w(e, "WasmDriverEngine: ChicoryException in $functionName — re-instantiating")
+                runCatching {
+                    val wasm = loadedManifest?.parsing as? ParsingConfig.WasmParsing
+                    if (wasm != null) instance = instantiate(wasm.wasmBytes)
+                }.onFailure { ex ->
+                    Timber.e(ex, "WasmDriverEngine: re-instantiation failed after trap — clearing dead instance")
+                    instance = null
+                }
+                throw WasmTrapException(e.message ?: "unknown trap")
+            }
+        }
     }
 
     // CHANGED: context-aware variant — serializes SyncContext JSON and passes offset+len to WASM.
@@ -280,7 +282,7 @@ class WasmDriverEngine @Inject constructor(
     suspend fun buildSyncCommands(
         manifest: WasmDriverManifest,
         context: SyncContext,
-    ): List<SyncCommand.Write> {
+    ): List<SyncCommand> {
         val wasm = manifest.parsing as? ParsingConfig.WasmParsing ?: return emptyList()
         val exportName = wasm.exports.buildSyncCommands ?: return emptyList()
 
@@ -308,7 +310,7 @@ class WasmDriverEngine @Inject constructor(
     private suspend fun callBuildSyncCommandsWithContext(
         functionName: String,
         context: SyncContext,
-    ): List<SyncCommand.Write>? = parseMutex.withLock {
+    ): List<SyncCommand>? = parseMutex.withLock {
         val inst = instance ?: return@withLock null
         withContext(Dispatchers.Default) {
             try {
@@ -326,13 +328,21 @@ class WasmDriverEngine @Inject constructor(
                 val stale = previousPacketSize - contextBytes.size
                 if (stale > 0) memory.write(IN_OFFSET_V2 + contextBytes.size, ByteArray(stale))
 
-                val result = inst.export(functionName)
-                    .apply(IN_OFFSET_V2.toLong(), contextBytes.size.toLong())
+                val exportFn = try {
+                    inst.export(functionName)
+                } catch (e: Exception) {
+                    Timber.tag(TAG).e("buildSyncCommands export '%s' not found in WASM instance: %s", functionName, e.message)
+                    return@withContext null
+                }
+                Timber.tag(TAG).d("buildSyncCommands export '%s' found — calling with inputOffset=%d len=%d",
+                    functionName, IN_OFFSET_V2, contextBytes.size)
+                val result = exportFn.apply(IN_OFFSET_V2.toLong(), contextBytes.size.toLong())
                 val outLen = result[0].toInt()
+                Timber.tag(TAG).d("buildSyncCommands: outLen=%d", outLen)
                 if (outLen <= 0) return@withContext null
 
                 val jsonStr = memory.readString(CMD_OUT_OFFSET, outLen)
-                json.decodeFromString<List<SyncCommand.Write>>(jsonStr)
+                json.decodeFromString<List<SyncCommand>>(jsonStr)
             } catch (e: ChicoryException) {
                 Timber.w(e, "WasmDriverEngine: ChicoryException in $functionName — re-instantiating")
                 runCatching {
@@ -350,14 +360,21 @@ class WasmDriverEngine @Inject constructor(
         }
     }
 
-    private fun stageAwareEndInstant(reportedEndMs: Long, stagesJson: String?): Instant {
-        if (stagesJson.isNullOrBlank()) return Instant.ofEpochMilli(reportedEndMs)
-        val stageMaxEndMs = try {
-            val arr = JSONArray(stagesJson)
-            (0 until arr.length()).maxOfOrNull { arr.getJSONObject(it).getLong("endMs") }
-        } catch (_: Exception) { null } ?: return Instant.ofEpochMilli(reportedEndMs)
-        return Instant.ofEpochMilli(maxOf(reportedEndMs, stageMaxEndMs))
+    /** Serialises [frames] to a JSON array string for passing to the WASM parseSession export. */
+    private fun buildFramesJson(frames: List<SessionFrame>): String {
+        val arr = JSONArray()
+        for (frame in frames) {
+            val obj = JSONObject()
+            obj.put("characteristic", frame.characteristic)
+            obj.put("opcode", frame.opcode)
+            obj.put("bytes", Base64.getEncoder().encodeToString(frame.bytes))
+            arr.put(obj)
+        }
+        return arr.toString()
     }
+
+    private fun ByteArray.toDptHexString(): String = // DPT
+        joinToString(" ") { "0x%02X".format(it) }    // DPT
 
     internal fun longToLeBytes(value: Long): ByteArray =
         ByteArray(8) { i -> (value shr (i * 8)).toByte() }
@@ -371,10 +388,16 @@ class WasmDriverEngine @Inject constructor(
         (TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60_000).toShort()
 
     companion object {
+        private const val TAG = "data-pathway-tracker" // DPT
         private const val IN_OFFSET_V1 = 0   // legacy: spec v1 drivers read BLE bytes from offset 0
         private const val IN_OFFSET_V2 = 16  // spec v2: bytes 0–15 are the metadata header
         private const val OUT_OFFSET = 0x1000
         private const val CMD_OUT_OFFSET = 0x400  // 1024 — output offset for buildSyncCommands
+        // hume_band.wat's static data used to start at 0xD800 (55,296), giving a hard
+        // 55,280-byte input limit before it collided with those tables; they've since moved
+        // to their own page (0x40000+). 50,000 is kept as a conservative chunk size to bound
+        // per-call JSON payload size and parse-loop work, not because of that old collision.
+        private const val WASM_SAFE_INPUT_BYTES = 50_000
         private val json = Json { ignoreUnknownKeys = true }
     }
 }

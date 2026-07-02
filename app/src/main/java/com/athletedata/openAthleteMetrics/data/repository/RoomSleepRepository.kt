@@ -72,4 +72,7 @@ class RoomSleepRepository @Inject constructor(
             throw e
         }
     }
+
+    // RESET-SYSTEM
+    override suspend fun deleteAll() { dao.deleteAll() }
 }

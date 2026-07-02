@@ -24,4 +24,8 @@ interface UserProfileDao {
     /** Called by [com.athletedata.openAthleteMetrics.data.repository.RoomUserProfileRepository.updateWeight] when the daily weight log produces a new reading. */
     @Query("UPDATE user_profile SET weight_kg = :weightKg, updated_at = :updatedAt WHERE id = 1")
     suspend fun updateWeight(weightKg: Double, updatedAt: Long)
+
+    // RESET-SYSTEM
+    @Query("DELETE FROM user_profile")
+    suspend fun deleteAll()
 }

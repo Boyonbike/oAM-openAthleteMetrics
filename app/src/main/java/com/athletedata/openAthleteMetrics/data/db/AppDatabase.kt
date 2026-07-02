@@ -26,6 +26,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *       change (TypeConverter stores LocalDate as ISO-8601 TEXT, identical to prior storage)
  *  13 — added widget_layout table for configurable Dashboard widget grid; seeded with default layout
  *  14 — added user_profile table (single-row athlete profile with biometrics and HR zones)
+ *  15 — added avg_systolic_mm_hg, avg_diastolic_mm_hg, avg_glucose_mmol_l to daily_summary // BP-GLUCOSE-SUMMARY
  */
 @Database(
     entities = [
@@ -53,7 +54,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         WidgetLayoutEntity::class,
         UserProfileEntity::class,
     ],
-    version = 14,
+    version = 15,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -824,6 +825,14 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                     """.trimIndent()
                 )
+            }
+        }
+
+        val MIGRATION_14_15 = object : Migration(14, 15) { // BP-GLUCOSE-SUMMARY
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE daily_summary ADD COLUMN avg_systolic_mm_hg REAL") // BP-GLUCOSE-SUMMARY
+                db.execSQL("ALTER TABLE daily_summary ADD COLUMN avg_diastolic_mm_hg REAL") // BP-GLUCOSE-SUMMARY
+                db.execSQL("ALTER TABLE daily_summary ADD COLUMN avg_glucose_mmol_l REAL")  // BP-GLUCOSE-SUMMARY
             }
         }
 

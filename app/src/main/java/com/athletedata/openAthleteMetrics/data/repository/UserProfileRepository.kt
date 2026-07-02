@@ -16,4 +16,7 @@ interface UserProfileRepository {
 
     /** Called by the weight-sync flow when a new daily weight reading is available. */
     suspend fun updateWeight(weightKg: Double)
+
+    // RESET-SYSTEM
+    suspend fun deleteProfile()
 }

@@ -40,4 +40,7 @@ class RoomUserProfileRepository @Inject constructor(
             throw e
         }
     }
+
+    // RESET-SYSTEM
+    override suspend fun deleteProfile() { dao.deleteAll() }
 }

@@ -69,6 +69,7 @@ fun ProfileTab(
     var maxHrDraft by remember { mutableStateOf("") }
 
     var editingZone by remember { mutableStateOf<Int?>(null) }
+    var zoneUpperHasFocused by remember { mutableStateOf(false) }
     var zoneLowerDraft by remember { mutableStateOf("") }
     var zoneUpperDraft by remember { mutableStateOf("") }
 
@@ -85,6 +86,7 @@ fun ProfileTab(
     val zoneLowerFocus = remember { FocusRequester() }
     val zoneUpperFocus = remember { FocusRequester() }
     LaunchedEffect(editingZone) {
+        zoneUpperHasFocused = false
         if (editingZone != null) {
             try { zoneLowerFocus.requestFocus() } catch (_: IllegalStateException) {}
         }
@@ -399,7 +401,10 @@ fun ProfileTab(
                         modifier = Modifier
                             .weight(1f)
                             .focusRequester(zoneUpperFocus)
-                            .onFocusChanged { if (!it.isFocused) saveZone() },
+                            .onFocusChanged { fs ->
+                                if (fs.isFocused) zoneUpperHasFocused = true
+                                else if (zoneUpperHasFocused) saveZone()
+                            },
                     )
                 }
             } else {
@@ -446,6 +451,11 @@ private fun EditableFieldRow(
     onSave: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var hasFocused by remember { mutableStateOf(false) }
+    LaunchedEffect(isEditing) {
+        if (!isEditing) hasFocused = false
+    }
+
     if (isEditing) {
         OutlinedTextField(
             value = draft,
@@ -458,7 +468,10 @@ private fun EditableFieldRow(
                 .fillMaxWidth()
                 .padding(vertical = 4.dp)
                 .focusRequester(focusRequester)
-                .onFocusChanged { if (!it.isFocused) onSave() },
+                .onFocusChanged { fs ->
+                    if (fs.isFocused) hasFocused = true
+                    else if (hasFocused) onSave()
+                },
         )
     } else {
         Row(

@@ -29,19 +29,8 @@ interface MetricReadingStagingRepository {
     /** Batch insert — preferred for device sync or seeder writes. */
     suspend fun insertAll(readings: List<MetricReading>)
 
-    /**
-     * Batch insert from BLE device. Point-in-time metrics skip duplicates; accumulator
-     * metrics use a value guard that keeps the stored record if it is already higher.
-     * Returns counts of skipped and guarded rows.
-     */
-    suspend fun insertAllFromDevice(readings: List<MetricReading>): DeviceInsertResult
-
-    /**
-     * Force-replaces readings from a BLE reprocess run. Uses REPLACE for ALL metric types
-     * so corrected driver output overwrites previously stored incorrect records.
-     * Returns count of rows written.
-     */
-    suspend fun replaceAllFromDevice(readings: List<MetricReading>): Int
+    // REMOVED: post-audit-cleanup — insertAllFromDevice and replaceAllFromDevice — see
+    // RoomMetricReadingStagingRepository for details.
 
     /** Inserts a reading and forces source = MANUAL and createdAt = now. */
     suspend fun insertManual(reading: MetricReading)

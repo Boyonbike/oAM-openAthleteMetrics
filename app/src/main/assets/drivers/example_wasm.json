@@ -4,6 +4,8 @@
   "displayName": "Polar H10",
   "version": "1.0.0",
   "author": "Open Athlete Metrics",
+  "stepsMode": "delta",
+  "caloriesMode": "delta",
   "supportedMetrics": ["HR", "HRV", "RESPIRATION"],
 
   "ble": {

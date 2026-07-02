@@ -45,6 +45,7 @@ data class SyncSessionEntity(
     val errorMessage: String? = null,
     @ColumnInfo(name = "packets_received")
     val packetsReceived: Int = 0,
+    // REMOVED: early-sync-warning — column is no longer written or read; retained to avoid a DB migration
     @ColumnInfo(name = "synced_before_quiescence")
     val syncedBeforeQuiescence: Boolean = false,
 )

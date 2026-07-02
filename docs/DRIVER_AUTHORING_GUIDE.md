@@ -465,6 +465,80 @@ If your device only provides per-activity step counts and no daily total, sum al
 activity step counts for the day and emit that as the STEPS metric. Note this in
 your driver — it means rest-period steps are not captured.
 
+### Steps Accumulation Mode
+
+Declare how your device reports STEPS by setting `"stepsMode"` in the top-level
+manifest. Omitting the field defaults to `"delta"`.
+
+**`"stepsMode": "delta"` (default)**
+
+Each STEPS reading returned by `parseMetrics` is the step count for a time interval —
+a packet-level delta, not a running total. The app sums all readings for a calendar
+day to compute the daily total.
+
+Use this when your device streams interval buckets (e.g. "150 steps in the last
+5 minutes"). Each `value` should be the count for that interval only.
+
+```json
+"stepsMode": "delta"
+```
+
+**`"stepsMode": "absolute"`**
+
+Each STEPS reading is the running total of steps taken today up to the moment of
+the reading. The app discards any earlier same-day reading and uses only the latest
+value as the daily total.
+
+Use this when your device maintains a cumulative counter that resets at midnight
+(e.g. "4,820 steps so far today"). Each `value` should be the running total.
+
+```json
+"stepsMode": "absolute"
+```
+
+> **Important:** Do not mix modes within a driver. Either all STEPS readings are
+> deltas or all are running totals — the choice applies to the entire driver.
+
+### Calories Accumulation Mode
+
+Declare how your device reports calorie readings (`ACTIVE_CALORIES`, `TOTAL_CALORIES`)
+by setting `"caloriesMode"` in the top-level manifest. Omitting the field defaults to
+`"delta"`.
+
+**`"caloriesMode": "delta"` (default)**
+
+Each `ACTIVE_CALORIES` or `TOTAL_CALORIES` reading returned by `parseMetrics` is the
+calorie count for a time interval. The app sums all readings for a calendar day to
+compute the daily total.
+
+Use this when your device streams interval buckets (e.g. "1.94 kcal in the last
+10-minute window"). Each `value` should be the count for that interval only.
+
+```json
+"caloriesMode": "delta"
+```
+
+**`"caloriesMode": "absolute"`**
+
+Each calorie reading is the running total of calories burned today up to the moment of
+the reading. The app discards any earlier same-day reading and uses only the latest
+value as the daily total.
+
+Use this when your device maintains a cumulative counter that resets at midnight.
+Each `value` should be the running total.
+
+```json
+"caloriesMode": "absolute"
+```
+
+The deletion behaviour for `"absolute"` mode is identical to `stepsMode: "absolute"`:
+when the app receives a reading for a given day, it deletes all existing readings of
+that metric type for that calendar day before inserting the new value.
+
+> **Important:** `caloriesMode` applies to both `ACTIVE_CALORIES` and `TOTAL_CALORIES`.
+> Do not mix interval deltas and running totals across those two types within the same
+> driver.
+
 ### Output Region Size
 
 The output region is capped at 61,440 bytes. Your WASM module must never write
@@ -614,6 +688,8 @@ A driver file is a UTF-8 encoded `.json` file. Every field is described below.
 | `displayName` | string | yes | Human-readable name shown in the Devices screen. |
 | `version` | string | yes | Semver string, e.g. `"1.0.0"`. |
 | `specVersion` | string | no | Memory layout version. Use `"2"` to enable the 16-byte metadata header (`syncStartMs`, `utcOffsetMinutes`). Omit or set to `"1"` for the legacy layout (BLE bytes at offset 0, no metadata). Any value other than `"2"` falls back to spec v1 behaviour. All new drivers should use `"2"`. |
+| `stepsMode` | string | no | How the driver reports STEPS readings. `"delta"` (default) — each STEPS reading is the step count for a time interval; the app sums all readings for the day. `"absolute"` — each STEPS reading is the running total so far today; the app uses the latest reading's value and discards earlier same-day readings. Omit for delta behaviour. See [Steps Accumulation Mode](#steps-accumulation-mode). |
+| `caloriesMode` | string | no | How the driver reports calorie readings (`ACTIVE_CALORIES`, `TOTAL_CALORIES`). `"delta"` (default) — each reading is the calorie count for a time interval; the app sums all readings for the day. `"absolute"` — each reading is the running total so far today; the app discards earlier same-day readings and uses only the latest value. Omit for delta behaviour. See [Calories Accumulation Mode](#calories-accumulation-mode). |
 | `author` | string | yes | Your name or handle. |
 | `supportedMetrics` | string[] | yes | Array of metric type names this driver can produce. See supported values below. |
 | `ble` | object | yes | BLE discovery and characteristic configuration. |
@@ -627,7 +703,7 @@ HR               Heart rate (bpm)
 HRV              Heart rate variability (ms)
 RHR              Resting heart rate (bpm)
 SPO2             Blood oxygen saturation (%)
-STEPS            Step count (steps) — daily total only, one per day
+STEPS            Step count (steps) — interval delta or running total; see stepsMode
 BATTERY          Device battery level (%) — routed to device metadata, not metric_readings_staging
 RESPIRATION      Breaths per minute
 SKIN_TEMP        Skin temperature (°C)
@@ -758,16 +834,24 @@ notifications. Three command types are available:
 }
 ```
 
+> **DELAY is deprecated for command pacing.** Do not use `DELAY` to wait for a
+> device acknowledgement or for a multi-packet data stream to complete. A fixed
+> delay fires after wall-clock time regardless of device state and either fires too
+> early (data incomplete) or too late (wasted time). Use `awaitEndOfStream` or
+> `awaitReply` instead — they advance as soon as the device signals readiness.
+>
+> `DELAY` remains valid only for true hardware settling time where no notification
+> will arrive (e.g. a radio mode switch with no ack). If in doubt, use
+> `awaitEndOfStream` with a fallback `timeoutMs` — the timeout covers the settling
+> case and the sentinel fires early when the device is ready.
+
 The app executes these in order. After the last command completes, the device
 enters Connected state and sync fires automatically.
 
-> **Packet interleaving:** Sync commands execute before the sync trigger fires.
-> However, BLE notifications are enabled before sync commands run, so a device may
-> begin sending notification data before the last command has been sent. If your
-> parser has any state that depends on receiving packets in a specific order, add
-> `DELAY` commands between sync writes to give the device time to respond before the
-> next command is issued. If packet ordering is critical, use longer delays and
-> validate packet types explicitly in your parser rather than relying on arrival order.
+> **Packet interleaving:** BLE notifications are enabled before sync commands run,
+> so a device may begin sending notification data before the last command has been
+> sent. Use `awaitEndOfStream` or `awaitReply` to pace commands that depend on
+> device responses. `DELAY` commands are unreliable for this purpose.
 
 ---
 
@@ -1119,6 +1203,44 @@ Signal "no activity data" by returning `0` or writing `{}`.
 
 ---
 
+### Per-Metric Output Requirements
+
+For each MetricType your driver emits, the `value`, `unit`, and any constraints must
+conform to the table below. Readings that violate these contracts are not rejected by
+the validator (which only checks for NaN, infinite, and out-of-range timestamps) but
+will display incorrectly or be misfiled.
+
+| MetricType | `value` semantics | Required `unit` string | Notes |
+|---|---|---|---|
+| `HR` | Heart rate in beats per minute | `"bpm"` | Integer or float; values outside 20–300 are unusual but not rejected |
+| `HRV` | RMSSD in milliseconds | `"ms"` | Must be positive |
+| `RHR` | Resting heart rate in bpm | `"bpm"` | Same constraints as HR |
+| `SPO2` | Blood oxygen saturation as a percentage (0–100) | `"%"` | Typically 85–100 for valid readings |
+| `STEPS` | Step count for the interval (delta mode) or running daily total (absolute mode) | `"steps"` | Non-negative integer; see `stepsMode` |
+| `ACTIVE_CALORIES` | Active calories burned in kcal | `"kcal"` | Non-negative; see `caloriesMode` |
+| `TOTAL_CALORIES` | Full-day calorie expenditure in kcal | `"kcal"` | Non-negative; see `caloriesMode` |
+| `BATTERY` | Battery level as a percentage (0–100) | `"%"` | Routed to device metadata — not written to any metric table |
+| `SKIN_TEMP` | Skin surface temperature in degrees Celsius | `"°C"` | Typically 30–38 °C; the unit string must be the UTF-8 degree symbol followed by `C` |
+| `BODY_TEMP` | Core body temperature in degrees Celsius | `"°C"` | Same unit string as SKIN_TEMP |
+| `TEMP_DEVIATION` | Deviation from the user's baseline temperature in degrees Celsius | `"°C"` | May be negative |
+| `VO2_MAX` | Aerobic capacity in ml/kg/min | `"ml/kg/min"` | Typically 20–90 |
+| `DISTANCE` | Distance covered in metres (daily total only, one reading per day) | `"m"` | Must be in metres, not km |
+| `ELEVATION_GAIN` | Cumulative ascent in metres (daily total) | `"m"` | Non-negative |
+| `ELEVATION_LOSS` | Cumulative descent in metres (daily total) | `"m"` | Non-negative |
+| `RESPIRATION` | Breaths per minute | `"brpm"` | Typically 8–30 |
+| `BLOOD_PRESSURE` | Systolic pressure in mmHg | `"mmHg"` | Diastolic must be in `metaJson` as `{"diastolic": <int>}` — reading falls back to staging if absent |
+| `GLUCOSE` | Blood glucose level | `"mmol"` or `"mg_dl"` | Use the unit the device natively reports |
+| `SLEEP_STAGE` | (not emitted as a float value — use `parseSleep` export instead) | — | Do not emit SLEEP_STAGE via `parseMetrics`; use `parseSleep` for sleep data |
+
+> **`DISTANCE` unit is metres, not kilometres.** Devices commonly report distance in
+> km or miles. Your driver must convert before emitting. Example: 0.03 km → 30 m.
+
+> **`SKIN_TEMP` unit is the UTF-8 string `"°C"`** (U+00B0 DEGREE SIGN followed by
+> capital C). Drivers written in plain ASCII must use the correct multi-byte encoding
+> — not `"C"`, not `"degC"`, not `"oC"`.
+
+---
+
 ## Complete Example
 
 This example shows a device that supports metrics, sleep, and activities. Note
@@ -1216,13 +1338,15 @@ and will warn the user if any declared required fields are missing from their pr
 > **This is the specVersion 3 variant of `buildSyncCommands`.** It has a different
 > function signature and a different memory contract from the specVersion 2 variant
 > documented in [Dynamic Sync Commands](#dynamic-sync-commands-buildSyncCommands) above.
-> In specVersion 3, dynamic commands are also **appended after** static `syncCommands`
-> rather than prepended before them.
+> In specVersion 3, when `buildSyncCommands` is exported, its return value **is** the
+> complete command sequence — the static `syncCommands` list is not executed.
 
 The `buildSyncCommands` export is optional. When present, the app calls it at connect
 time with a `SyncContext` JSON string. The function returns a pointer to a JSON array
-of Write commands, which the app appends to the end of the static `syncCommands` list
-and executes in order.
+of Write commands. That array **is** the complete sync command sequence — the static
+`syncCommands` list is not executed. The driver author is responsible for the full
+sequence, including any setup commands (e.g. SetDeviceTime) that must precede data
+requests.
 
 **Function signature:**
 
@@ -1288,7 +1412,12 @@ from the object — do not assume any field is present; check before reading.
 
 Return a pointer to a UTF-8 JSON array written somewhere in WASM linear memory. The
 array must contain only Write commands — `ENABLE_NOTIFY` and `DELAY` are not supported
-in `buildSyncCommands` return values and will be ignored.
+in `buildSyncCommands` return values and will be ignored. The engine enables notifications
+automatically in `onServicesDiscovered` regardless of the command sequence.
+
+`awaitEndOfStream` is valid in `buildSyncCommands` return values and is the recommended
+way to sequence setup commands that require device acknowledgement before the next write.
+See [awaitEndOfStream](#awaitendofstream--waiting-for-a-terminal-packet).
 
 ```json
 [
@@ -1299,12 +1428,15 @@ in `buildSyncCommands` return values and will be ignored.
 `characteristic` is a role name from `ble.characteristics`. `bytes` is a
 space-separated hex string (same format as static `syncCommands` WRITE entries).
 
-Return `0` to produce no dynamic commands. The static `syncCommands` will still run.
+Return `0` to produce no commands. When the export is present, the static `syncCommands`
+list is not executed regardless of the return value.
 
 **Execution order:**
 
-The app appends dynamic commands to the **end** of the static `syncCommands` list.
-Static commands execute first; dynamic commands execute after.
+When `buildSyncCommands` is exported and its name is non-null in the manifest, the
+return value **is** the complete command sequence — the static `syncCommands` list is
+**not** executed. When `buildSyncCommands` is absent or its export name is `null`, the
+static `syncCommands` list runs as before. The two modes are mutually exclusive.
 
 **Omit or null:**
 
@@ -1378,6 +1510,191 @@ A minimal manifest that declares datetime and three user profile fields, exports
 | Required `userProfile` field is missing from the user's profile | Logs a warning. The field is `null` in the `SyncContext`. Sync proceeds — the app does not block connection for missing profile data. |
 | `buildSyncCommands` WASM throws or returns malformed JSON | Logs the error. Falls back to static `syncCommands` only. Connection continues. |
 | `buildSyncCommands` is declared in `exports` but not found in the WASM binary | Treated as `null` — no dynamic commands are issued. No error is surfaced to the user. |
+
+---
+
+### awaitReply — waiting for a device acknowledgement
+
+Some devices send a notification on a control characteristic to signal that they have
+processed a write and are ready to receive the next command. Without this pacing, the
+driver may issue the next command before the device has finished processing the previous
+one.
+
+Use `awaitReply` on a `WRITE` command to tell the engine to pause after that write until
+a notification arrives on a specific characteristic (or a timeout elapses).
+
+#### Field schema
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `characteristic` | string | yes | — | Role name of the characteristic to write to |
+| `bytes` | string | yes | — | Hex payload, e.g. `"0x01 0xAB"` |
+| `awaitReply.characteristic` | string | yes (if block present) | — | Role name of the characteristic on which to await a notification |
+| `awaitReply.timeoutMs` | number | no | `5000` | Milliseconds to wait before giving up and moving to the next command |
+
+`awaitReply` is optional on any `WRITE` command. Commands without it behave exactly as
+before — fire-and-forget, advancing as soon as the write ACK arrives.
+
+#### Example — two sequential writes with reply waiting
+
+```json
+"syncCommands": [
+  { "type": "ENABLE_NOTIFY", "characteristic": "notify" },
+  {
+    "type": "WRITE",
+    "characteristic": "write",
+    "bytes": "0x01 0x26 0x06 0x19 0x0C 0x00 0x00 0x00 0x80 0x00 0x00 0x00 0x00 0x00 0x00 0x4E",
+    "awaitReply": {
+      "characteristic": "notify",
+      "timeoutMs": 4000
+    }
+  },
+  {
+    "type": "WRITE",
+    "characteristic": "write",
+    "bytes": "0x02 0x01 0x1E 0x56 0x4B 0x64 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0xD9",
+    "awaitReply": {
+      "characteristic": "notify",
+      "timeoutMs": 4000
+    }
+  }
+]
+```
+
+The engine will:
+
+1. Send the first WRITE.
+2. Pause and wait for a notification on `notify` (up to 4000 ms).
+3. Send the second WRITE only after the notification arrives.
+4. Pause again, waiting on `notify`.
+5. Continue with the next command.
+
+#### Supported in buildSyncCommands
+
+`awaitReply` is valid in commands returned by the `buildSyncCommands` WASM export, not
+only in static `syncCommands`. The WASM must include the `"awaitReply"` key in its JSON
+output for each command that requires it.
+
+#### Timeout / fallback behaviour
+
+If no notification arrives within `timeoutMs`:
+
+- A warning is logged: `BleEngine: awaitReply timed out after Nms on <uuid> — continuing`
+- The engine moves to the next command. Sync is **not** aborted.
+- The device may behave unexpectedly if it was not ready for the next command, but the
+  app will not hang or crash.
+
+#### Notification pass-through
+
+The notification received during an `awaitReply` wait is **not consumed** by the wait
+mechanism. It still flows through the normal `notificationChannel` to the driver's WASM
+parsing path. The engine uses the notification only as a timing signal.
+
+---
+
+### awaitEndOfStream — waiting for a terminal packet
+
+Some devices respond to a write with a multi-packet notification stream, terminated by a
+sentinel byte value. `awaitEndOfStream` tells the engine to hold before the next command
+until a packet whose byte at a specific offset matches a specific value arrives on a
+named characteristic.
+
+`awaitEndOfStream` is the preferred alternative to inflated `DELAY` values for command
+pacing: it fires as soon as the sentinel arrives rather than after a fixed wall-clock wait.
+
+#### Field schema
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `characteristic` | string | yes | — | Role name of the characteristic to write to |
+| `bytes` | string | yes | — | Hex payload, e.g. `"0x01 0xAB"` |
+| `awaitEndOfStream.characteristic` | string | yes (if block present) | — | Role name of the notification characteristic to watch |
+| `awaitEndOfStream.endByte.offset` | integer | yes | — | Zero-based byte index in the notification payload |
+| `awaitEndOfStream.endByte.value` | integer | yes | — | Expected value at that offset (decimal or `0x` hex) |
+| `awaitEndOfStream.timeoutMs` | long | no | `30000` | Milliseconds to wait before advancing regardless |
+
+```json
+{
+  "type": "WRITE",
+  "characteristic": "write",
+  "bytes": "0x55 0x00",
+  "awaitEndOfStream": {
+    "characteristic": "notify",
+    "endByte": { "offset": 1, "value": 255 },
+    "timeoutMs": 30000
+  }
+}
+```
+
+#### Behaviour
+
+- After the write is sent, the engine holds before issuing the next command.
+- Every incoming notification on `awaitEndOfStream.characteristic` is inspected. When a
+  packet arrives whose byte at `endByte.offset` equals `endByte.value`, the hold is released.
+- **Timeout:** if no matching packet arrives within `timeoutMs`, the engine logs a warning
+  and advances to the next command anyway. Sync is never aborted due to a timeout.
+- **Pass-through guarantee:** the matched packet still flows to the normal notification
+  channel and will be parsed by `parseMetrics` / `parseSleep` as usual. `awaitEndOfStream`
+  does not consume the packet.
+- **Mutual exclusion:** `awaitEndOfStream` and `awaitReply` are mutually exclusive on a
+  single Write command. If both are present, `awaitEndOfStream` takes precedence.
+
+#### When to use `awaitEndOfStream` vs `DELAY`
+
+| Scenario | Recommended field |
+|---|---|
+| Device sends a notification acknowledging the command | `awaitEndOfStream` |
+| Device sends multiple data packets with a terminal sentinel | `awaitEndOfStream` |
+| Hardware settling time — no ack, no notification | `DELAY` |
+
+Do not use `DELAY` to paper over missing acks. A fixed delay fires after wall-clock time
+regardless of device state; `awaitEndOfStream` fires as soon as the device is ready.
+
+#### Supported in `buildSyncCommands`
+
+`awaitEndOfStream` is valid in commands returned by the `buildSyncCommands` WASM export.
+It is the recommended way to sequence setup commands (e.g. SetDeviceTime) that require
+device acknowledgement before the next write.
+
+#### Example 1 — setup command with single ack (SetDeviceTime, opcode `0x01`)
+
+The device echoes the opcode in byte[0] of a single notification.
+
+```json
+{
+  "type": "WRITE",
+  "characteristic": "write",
+  "bytes": "0x01 0x26 0x06 0x19 0x0C 0x00",
+  "awaitEndOfStream": {
+    "characteristic": "notify",
+    "endByte": { "offset": 0, "value": 1 },
+    "timeoutMs": 5000
+  }
+}
+```
+
+The engine waits for a packet where `byte[0] == 0x01`, then advances immediately. No
+terminal sentinel is required — one matching packet is enough.
+
+#### Example 2 — data request with multi-packet stream (opcode `0x55`)
+
+The device sends multiple data packets; the final packet has `0xFF` at `byte[1]`.
+
+```json
+{
+  "type": "WRITE",
+  "characteristic": "write",
+  "bytes": "0x55 0x00",
+  "awaitEndOfStream": {
+    "characteristic": "notify",
+    "endByte": { "offset": 1, "value": 255 },
+    "timeoutMs": 30000
+  }
+}
+```
+
+The engine waits for a packet where `byte[1] == 0xFF`. All prior packets in the stream
+flow through to `parseMetrics` / `parseSleep` normally.
 
 ---
 

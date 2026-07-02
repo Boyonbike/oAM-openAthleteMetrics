@@ -40,8 +40,8 @@ class ManifestValidator {
                         "(expected magic header 0x00 0x61 0x73 0x6D)"
                 }
 
-                if (parsing.exports.parseMetrics.isBlank()) {
-                    errors += "parsing.exports.parseMetrics must not be blank"
+                if (parsing.exports.parseMetrics.isNullOrBlank() && parsing.exports.parseSession.isNullOrBlank()) {
+                    errors += "parsing.exports.p2arseMetrics must not be blank (or provide parseSession for buffered drivers)"
                 }
             }
         }

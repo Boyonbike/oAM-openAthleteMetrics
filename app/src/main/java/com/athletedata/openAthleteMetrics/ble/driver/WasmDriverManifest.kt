@@ -4,6 +4,20 @@ import com.athletedata.openAthleteMetrics.data.model.MetricType
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
+// STEPS-MODE: How a driver reports step counts. Declared in the driver manifest.
+@Serializable
+enum class StepsMode {
+    @SerialName("delta") DELTA,
+    @SerialName("absolute") ABSOLUTE,
+} // STEPS-MODE
+
+// CALORIES-MODE: How a driver reports calorie counts. Declared in the driver manifest.
+@Serializable
+enum class CaloriesMode {
+    @SerialName("delta") DELTA,
+    @SerialName("absolute") ABSOLUTE,
+} // CALORIES-MODE
+
 /**
  * Top-level in-memory representation of a driver manifest file.
  *
@@ -40,6 +54,8 @@ data class WasmDriverManifest(
     val specVersion: String = "1",
     // CHANGED: optional block; absent = no context needed for sync command building
     val syncRequirements: SyncRequirements? = null,
+    val stepsMode: StepsMode = StepsMode.DELTA,     // STEPS-MODE: JSON "delta"/"absolute"; absent → DELTA
+    val caloriesMode: CaloriesMode = CaloriesMode.DELTA, // CALORIES-MODE: JSON "delta"/"absolute"; absent → DELTA
 )
 
 /**

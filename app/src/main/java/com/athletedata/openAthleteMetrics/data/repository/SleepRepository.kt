@@ -36,4 +36,7 @@ interface SleepRepository {
 
     /** Deletes all sessions whose source matches [source]. Used by the seeder cleanup flow. */
     suspend fun deleteBySource(source: DataSource)
+
+    // RESET-SYSTEM
+    suspend fun deleteAll()
 }

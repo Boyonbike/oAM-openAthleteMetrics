@@ -13,7 +13,7 @@ import org.json.JSONObject
 import timber.log.Timber
 import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneOffset
+import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -72,7 +72,7 @@ class SleepStagePromoter @Inject constructor(
                 null
             } ?: continue
 
-            val date = Instant.ofEpochMilli(parsed.startMs).atZone(ZoneOffset.UTC).toLocalDate()
+            val date = Instant.ofEpochMilli(parsed.startMs).atZone(ZoneId.systemDefault()).toLocalDate()
             byDate.getOrPut(date) { mutableListOf() }.add(parsed)
         }
 

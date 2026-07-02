@@ -4,6 +4,28 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonClassDiscriminator
 
+// ADDED: byte-position match condition used by AwaitEndOfStream to detect the terminal packet.
+@Serializable
+data class EndByteCondition(
+    val offset: Int,
+    val value: Int,
+)
+
+// CHANGED: suspend a WRITE command until a notification arrives on a named characteristic.
+@Serializable
+data class AwaitReply(
+    val characteristicRole: String,
+    val timeoutMs: Long = 5000L,
+)
+
+// ADDED: suspend a WRITE until a notification whose payload satisfies endByte arrives, or timeout elapses.
+@Serializable
+data class AwaitEndOfStream(
+    val characteristic: String,
+    val endByte: EndByteCondition,
+    val timeoutMs: Long = 30_000L,
+)
+
 /**
  * A single step in the sync sequence sent to the device after connecting.
  *
@@ -25,6 +47,8 @@ sealed class SyncCommand {
     data class Write(
         val characteristic: String,
         val bytes: String,
+        val awaitReply: AwaitReply? = null,  // CHANGED
+        val awaitEndOfStream: AwaitEndOfStream? = null,  // ADDED
     ) : SyncCommand()
 
     /**

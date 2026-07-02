@@ -59,6 +59,9 @@ junit                   = "4.13.2"
 junitVersion            = "1.3.0"
 espressoCore            = "3.7.0"
 mockk                   = "1.14.11"
+# Real org.json implementation for local unit tests — Android's test stub jar throws
+# "not mocked" for JSONObject; SleepStagePromoter (and its tests) parse real JSON.
+json                    = "20231013"
 
 
 [libraries]
@@ -137,6 +140,7 @@ junit                   = { group = "junit", name = "junit", version.ref = "juni
 androidx-junit          = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core  = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
 mockk                   = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
+json                    = { group = "org.json", name = "json", version.ref = "json" }
 
 
 [plugins]

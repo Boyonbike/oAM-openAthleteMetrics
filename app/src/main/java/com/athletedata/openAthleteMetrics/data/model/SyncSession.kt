@@ -12,5 +12,6 @@ data class SyncSession(
     val recordsImported: Int,
     val errorMessage: String? = null,
     val packetsReceived: Int = 0,
+    // REMOVED: early-sync-warning — field is no longer written or read; retained to avoid a DB migration
     val syncedBeforeQuiescence: Boolean = false,
 )

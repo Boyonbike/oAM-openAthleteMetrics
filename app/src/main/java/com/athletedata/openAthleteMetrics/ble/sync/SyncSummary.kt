@@ -13,6 +13,6 @@ data class SyncSummary(
     val activitiesSkipped: Int,
     val finalStatus: SyncStatus,
     val packetsReceived: Int = 0,
-    val syncedBeforeQuiescence: Boolean = false,
+    // REMOVED: early-sync-warning
     val rejectionReasons: List<String> = emptyList(),
 )

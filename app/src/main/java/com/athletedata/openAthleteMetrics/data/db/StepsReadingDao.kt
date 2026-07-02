@@ -27,4 +27,8 @@ interface StepsReadingDao : BaseReadingDao<StepsReadingEntity> {
 
     @Query("SELECT * FROM steps_readings WHERE recorded_at >= :startMs AND recorded_at < :endMs ORDER BY recorded_at ASC")
     override suspend fun getReadingsInRangeOnce(startMs: Long, endMs: Long): List<StepsReadingEntity>
+
+    // STEPS-MODE: used by ABSOLUTE mode to remove stale same-day readings before inserting the latest.
+    @Query("DELETE FROM steps_readings WHERE source = :source AND recorded_at >= :startMs AND recorded_at < :endMs")
+    suspend fun deleteBySourceForDay(source: DataSource, startMs: Long, endMs: Long) // STEPS-MODE
 }

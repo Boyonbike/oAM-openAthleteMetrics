@@ -51,14 +51,16 @@ sealed class ParsingConfig {
  */
 @Serializable
 data class WasmExports(
-    /** Required: parses point-in-time metric readings from a characteristic payload. */
-    val parseMetrics: String,
+    /** Required for spec v1/v2 per-packet drivers; null when parseSession is used instead. */
+    val parseMetrics: String? = null,
     /** Optional: parses sleep session data. */
     val parseSleep: String? = null,
     /** Optional: parses activity/workout data. */
     val parseActivity: String? = null,
     /** Optional: dynamically builds sync commands at connection time. Null = driver uses static syncCommands only. */
     val buildSyncCommands: String? = null,
+    /** Optional: parses a complete buffered sync session. Replaces per-notification exports when present. */
+    val parseSession: String? = null,
 )
 
 /**

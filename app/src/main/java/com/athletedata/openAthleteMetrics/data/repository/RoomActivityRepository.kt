@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import timber.log.Timber
 import java.time.LocalDate
-import java.time.ZoneOffset
+import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -25,13 +25,13 @@ class RoomActivityRepository @Inject constructor(
 
     override suspend fun insert(activity: Activity) {
         dao.insert(activity.toEntity())
-        enqueueSummaryWorker(activity.startTime.atZone(ZoneOffset.UTC).toLocalDate(), workManager)
+        enqueueSummaryWorker(activity.startTime.atZone(ZoneId.systemDefault()).toLocalDate(), workManager) // TZ-FIX
     }
 
     override suspend fun insertAll(activities: List<Activity>) {
         dao.insertAll(activities.map { it.toEntity() })
         activities
-            .map { it.startTime.atZone(ZoneOffset.UTC).toLocalDate() }
+            .map { it.startTime.atZone(ZoneId.systemDefault()).toLocalDate() } // TZ-FIX
             .distinct()
             .forEach { date -> enqueueSummaryWorker(date, workManager) }
     }

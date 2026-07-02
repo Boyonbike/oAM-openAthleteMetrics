@@ -1,5 +1,7 @@
 package com.athletedata.openAthleteMetrics.ble.wasm
 
+import com.athletedata.openAthleteMetrics.ble.SyncContext
+import com.athletedata.openAthleteMetrics.ble.SyncContextSerializer
 import com.athletedata.openAthleteMetrics.ble.driver.BleConfig
 import com.athletedata.openAthleteMetrics.ble.driver.MatchConfidence
 import com.athletedata.openAthleteMetrics.ble.driver.ParsingConfig
@@ -21,12 +23,13 @@ import java.util.TimeZone
  * ```wat
  * (module
  *   (memory (export "memory") 1)
- *   (data (i32.const 1024) "[{\"characteristic\":\"write\",\"bytes\":\"0x01\"}]")
- *   (func (export "buildSyncCommands") (result i32) i32.const 43)
+ *   (data (i32.const 1024) "[{\"type\":\"WRITE\",\"characteristic\":\"write\",\"bytes\":\"0x01\"}]")
+ *   (func (export "buildSyncCommands") (result i32) i32.const 58)
  *   (func (export "parseMetrics") (param i32 i32) (result i32) i32.const 0)
  * )
  * ```
- * The function always returns the fixed 43-byte JSON at memory offset 1024.
+ * The function always returns the fixed 58-byte JSON at memory offset 1024. The `"type"`
+ * discriminator field is required for `SyncCommand`'s polymorphic deserialization.
  * It does not read from or verify the metadata block — that is tested separately
  * via the helper-method round-trip in [testMetadataByteHelpers].
  */
@@ -57,17 +60,17 @@ class WasmBuildSyncCommandsTest {
         "0c 70 61 72 73 65 4d 65 74 72 69 63 73 00 01" +
         // code section: 2 bodies, content size = 11 = 0x0b
         "0a 0b 02" +
-        "04 00 41 2b 0b" +        // buildSyncCommands: i32.const 43, end
+        "04 00 41 3a 0b" +        // buildSyncCommands: i32.const 58, end
         "04 00 41 00 0b" +        // parseMetrics: i32.const 0, end
-        // data section: active at offset 1024, 43 data bytes, content size = 50 = 0x32
-        "0b 32 01" +
+        // data section: active at offset 1024, 58 data bytes, content size = 65 = 0x41
+        "0b 41 01" +
         "00" +                    // mode = active, memory 0
         "41 80 08 0b" +           // i32.const 1024, end
-        "2b" +                    // data length = 43
-        // [{"characteristic":"write","bytes":"0x01"}]
-        "5b 7b 22 63 68 61 72 61 63 74 65 72 69 73 74 69 63 22 3a 22" +
-        "77 72 69 74 65 22 2c 22 62 79 74 65 73 22 3a 22 30 78 30 31" +
-        "22 7d 5d"
+        "3a" +                    // data length = 58
+        // [{"type":"WRITE","characteristic":"write","bytes":"0x01"}]
+        "5b 7b 22 74 79 70 65 22 3a 22 57 52 49 54 45 22 2c 22 63 68" +
+        "61 72 61 63 74 65 72 69 73 74 69 63 22 3a 22 77 72 69 74 65" +
+        "22 2c 22 62 79 74 65 73 22 3a 22 30 78 30 31 22 7d 5d"
     ).replace(" ", "").chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
     // ---------------------------------------------------------------------------
@@ -108,40 +111,54 @@ class WasmBuildSyncCommandsTest {
         specVersion = "2",
     )
 
+    private val testSyncContext = SyncContext(
+        epochMs = 0L,
+        utcOffsetMinutes = 0,
+        isoDateTime = "2026-01-01T00:00:00",
+        name = null,
+        dateOfBirth = null,
+        biologicalSex = null,
+        heightCm = null,
+        weightKg = null,
+        strideLengthCm = null,
+        wristCircumferenceMm = null,
+        restingMetabolicRate = null,
+        vo2Max = null,
+        maxHr = null,
+    )
+
     // ---------------------------------------------------------------------------
-    // Test 1: dynamic commands prepended before static commands
+    // Test 1: WASM owns the full sequence when buildSyncCommands is exported —
+    // WasmDriverEngine no longer merges in manifest.syncCommands itself (that
+    // either/or decision now lives in BleEngine.beginSyncCommandExecution).
     // ---------------------------------------------------------------------------
 
     @Test
-    fun `buildEffectiveSyncCommands prepends dynamic commands before static`() = runBlocking {
-        val engine = WasmDriverEngine()
+    fun `buildSyncCommands returns the WASM-produced command list`() = runBlocking {
+        val engine = WasmDriverEngine(SyncContextSerializer())
         val manifest = manifestWith(buildSyncCommandsExport = "buildSyncCommands")
 
-        val result = engine.buildEffectiveSyncCommands(manifest)
+        val result = engine.buildSyncCommands(manifest, testSyncContext)
 
-        assertEquals(2, result.size)
+        assertEquals(1, result.size)
 
-        // Dynamic command (from WASM) is first
         val dynamic = result[0] as SyncCommand.Write
         assertEquals("write", dynamic.characteristic)
         assertEquals("0x01", dynamic.bytes)
-
-        // Static command from manifest is second
-        assertEquals(staticCommand, result[1])
     }
 
     // ---------------------------------------------------------------------------
-    // Test 2: null buildSyncCommands export skips the dynamic path entirely
+    // Test 2: null buildSyncCommands export short-circuits to an empty list
     // ---------------------------------------------------------------------------
 
     @Test
-    fun `buildEffectiveSyncCommands returns static commands when export is null`() = runBlocking {
-        val engine = WasmDriverEngine()
+    fun `buildSyncCommands returns empty list when export is null`() = runBlocking {
+        val engine = WasmDriverEngine(SyncContextSerializer())
         val manifest = manifestWith(buildSyncCommandsExport = null)
 
-        val result = engine.buildEffectiveSyncCommands(manifest)
+        val result = engine.buildSyncCommands(manifest, testSyncContext)
 
-        assertEquals(listOf(staticCommand), result)
+        assertEquals(emptyList<SyncCommand>(), result)
     }
 
     // ---------------------------------------------------------------------------
@@ -150,7 +167,7 @@ class WasmBuildSyncCommandsTest {
 
     @Test
     fun `metadata byte helpers round-trip correctly`() {
-        val engine = WasmDriverEngine()
+        val engine = WasmDriverEngine(SyncContextSerializer())
 
         // i64 round-trip — verify freshly-captured time survives LE encoding
         val nowMs = Instant.now().toEpochMilli()

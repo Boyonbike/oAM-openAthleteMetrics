@@ -20,8 +20,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -29,6 +31,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -38,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -119,51 +123,68 @@ fun SettingsScreen(
         )
     }
 
-    // ── Reset step 1 — confirm intent ─────────────────────────────────────────
-    if (uiState.resetStep == ResetStep.Confirm) {
-        AlertDialog(
-            onDismissRequest = settingsViewModel::dismissReset,
-            title = { Text("Reset all data?") },
-            text = {
-                Text(
-                    "This will permanently delete all your metrics, questions, habits, and logs. " +
-                        "There is no undo.",
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = settingsViewModel::onResetContinued) { Text("Continue") }
-            },
-            dismissButton = {
-                TextButton(onClick = settingsViewModel::dismissReset) { Text("Cancel") }
-            },
-        )
+    // ── RESET-SYSTEM: Multi-select delete sheet ───────────────────────────────
+    if (uiState.showResetSheet) {
+        ModalBottomSheet(
+            onDismissRequest = settingsViewModel::dismissResetSheet,
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            ResetSheetContent(
+                uiState = uiState,
+                onToggleMetrics = settingsViewModel::toggleMetrics,
+                onToggleProfile = settingsViewModel::toggleProfile,
+                onToggleDevices = settingsViewModel::toggleDevices,
+                onCancel = settingsViewModel::dismissResetSheet,
+                onDeleteSelected = settingsViewModel::onDeleteSelectedClicked,
+            )
+        }
     }
 
-    // ── Reset step 2 — type DELETE ────────────────────────────────────────────
-    if (uiState.resetStep == ResetStep.TypeDelete) {
+    // ── RESET-SYSTEM: Confirm deletion dialog ─────────────────────────────────
+    if (uiState.showResetConfirmDialog) {
+        val confirmBodyText = buildString {
+            if (uiState.metricsSelected) append(
+                "This will permanently delete all metric readings, sleep sessions, questions, habits, and weight logs. This cannot be undone."
+            )
+            if (uiState.profileSelected) {
+                if (isNotEmpty()) append("\n\n")
+                append("This will permanently delete your user profile. This cannot be undone.")
+            }
+            if (uiState.devicesSelected) {
+                if (isNotEmpty()) append("\n\n")
+                append("This will remove all paired devices and loaded drivers. This cannot be undone.")
+            }
+        }
         AlertDialog(
-            onDismissRequest = settingsViewModel::dismissReset,
-            title = { Text("Type DELETE to confirm") },
+            onDismissRequest = settingsViewModel::dismissResetConfirmDialog,
+            title = { Text("Confirm deletion") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("This action cannot be undone.")
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(confirmBodyText)
+                    if (uiState.isBusy) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
                     OutlinedTextField(
-                        value = uiState.resetTypedText,
-                        onValueChange = settingsViewModel::onResetTyped,
+                        value = uiState.resetConfirmText,
+                        onValueChange = settingsViewModel::onResetConfirmTextChanged,
                         placeholder = { Text("Type DELETE") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
+                        enabled = !uiState.isBusy,
                     )
                 }
             },
             confirmButton = {
                 TextButton(
-                    onClick = settingsViewModel::confirmReset,
-                    enabled = uiState.resetTypedText.trim() == "DELETE",
-                ) { Text("Delete everything") }
+                    onClick = settingsViewModel::executeReset,
+                    enabled = uiState.resetConfirmText == "DELETE" && !uiState.isBusy,
+                ) { Text("Confirm") }
             },
             dismissButton = {
-                TextButton(onClick = settingsViewModel::dismissReset) { Text("Cancel") }
+                TextButton(
+                    onClick = settingsViewModel::dismissResetConfirmDialog,
+                    enabled = !uiState.isBusy,
+                ) { Text("Cancel") }
             },
         )
     }
@@ -224,7 +245,7 @@ fun SettingsScreen(
                 isBusy = uiState.isBusy,
                 onExport = { exportLauncher.launch("athlete_data_export_${LocalDate.now()}.db") },
                 onImport = { importLauncher.launch(arrayOf("*/*")) },
-                onReset = settingsViewModel::onResetClicked,
+                onReset = settingsViewModel::openResetSheet,
                 modifier = Modifier
                     .padding(innerPadding)
                     .fillMaxSize(),
@@ -505,6 +526,7 @@ private fun BackupSection(
 
 // ── Danger zone ───────────────────────────────────────────────────────────────
 
+// RESET-SYSTEM
 @Composable
 private fun DangerSection(
     isBusy: Boolean,
@@ -514,10 +536,93 @@ private fun DangerSection(
         onClick  = onReset,
         enabled  = !isBusy,
         modifier = Modifier.fillMaxWidth(),
-        colors   = ButtonDefaults.outlinedButtonColors(
-            contentColor = MaterialTheme.colorScheme.error,
-        ),
-    ) { Text("Reset database") }
+    ) { Text("Reset / Delete Data", color = MaterialTheme.colorScheme.error) }
+}
+
+// RESET-SYSTEM
+@Composable
+private fun ResetSheetContent(
+    uiState: SettingsUiState,
+    onToggleMetrics: () -> Unit,
+    onToggleProfile: () -> Unit,
+    onToggleDevices: () -> Unit,
+    onCancel: () -> Unit,
+    onDeleteSelected: () -> Unit,
+) {
+    val anySelected = uiState.metricsSelected || uiState.profileSelected || uiState.devicesSelected
+    Column(
+        modifier = Modifier
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text("Delete Data", style = MaterialTheme.typography.titleLarge)
+        ResetOptionRow(
+            checked = uiState.metricsSelected,
+            onToggle = onToggleMetrics,
+            title = "Metrics & Questions database",
+            description = "Deletes all metric readings, sleep sessions, daily summaries, daily context (questions, habits, weight logs), and computed baselines. Your profile is not affected.",
+        )
+        ResetOptionRow(
+            checked = uiState.profileSelected,
+            onToggle = onToggleProfile,
+            title = "User Profile",
+            description = "Deletes your name, date of birth, body metrics, HR zones, and all profile data. Does not affect recorded metrics.",
+        )
+        ResetOptionRow(
+            checked = uiState.devicesSelected,
+            onToggle = onToggleDevices,
+            title = "Devices & Drivers",
+            description = "Removes all paired devices and loaded JSON drivers. Removes device entries from the UI. Does not affect recorded data or profile.",
+        )
+        if (uiState.isBusy) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+        ) {
+            TextButton(onClick = onCancel, enabled = !uiState.isBusy) { Text("Cancel") }
+            Button(
+                onClick = onDeleteSelected,
+                enabled = anySelected && !uiState.isBusy,
+            ) { Text("Delete Selected →") }
+        }
+    }
+}
+
+// RESET-SYSTEM
+@Composable
+private fun ResetOptionRow(
+    checked: Boolean,
+    onToggle: () -> Unit,
+    title: String,
+    description: String,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Checkbox(
+            checked = checked,
+            onCheckedChange = { onToggle() },
+        )
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(top = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
 
 // ── Developer / Seeder section ────────────────────────────────────────────────

@@ -20,4 +20,7 @@ interface DeviceRepository {
     suspend fun updateLastSync(bleAddress: String, timestampMs: Long)
 
     suspend fun updateLastBatteryPct(bleAddress: String, pct: Int)
+
+    // RESET-SYSTEM
+    suspend fun deleteAll()
 }

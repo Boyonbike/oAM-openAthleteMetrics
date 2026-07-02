@@ -14,7 +14,7 @@ import kotlinx.coroutines.flow.map
 import timber.log.Timber
 import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneOffset
+import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -27,7 +27,9 @@ class RoomMetricReadingStagingRepository @Inject constructor(
     override suspend fun insert(reading: MetricReading) {
         try {
             dao.insert(reading.toStagingEntity())
-            enqueueSummaryWorker(reading.recordedAt.toLocalDate(), workManager)
+            val date = reading.recordedAt.toLocalDate()
+            Timber.tag("data-pathway-tracker").d("[STAGE-6 DB-WRITE] enqueueing DailySummaryWorker for date=%s (local tz=%s)", date, ZoneId.systemDefault()) // TZ-FIX
+            enqueueSummaryWorker(date, workManager)
         } catch (e: Exception) {
             Timber.e(e, "Failed to insert metric reading")
             throw e
@@ -40,57 +42,19 @@ class RoomMetricReadingStagingRepository @Inject constructor(
             readings
                 .map { it.recordedAt.toLocalDate() }
                 .distinct()
-                .forEach { date -> enqueueSummaryWorker(date, workManager) }
+                .forEach { date ->
+                    Timber.tag("data-pathway-tracker").d("[STAGE-6 DB-WRITE] enqueueing DailySummaryWorker for date=%s (local tz=%s)", date, ZoneId.systemDefault()) // TZ-FIX
+                    enqueueSummaryWorker(date, workManager)
+                }
         } catch (e: Exception) {
             Timber.e(e, "Failed to batch-insert metric readings")
             throw e
         }
     }
 
-    override suspend fun insertAllFromDevice(readings: List<MetricReading>): DeviceInsertResult {
-        try {
-            val entities = readings.map { it.copy(source = DataSource.DEVICE).toStagingEntity() }
-            val (accumulators, pointInTime) = entities.partition {
-                MetricType.ACCUMULATOR_METRICS.contains(it.metricType)
-            }
-            var accumulatorInserted = 0
-            var accumulatorUpdates = 0
-            var accumulatorNoChange = 0
-            var accumulatorGuarded = 0
-            accumulators.forEach { entity ->
-                when (dao.upsertAccumulator(entity)) {
-                    MetricReadingStagingDao.AccumulatorWriteOutcome.INSERTED  -> accumulatorInserted++
-                    MetricReadingStagingDao.AccumulatorWriteOutcome.UPDATED   -> accumulatorUpdates++
-                    MetricReadingStagingDao.AccumulatorWriteOutcome.NO_CHANGE -> accumulatorNoChange++
-                    MetricReadingStagingDao.AccumulatorWriteOutcome.GUARDED   -> accumulatorGuarded++
-                }
-            }
-            val rowIds = dao.insertAllOrIgnore(pointInTime)
-            val pointInTimeNew = rowIds.count { it != -1L }
-            val readingsSkipped = rowIds.count { it == -1L }
-            return DeviceInsertResult(
-                newRecordsInserted = pointInTimeNew + accumulatorInserted,
-                accumulatorUpdates = accumulatorUpdates,
-                accumulatorNoChange = accumulatorNoChange,
-                accumulatorGuarded = accumulatorGuarded,
-                readingsSkipped = readingsSkipped,
-            )
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to batch-insert device metric readings")
-            throw e
-        }
-    }
-
-    override suspend fun replaceAllFromDevice(readings: List<MetricReading>): Int {
-        return try {
-            val entities = readings.map { it.copy(source = DataSource.DEVICE).toStagingEntity() }
-            dao.upsertAll(entities)
-            entities.size
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to force-replace device metric readings")
-            throw e
-        }
-    }
+    // REMOVED: post-audit-cleanup — insertAllFromDevice and replaceAllFromDevice were called by
+    // DeviceSyncProcessor before MetricRouter took full ownership of per-notification writes
+    // (Prompt B). No callers remain.
 
     override suspend fun insertManual(reading: MetricReading) {
         try {
@@ -99,7 +63,9 @@ class RoomMetricReadingStagingRepository @Inject constructor(
                 createdAt = Instant.now(),
             ).toStagingEntity()
             dao.insert(entity)
-            enqueueSummaryWorker(reading.recordedAt.toLocalDate(), workManager)
+            val date = reading.recordedAt.toLocalDate()
+            Timber.tag("data-pathway-tracker").d("[STAGE-6 DB-WRITE] enqueueing DailySummaryWorker for date=%s (local tz=%s)", date, ZoneId.systemDefault()) // TZ-FIX
+            enqueueSummaryWorker(date, workManager)
         } catch (e: Exception) {
             Timber.e(e, "Failed to insert manual metric reading")
             throw e
@@ -162,4 +128,4 @@ class RoomMetricReadingStagingRepository @Inject constructor(
 }
 
 private fun Instant.toLocalDate(): LocalDate =
-    atZone(ZoneOffset.UTC).toLocalDate()
+    atZone(ZoneId.systemDefault()).toLocalDate() // TZ-FIX

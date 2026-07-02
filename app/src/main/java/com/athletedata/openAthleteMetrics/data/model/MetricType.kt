@@ -19,9 +19,7 @@ enum class MetricType {
     DISTANCE,         // distance covered (metres)
     ELEVATION_GAIN,   // cumulative ascent (metres)
     ELEVATION_LOSS,   // cumulative descent (metres)
-    CALORIES,         // total calories burned (kcal)
     ACTIVE_CALORIES,  // active (non-basal) calories burned (kcal)
-    BASAL_CALORIES,   // basal metabolic rate calories (kcal)
     /**
      * Canonical value for respiratory rate (breaths per minute). Routes to the dedicated
      * respiration_readings table via [com.athletedata.openAthleteMetrics.ble.sync.MetricRouter.route].
@@ -45,23 +43,12 @@ enum class MetricType {
          * before this change remain but will be replaced on the user's next sync.
          */
         val ACCUMULATOR_METRICS: Set<MetricType> = setOf(
-            STEPS, CALORIES, ACTIVE_CALORIES, BASAL_CALORIES,
+            STEPS, ACTIVE_CALORIES,
             DISTANCE, ELEVATION_GAIN, ELEVATION_LOSS,
         )
 
-        /**
-         * Types that [com.athletedata.openAthleteMetrics.ble.sync.MetricRouter] handles directly —
-         * either inserting into a typed table or staging with a specific flag. Readings of these
-         * types are routed immediately by BleEngine and must never flow through
-         * [com.athletedata.openAthleteMetrics.ble.sync.DeviceSyncProcessor] without that handling.
-         *
-         * Note: SLEEP_STAGE has no dedicated table yet but is included because MetricRouter applies
-         * a pending_sleep_stage flag before staging; omitting that flag would misfile the reading.
-         */
-        val DEDICATED_METRIC_TYPES: Set<MetricType> = setOf(
-            HR, HRV, SPO2, RESPIRATION, SKIN_TEMP, STEPS,
-            ACTIVE_CALORIES, TOTAL_CALORIES, BLOOD_PRESSURE, GLUCOSE,
-            SLEEP_STAGE,
-        )
+        // REMOVED: DEDICATED_METRIC_TYPES — no longer needed after MetricRouter took
+        // full ownership of per-notification metric writes. BleEngine now accumulates
+        // only BATTERY in pendingMetrics; DeviceSyncProcessor no longer writes metric readings.
     }
 }

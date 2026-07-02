@@ -3,6 +3,8 @@ package com.athletedata.openAthleteMetrics.ble.sync
 import androidx.room.withTransaction
 import androidx.work.WorkManager
 import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
+import com.athletedata.openAthleteMetrics.ble.wasm.SessionFrame // CHANGED
+import com.athletedata.openAthleteMetrics.ble.wasm.WasmParseResult // POST-AUDIT-FIX
 import com.athletedata.openAthleteMetrics.data.db.AppDatabase
 import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.Device
@@ -23,6 +25,8 @@ import java.time.Instant
 import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
+
+private const val TAG = "DeviceReprocessor" // POST-AUDIT-FIX
 
 @Singleton
 class DeviceReprocessor @Inject constructor(
@@ -74,18 +78,35 @@ class DeviceReprocessor @Inject constructor(
         )
 
         try {
-            val allReadings = mutableListOf<MetricReading>()
-            val allSleepSessions = mutableListOf<SleepSession>()
-            val allActivities = mutableListOf<Activity>()
+            // CHANGED: build SessionFrames from stored raw payloads and parse in one call.
+            val frames = rawPayloads.map { payload -> // CHANGED
+                val charRole = manifest.ble.characteristics // CHANGED
+                    .entries // CHANGED
+                    .firstOrNull { it.value.equals(payload.characteristicUuid, ignoreCase = true) } // CHANGED
+                    ?.key ?: payload.characteristicUuid // CHANGED
+                val opcode = if (payload.payload.isNotEmpty()) // CHANGED
+                    "0x%02X".format(payload.payload[0]) else "0x00" // CHANGED
+                SessionFrame(charRole, opcode, payload.payload) // CHANGED
+            } // CHANGED
+            onProgress(0.40f) // CHANGED
 
-            rawPayloads.forEachIndexed { index, payload ->
-                onProgress((index.toFloat() / rawPayloads.size) * 0.80f)
-                val uuid = payload.characteristicUuid
-                val bytes = payload.payload
-                allReadings += driverRegistry.parseMetrics(manifest, uuid, bytes)
-                driverRegistry.parseSleep(manifest, uuid, bytes)?.let { allSleepSessions += it }
-                driverRegistry.parseActivity(manifest, uuid, bytes)?.let { allActivities += it }
-            }
+            val allReadings = mutableListOf<MetricReading>() // CHANGED
+            val allSleepSessions = mutableListOf<SleepSession>() // kept empty — sleep arrives as MetricReading via parseSession
+            val allActivities = mutableListOf<Activity>()       // kept empty — activities arrive as MetricReading via parseSession
+
+            when (val parseResult = driverRegistry.parseSession(manifest, frames)) { // CHANGED
+                is WasmParseResult.Success -> { // CHANGED
+                    allReadings += parseResult.readings // CHANGED
+                    Timber.tag(TAG).d("[REPROCESS] parseSession readings=%d", parseResult.readings.size) // CHANGED
+                } // CHANGED
+                is WasmParseResult.Empty -> Timber.tag(TAG).d("[REPROCESS] parseSession empty") // CHANGED
+                is WasmParseResult.WasmTrap -> Timber.tag(TAG).e( // CHANGED
+                    "[REPROCESS] WASM trap message=%s", parseResult.message) // CHANGED
+                is WasmParseResult.DeserialisationError -> Timber.tag(TAG).e( // CHANGED
+                    "[REPROCESS] deserialisation error message=%s", parseResult.message) // CHANGED
+                is WasmParseResult.EngineNotInitialised -> Timber.tag(TAG).e( // CHANGED
+                    "[REPROCESS] engine not initialised") // CHANGED
+            } // CHANGED
             onProgress(0.80f)
 
             val readingResults = validator.validateReadings(allReadings)
@@ -108,7 +129,13 @@ class DeviceReprocessor @Inject constructor(
             val mergedSessions = mergeSleepSessions(acceptedSessions)
 
             val activitiesReplaced = appDatabase.withTransaction {
-                metricRouter.routeAllForceReplace(acceptedReadings)
+                // Pass stepsMode and caloriesMode so reprocessing respects the same
+                // accumulation semantics as the live sync path. // POST-AUDIT-FIX
+                metricRouter.routeAllForceReplace( // POST-AUDIT-FIX
+                    readings = acceptedReadings, // POST-AUDIT-FIX
+                    stepsMode = manifest.stepsMode, // POST-AUDIT-FIX
+                    caloriesMode = manifest.caloriesMode, // POST-AUDIT-FIX
+                ) // POST-AUDIT-FIX
                 mergedSessions.forEach { sleepRepository.insertOrReplace(it) }
                 activityRepository.replaceAllFromDevice(acceptedActivities)
             }

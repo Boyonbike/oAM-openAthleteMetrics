@@ -1,10 +1,9 @@
 package com.athletedata.openAthleteMetrics.ble.driver
 
 import com.athletedata.openAthleteMetrics.ble.SyncContext
+import com.athletedata.openAthleteMetrics.ble.wasm.SessionFrame
 import com.athletedata.openAthleteMetrics.ble.wasm.WasmDriverEngine
-import com.athletedata.openAthleteMetrics.data.model.Activity
-import com.athletedata.openAthleteMetrics.data.model.MetricReading
-import com.athletedata.openAthleteMetrics.data.model.SleepSession
+import com.athletedata.openAthleteMetrics.ble.wasm.WasmParseResult
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import timber.log.Timber
@@ -58,7 +57,7 @@ class DriverRegistry @Inject constructor(
     suspend fun buildSyncCommands(
         manifest: WasmDriverManifest,
         context: SyncContext,
-    ): List<SyncCommand.Write> {
+    ): List<SyncCommand> {
         if (!ensureWasmLoaded(manifest)) return emptyList()
         return wasmEngine.buildSyncCommands(manifest, context)
     }
@@ -87,31 +86,13 @@ class DriverRegistry @Inject constructor(
             ?: _drivers.firstOrNull { it.matches() }?.let { it to MatchConfidence.PROBABLE }
     }
 
-    suspend fun parseMetrics(
+    /** Delegates bulk session parsing to [WasmDriverEngine.parseSession]. */
+    suspend fun parseSession(
         manifest: WasmDriverManifest,
-        characteristicUuid: String,
-        data: ByteArray,
-    ): List<MetricReading> {
-        if (!ensureWasmLoaded(manifest)) return emptyList()
-        return wasmEngine.parseMetrics(characteristicUuid, data, manifest.id)
-    }
-
-    suspend fun parseSleep(
-        manifest: WasmDriverManifest,
-        characteristicUuid: String,
-        data: ByteArray,
-    ): SleepSession? {
-        if (!ensureWasmLoaded(manifest)) return null
-        return wasmEngine.parseSleep(characteristicUuid, data, manifest.id)
-    }
-
-    suspend fun parseActivity(
-        manifest: WasmDriverManifest,
-        characteristicUuid: String,
-        data: ByteArray,
-    ): Activity? {
-        if (!ensureWasmLoaded(manifest)) return null
-        return wasmEngine.parseActivity(characteristicUuid, data, manifest.id)
+        frames: List<SessionFrame>,
+    ): WasmParseResult {
+        if (!ensureWasmLoaded(manifest)) return WasmParseResult.EngineNotInitialised
+        return wasmEngine.parseSession(frames)
     }
 
     private suspend fun ensureWasmLoaded(manifest: WasmDriverManifest): Boolean =

@@ -79,4 +79,13 @@ class RoomDeviceRepository @Inject constructor(
             throw e
         }
     }
+
+    // RESET-SYSTEM
+    override suspend fun deleteAll() {
+        database.withTransaction {
+            rawDeviceDataDao.deleteAll()
+            syncSessionDao.deleteAll()
+            dao.deleteAll()
+        }
+    }
 }

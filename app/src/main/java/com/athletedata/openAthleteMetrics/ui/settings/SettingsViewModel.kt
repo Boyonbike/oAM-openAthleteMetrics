@@ -4,9 +4,14 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.athletedata.openAthleteMetrics.ble.BleEngine
+import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
+import com.athletedata.openAthleteMetrics.ble.driver.DriverStorage
 import com.athletedata.openAthleteMetrics.data.db.AppDatabase
 import com.athletedata.openAthleteMetrics.data.model.ThemePreference
+import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
 import com.athletedata.openAthleteMetrics.data.repository.SettingsRepository
+import com.athletedata.openAthleteMetrics.data.repository.UserProfileRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -21,13 +26,16 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-enum class ResetStep { None, Confirm, TypeDelete }
-
 data class SettingsUiState(
     val importPendingUri: Uri? = null,
-    val resetStep: ResetStep = ResetStep.None,
-    val resetTypedText: String = "",
     val isBusy: Boolean = false,
+    // RESET-SYSTEM
+    val showResetSheet: Boolean = false,
+    val metricsSelected: Boolean = false,
+    val profileSelected: Boolean = false,
+    val devicesSelected: Boolean = false,
+    val showResetConfirmDialog: Boolean = false,
+    val resetConfirmText: String = "",
 )
 
 sealed interface SettingsEffect {
@@ -40,6 +48,12 @@ class SettingsViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val appDatabase: AppDatabase,
     @param:ApplicationContext private val context: Context,
+    // RESET-SYSTEM
+    private val userProfileRepository: UserProfileRepository,
+    private val deviceRepository: DeviceRepository,
+    private val driverRegistry: DriverRegistry,
+    private val driverStorage: DriverStorage,
+    private val bleEngine: BleEngine,
 ) : ViewModel() {
 
     val themePreference: StateFlow<ThemePreference> = settingsRepository
@@ -116,57 +130,103 @@ class SettingsViewModel @Inject constructor(
     }
 
     // ── Reset ─────────────────────────────────────────────────────────────────
+    // RESET-SYSTEM
 
-    fun onResetClicked() {
-        _uiState.update { it.copy(resetStep = ResetStep.Confirm) }
+    fun openResetSheet() {
+        _uiState.update { it.copy(showResetSheet = true) }
     }
 
-    fun onResetContinued() {
-        _uiState.update { it.copy(resetStep = ResetStep.TypeDelete, resetTypedText = "") }
+    fun dismissResetSheet() {
+        _uiState.update {
+            it.copy(
+                showResetSheet = false,
+                metricsSelected = false,
+                profileSelected = false,
+                devicesSelected = false,
+                showResetConfirmDialog = false,
+                resetConfirmText = "",
+            )
+        }
     }
 
-    fun onResetTyped(text: String) {
-        _uiState.update { it.copy(resetTypedText = text) }
+    fun toggleMetrics() {
+        _uiState.update { it.copy(metricsSelected = !it.metricsSelected) }
     }
 
-    fun dismissReset() {
-        _uiState.update { it.copy(resetStep = ResetStep.None, resetTypedText = "") }
+    fun toggleProfile() {
+        _uiState.update { it.copy(profileSelected = !it.profileSelected) }
     }
 
-    fun confirmReset() {
-        if (_uiState.value.resetTypedText.trim() != "DELETE") return
-        _uiState.update { it.copy(resetStep = ResetStep.None, resetTypedText = "", isBusy = true) }
+    fun toggleDevices() {
+        _uiState.update { it.copy(devicesSelected = !it.devicesSelected) }
+    }
+
+    fun onDeleteSelectedClicked() {
+        val s = _uiState.value
+        if (!s.metricsSelected && !s.profileSelected && !s.devicesSelected) return
+        _uiState.update { it.copy(showResetConfirmDialog = true, resetConfirmText = "") }
+    }
+
+    fun onResetConfirmTextChanged(text: String) {
+        _uiState.update { it.copy(resetConfirmText = text) }
+    }
+
+    fun dismissResetConfirmDialog() {
+        _uiState.update { it.copy(showResetConfirmDialog = false, resetConfirmText = "") }
+    }
+
+    fun executeReset() {
+        val state = _uiState.value
+        if (state.resetConfirmText != "DELETE") return
+        _uiState.update { it.copy(isBusy = true) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // Delete in FK-safe order (child tables first).
-                // question_definitions is intentionally excluded — those are built-in app data.
-                appDatabase.rawDeviceDataDao().deleteAll()
-                appDatabase.syncSessionDao().deleteAll()
-                appDatabase.questionResponseDao().deleteAll()
-                appDatabase.sleepStageDao().deleteAll()
-                appDatabase.activeCalorieReadingDao().deleteAll()
-                appDatabase.totalCalorieReadingDao().deleteAll()
-                appDatabase.hrReadingDao().deleteAll()
-                appDatabase.hrvReadingDao().deleteAll()
-                appDatabase.spO2ReadingDao().deleteAll()
-                appDatabase.respirationReadingDao().deleteAll()
-                appDatabase.skinTempReadingDao().deleteAll()
-                appDatabase.stepsReadingDao().deleteAll()
-                appDatabase.bloodPressureReadingDao().deleteAll()
-                appDatabase.glucoseReadingDao().deleteAll()
-                appDatabase.metricReadingStagingDao().deleteAll()
-                appDatabase.sleepSessionDao().deleteAll()
-                appDatabase.dailySummaryDao().deleteAll()
-                appDatabase.dailyContextDao().deleteAll()
-                appDatabase.activityDao().deleteAll()
-                appDatabase.deviceDao().deleteAll()
-                settingsRepository.clearAllPreferences()
-                _effects.send(SettingsEffect.ShowSnackbar("All data deleted"))
-                _effects.send(SettingsEffect.NavigateToDashboard)
+                if (state.metricsSelected) {
+                    // Delete in FK-safe order (child tables first).
+                    // question_definitions is intentionally excluded — those are built-in app data.
+                    appDatabase.questionResponseDao().deleteAll()
+                    appDatabase.sleepStageDao().deleteAll()
+                    appDatabase.activeCalorieReadingDao().deleteAll()
+                    appDatabase.totalCalorieReadingDao().deleteAll()
+                    appDatabase.hrReadingDao().deleteAll()
+                    appDatabase.hrvReadingDao().deleteAll()
+                    appDatabase.spO2ReadingDao().deleteAll()
+                    appDatabase.respirationReadingDao().deleteAll()
+                    appDatabase.skinTempReadingDao().deleteAll()
+                    appDatabase.stepsReadingDao().deleteAll()
+                    appDatabase.bloodPressureReadingDao().deleteAll()
+                    appDatabase.glucoseReadingDao().deleteAll()
+                    appDatabase.metricReadingStagingDao().deleteAll()
+                    appDatabase.sleepSessionDao().deleteAll()
+                    appDatabase.dailySummaryDao().deleteAll()
+                    appDatabase.dailyContextDao().deleteAll()
+                    appDatabase.activityDao().deleteAll()
+                }
+                if (state.profileSelected) {
+                    userProfileRepository.deleteProfile()
+                }
+                if (state.devicesSelected) {
+                    bleEngine.disconnect()
+                    val drivers = driverStorage.loadAllDrivers()
+                    drivers.forEach { driverRegistry.unregister(it.id) }
+                    drivers.forEach { driverStorage.deleteDriver(it.id) }
+                    deviceRepository.deleteAll()
+                }
+                _effects.send(SettingsEffect.ShowSnackbar("Deletion complete."))
             } catch (e: Exception) {
-                _effects.send(SettingsEffect.ShowSnackbar("Reset failed: ${e.message}"))
+                _effects.send(SettingsEffect.ShowSnackbar("Error during deletion — some data may not have been removed."))
             } finally {
-                _uiState.update { it.copy(isBusy = false) }
+                _uiState.update {
+                    it.copy(
+                        isBusy = false,
+                        showResetSheet = false,
+                        showResetConfirmDialog = false,
+                        metricsSelected = false,
+                        profileSelected = false,
+                        devicesSelected = false,
+                        resetConfirmText = "",
+                    )
+                }
             }
         }
     }

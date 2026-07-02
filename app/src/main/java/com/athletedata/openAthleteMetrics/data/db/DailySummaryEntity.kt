@@ -62,6 +62,12 @@ data class DailySummaryEntity(
     val totalCalories: Double? = null,
     @ColumnInfo(name = "active_calories")
     val activeCalories: Double? = null,
+    @ColumnInfo(name = "avg_systolic_mm_hg") // BP-GLUCOSE-SUMMARY
+    val avgSystolicMmHg: Double? = null, // BP-GLUCOSE-SUMMARY
+    @ColumnInfo(name = "avg_diastolic_mm_hg") // BP-GLUCOSE-SUMMARY
+    val avgDiastolicMmHg: Double? = null, // BP-GLUCOSE-SUMMARY
+    @ColumnInfo(name = "avg_glucose_mmol_l") // BP-GLUCOSE-SUMMARY
+    val avgGlucoseMmolL: Double? = null, // BP-GLUCOSE-SUMMARY
     /** Applies to any computed/derived artifact table, not only raw reading tables — the daily summary is itself a computed roll-up. */
     @ColumnInfo(name = "computed_by_version", defaultValue = "0")
     val computedByVersion: Int = 0,
@@ -96,6 +102,9 @@ fun DailySummaryEntity.toModel() = DailySummary(
     stepsActiveMinutes = stepsActiveMinutes,
     totalCalories = totalCalories,
     activeCalories = activeCalories,
+    avgSystolicMmHg = avgSystolicMmHg, // BP-GLUCOSE-SUMMARY
+    avgDiastolicMmHg = avgDiastolicMmHg, // BP-GLUCOSE-SUMMARY
+    avgGlucoseMmolL = avgGlucoseMmolL, // BP-GLUCOSE-SUMMARY
     computedByVersion = computedByVersion,
     source = source,
     computedAt = computedAt,
@@ -125,6 +134,9 @@ fun DailySummary.toEntity() = DailySummaryEntity(
     stepsActiveMinutes = stepsActiveMinutes,
     totalCalories = totalCalories,
     activeCalories = activeCalories,
+    avgSystolicMmHg = avgSystolicMmHg, // BP-GLUCOSE-SUMMARY
+    avgDiastolicMmHg = avgDiastolicMmHg, // BP-GLUCOSE-SUMMARY
+    avgGlucoseMmolL = avgGlucoseMmolL, // BP-GLUCOSE-SUMMARY
     computedByVersion = computedByVersion,
     source = source,
     computedAt = computedAt,

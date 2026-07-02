@@ -70,7 +70,6 @@ import com.athletedata.openAthleteMetrics.ble.DiscoveredCandidate
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
 import com.athletedata.openAthleteMetrics.ble.rememberBlePermissionState
 import com.athletedata.openAthleteMetrics.data.model.Device
-import com.athletedata.openAthleteMetrics.data.model.SyncSession
 import com.athletedata.openAthleteMetrics.ui.components.PillSelector
 import com.athletedata.openAthleteMetrics.ui.theme.CardRadius
 import com.athletedata.openAthleteMetrics.ui.theme.TypographyMeta
@@ -92,7 +91,9 @@ fun DevicesScreen(
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val reprocessState by viewModel.reprocessState.collectAsStateWithLifecycle()
     val reprocessingDeviceId by viewModel.reprocessingDeviceId.collectAsStateWithLifecycle()
-    val recoverySessions by viewModel.recoverySessions.collectAsStateWithLifecycle()
+    // REMOVED: interrupted-sync-recovery
+    // ADDED: interrupted-sync-message
+    val syncInterrupted by viewModel.syncInterrupted.collectAsStateWithLifecycle()
     val discoveredCandidates by viewModel.discoveredCandidates.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -104,7 +105,7 @@ fun DevicesScreen(
     var deviceToRemove by remember { mutableStateOf<Device?>(null) }
     var deviceToShowActions by remember { mutableStateOf<Device?>(null) }
     var deviceToReprocess by remember { mutableStateOf<Device?>(null) }
-    var showEarlySyncWarning by remember { mutableStateOf(false) }
+    // REMOVED: early-sync-warning
 
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -201,22 +202,7 @@ fun DevicesScreen(
         )
     }
 
-    if (showEarlySyncWarning) {
-        AlertDialog(
-            onDismissRequest = { showEarlySyncWarning = false },
-            title = { Text("Sync may be incomplete") },
-            text = { Text("The device may still be sending data. Syncing now may result in incomplete data.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    showEarlySyncWarning = false
-                    viewModel.onSyncTapped()
-                }) { Text("Sync anyway") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showEarlySyncWarning = false }) { Text("Wait") }
-            },
-        )
-    }
+    // REMOVED: early-sync-warning — AlertDialog for "Sync may be incomplete" removed
 
     deviceToReprocess?.let { device ->
         AlertDialog(
@@ -264,11 +250,10 @@ fun DevicesScreen(
                     )
                 }
 
-                recoverySessions.forEach { session ->
-                    RecoveryBanner(
-                        session = session,
-                        onRecover = { viewModel.onRecoverSessionTapped(session.id) },
-                    )
+                // REMOVED: interrupted-sync-recovery
+                // ADDED: interrupted-sync-message
+                if (syncInterrupted.show) {
+                    SyncInterruptedBanner(onDismiss = viewModel::onSyncInterruptedDismissed)
                 }
 
                 val sortedDevices = remember(devices) { devices.sortedBy { it.displayName } }
@@ -295,15 +280,9 @@ fun DevicesScreen(
                                     isReprocessingThisDevice = reprocessingDeviceId == device.id,
                                     onConnect = { viewModel.onDeviceCellTapped(device) },
                                     onSync = {
-                                        val state = connectionState
-                                        if (state is BleConnectionState.Connected &&
-                                            state.deviceAddress == device.bleAddress &&
-                                            state.packetsReceived > 0 &&
-                                            !state.isQuiescent) {
-                                            showEarlySyncWarning = true
-                                        } else {
-                                            viewModel.onSyncTapped()
-                                        }
+                                        // Early sync warning removed. The sync system is stateless with respect to timing —
+                                        // a sync can be initiated at any time without restriction.
+                                        viewModel.onSyncTapped()
                                     },
                                     onLongPress = { deviceToShowActions = device },
                                     onDisconnect = viewModel::onDisconnectTapped,
@@ -758,8 +737,10 @@ private fun DriverCell(manifest: WasmDriverManifest, onLongPress: () -> Unit) {
     }
 }
 
+// REMOVED: interrupted-sync-recovery — RecoveryBanner deleted
+// ADDED: interrupted-sync-message
 @Composable
-private fun RecoveryBanner(session: SyncSession, onRecover: () -> Unit) {
+private fun SyncInterruptedBanner(onDismiss: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -775,13 +756,13 @@ private fun RecoveryBanner(session: SyncSession, onRecover: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "Sync interrupted ${relativeTime(session.startedAt.toEpochMilli())}. Tap to complete it from saved data.",
+                text = "Sync interrupted — please sync again",
                 style = TypographyMeta,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
             Spacer(modifier = Modifier.width(space8))
-            TextButton(onClick = onRecover) { Text("Recover") }
+            TextButton(onClick = onDismiss) { Text("Dismiss") }
         }
     }
 }
@@ -839,14 +820,7 @@ private fun BleBanner(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    if (state.summary.syncedBeforeQuiescence) {
-                        Spacer(Modifier.height(space4))
-                        Text(
-                            "(early sync)",
-                            style = TypographyMeta,
-                            color = MaterialTheme.colorScheme.tertiary,
-                        )
-                    }
+                    // REMOVED: early-sync-warning — "(early sync)" label removed
                     Spacer(Modifier.height(space4))
                     TextButton(
                         onClick = onSyncAcknowledged,

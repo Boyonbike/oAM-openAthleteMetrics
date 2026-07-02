@@ -8,7 +8,10 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import com.athletedata.openAthleteMetrics.ble.driver.StepsMode // STEPS-MODE
 import com.athletedata.openAthleteMetrics.data.db.ActiveCalorieReadingDao
+import com.athletedata.openAthleteMetrics.data.db.BloodPressureReadingDao // BP-GLUCOSE-SUMMARY
+import com.athletedata.openAthleteMetrics.data.db.GlucoseReadingDao // BP-GLUCOSE-SUMMARY
 import com.athletedata.openAthleteMetrics.data.db.HrReadingDao
 import com.athletedata.openAthleteMetrics.data.db.HrvReadingDao
 import com.athletedata.openAthleteMetrics.data.db.RespirationReadingDao
@@ -50,6 +53,8 @@ class DailySummaryWorker @AssistedInject constructor(
     private val stepsReadingDao: StepsReadingDao,
     private val activeCalorieReadingDao: ActiveCalorieReadingDao,
     private val totalCalorieReadingDao: TotalCalorieReadingDao,
+    private val bloodPressureReadingDao: BloodPressureReadingDao, // BP-GLUCOSE-SUMMARY
+    private val glucoseReadingDao: GlucoseReadingDao, // BP-GLUCOSE-SUMMARY
     private val sleepSessionDao: SleepSessionDao,
     private val sleepStageDao: SleepStageDao,
     private val dailySummaryRepository: DailySummaryRepository,
@@ -57,9 +62,12 @@ class DailySummaryWorker @AssistedInject constructor(
 
     override suspend fun doWork(): Result {
         val dateStr = inputData.getString(KEY_DATE) ?: return Result.failure()
+        // STEPS-MODE: read from WorkManager input; absent → DELTA (preserves existing behaviour).
+        val stepsMode = StepsMode.valueOf(inputData.getString(KEY_STEPS_MODE) ?: StepsMode.DELTA.name) // STEPS-MODE
 
         return try {
             val date = LocalDate.parse(dateStr)
+            Timber.tag(TAG).d("[STAGE-7 SUMMARY-WORKER] started for date=%s", dateStr) // DPT
 
             // ── Time boundaries ───────────────────────────────────────────────
             val zone           = ZoneId.systemDefault()
@@ -77,6 +85,8 @@ class DailySummaryWorker @AssistedInject constructor(
             val stepsReadings       = stepsReadingDao.getReadingsInRangeOnce(dayStartMs, dayEndMs)
             val activeCalReadings   = activeCalorieReadingDao.getReadingsInRangeOnce(dayStartMs, dayEndMs)
             val totalCalReadings    = totalCalorieReadingDao.getReadingsInRangeOnce(dayStartMs, dayEndMs)
+            val bpReadings          = bloodPressureReadingDao.getReadingsInRangeOnce(dayStartMs, dayEndMs) // BP-GLUCOSE-SUMMARY
+            val glucoseReadings     = glucoseReadingDao.getReadingsInRangeOnce(dayStartMs, dayEndMs)        // BP-GLUCOSE-SUMMARY
             val session             = sleepSessionDao.getSessionForDateOnce(date)
             val stages              = if (session != null) sleepStageDao.getStagesForSessionOnce(session.id) else emptyList()
 
@@ -112,7 +122,12 @@ class DailySummaryWorker @AssistedInject constructor(
             val respirationAvg = respirationReadings.averageOrNull { it.breathsPerMinute }
 
             // ── Steps ─────────────────────────────────────────────────────────
-            val steps = stepsReadings.maxByOrNull { it.recordedAt }?.cumulativeSteps
+            // STEPS-MODE: DELTA = sum all interval readings; ABSOLUTE = latest reading is the total.
+            Timber.tag(TAG).d("[STAGE-7 SUMMARY-WORKER] stepsMode=%s readings=%d", stepsMode, stepsReadings.size) // STEPS-MODE / DPT
+            val steps = when (stepsMode) { // STEPS-MODE
+                StepsMode.DELTA -> stepsReadings.sumOf { it.cumulativeSteps }.takeIf { stepsReadings.isNotEmpty() } // STEPS-MODE
+                StepsMode.ABSOLUTE -> stepsReadings.maxByOrNull { it.recordedAt }?.cumulativeSteps // STEPS-MODE
+            }
             val stepsActiveMinutes = stepsReadings
                 .takeIf { it.size >= 2 }
                 ?.zipWithNext { a, b ->
@@ -129,6 +144,22 @@ class DailySummaryWorker @AssistedInject constructor(
                 .takeIf { activeCalReadings.isNotEmpty() }
             val totalCalories = totalCalReadings.maxByOrNull { it.recordedAt }?.calories
 
+            // ── Blood pressure ────────────────────────────────────────────────── BP-GLUCOSE-SUMMARY
+            val avgSystolicMmHg  = bpReadings.takeIf { it.isNotEmpty() } // BP-GLUCOSE-SUMMARY
+                ?.map { it.systolic.toDouble() }?.average()?.takeIf { it.isFinite() } // BP-GLUCOSE-SUMMARY
+            val avgDiastolicMmHg = bpReadings.takeIf { it.isNotEmpty() } // BP-GLUCOSE-SUMMARY
+                ?.map { it.diastolic.toDouble() }?.average()?.takeIf { it.isFinite() } // BP-GLUCOSE-SUMMARY
+
+            // ── Glucose (normalised to mmol/L) ───────────────────────────────── BP-GLUCOSE-SUMMARY
+            val avgGlucoseMmolL  = glucoseReadings.takeIf { it.isNotEmpty() } // BP-GLUCOSE-SUMMARY
+                ?.map { r -> if (r.unit == "mmol") r.value else r.value / 18.0182 } // BP-GLUCOSE-SUMMARY
+                ?.average()?.takeIf { it.isFinite() } // BP-GLUCOSE-SUMMARY
+
+            Timber.tag(TAG).d("[STAGE-7 SUMMARY-WORKER] bloodPressure readings=%d avgSystolic=%s avgDiastolic=%s", // BP-GLUCOSE-SUMMARY
+                bpReadings.size, avgSystolicMmHg, avgDiastolicMmHg) // BP-GLUCOSE-SUMMARY
+            Timber.tag(TAG).d("[STAGE-7 SUMMARY-WORKER] glucose readings=%d avgGlucose=%s", // BP-GLUCOSE-SUMMARY
+                glucoseReadings.size, avgGlucoseMmolL) // BP-GLUCOSE-SUMMARY
+
             // ── Sleep ─────────────────────────────────────────────────────────
             val sleepMinutes      = session?.durationMinutes
             val sleepDeepMinutes  = stages.filter { it.stage == SleepStage.DEEP  }.sumOf { it.durationMinutes }.takeIf { stages.isNotEmpty() }
@@ -144,7 +175,9 @@ class DailySummaryWorker @AssistedInject constructor(
                 respirationReadings.map { it.source } +
                 stepsReadings.map { it.source } +
                 activeCalReadings.map { it.source } +
-                totalCalReadings.map { it.source }
+                totalCalReadings.map { it.source } +
+                bpReadings.map { it.source } + // BP-GLUCOSE-SUMMARY
+                glucoseReadings.map { it.source } // BP-GLUCOSE-SUMMARY
             val dominantSource = allSources
                 .groupingBy { it }
                 .eachCount()
@@ -174,6 +207,9 @@ class DailySummaryWorker @AssistedInject constructor(
                     stepsActiveMinutes = stepsActiveMinutes,
                     activeCalories     = activeCalories,
                     totalCalories      = totalCalories,
+                    avgSystolicMmHg    = avgSystolicMmHg,  // BP-GLUCOSE-SUMMARY
+                    avgDiastolicMmHg   = avgDiastolicMmHg, // BP-GLUCOSE-SUMMARY
+                    avgGlucoseMmolL    = avgGlucoseMmolL,  // BP-GLUCOSE-SUMMARY
                     sleepMinutes       = sleepMinutes,
                     sleepDeepMinutes   = sleepDeepMinutes,
                     sleepLightMinutes  = sleepLightMinutes,
@@ -185,15 +221,20 @@ class DailySummaryWorker @AssistedInject constructor(
                 )
             )
 
+            Timber.tag(TAG).d("[STAGE-7 SUMMARY-WORKER] complete — avgHr=%s restingHr=%s avgHrv=%s steps=%s sleepMin=%s", // DPT
+                avgHrBpm, restingHrBpm, avgHrvMs, steps, sleepMinutes) // DPT
             Result.success()
         } catch (e: Exception) {
+            Timber.tag(TAG).e("[STAGE-7 SUMMARY-WORKER] ERROR — %s", e.message) // DPT
             Timber.e(e, "DailySummaryWorker failed for date $dateStr")
             Result.retry()
         }
     }
 
     companion object {
+        private const val TAG = "data-pathway-tracker" // DPT
         const val KEY_DATE = "date"
+        const val KEY_STEPS_MODE = "steps_mode" // STEPS-MODE
     }
 }
 
@@ -203,9 +244,16 @@ class DailySummaryWorker @AssistedInject constructor(
  * REPLACE means if a job for the same date is already queued or running it
  * is cancelled and replaced — safe because the worker is fully idempotent.
  */
-fun enqueueSummaryWorker(date: LocalDate, workManager: WorkManager) {
+fun enqueueSummaryWorker(
+    date: LocalDate,
+    workManager: WorkManager,
+    stepsMode: StepsMode = StepsMode.DELTA, // STEPS-MODE: BleEngine passes manifest value; other callers omit → DELTA
+) {
     val request = OneTimeWorkRequestBuilder<DailySummaryWorker>()
-        .setInputData(workDataOf(DailySummaryWorker.KEY_DATE to date.toString()))
+        .setInputData(workDataOf(
+            DailySummaryWorker.KEY_DATE to date.toString(),
+            DailySummaryWorker.KEY_STEPS_MODE to stepsMode.name, // STEPS-MODE
+        ))
         .build()
     workManager.enqueueUniqueWork(
         "daily_summary_$date",

@@ -10,9 +10,7 @@ import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
 import com.athletedata.openAthleteMetrics.ble.driver.DriverStorage
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
 import com.athletedata.openAthleteMetrics.ble.sync.DeviceReprocessor
-import com.athletedata.openAthleteMetrics.ble.sync.DeviceSyncProcessor
 import com.athletedata.openAthleteMetrics.data.model.Device
-import com.athletedata.openAthleteMetrics.data.model.SyncSession
 import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
 import com.athletedata.openAthleteMetrics.data.repository.SyncSessionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -37,6 +35,9 @@ import javax.inject.Inject
 
 enum class DevicesTab { DEVICE, DRIVER }
 
+// ADDED: interrupted-sync-message
+data class SyncInterruptedState(val show: Boolean)
+
 sealed class ReprocessState {
     object Idle : ReprocessState()
     data class Running(val progress: Float) : ReprocessState()
@@ -56,7 +57,6 @@ class DevicesViewModel @Inject constructor(
     private val driverRegistry: DriverRegistry,
     private val bleEngine: BleEngine,
     private val deviceReprocessor: DeviceReprocessor,
-    private val syncProcessor: DeviceSyncProcessor,
     private val syncSessionRepository: SyncSessionRepository,
 ) : ViewModel() {
 
@@ -94,8 +94,10 @@ class DevicesViewModel @Inject constructor(
     private val _reprocessingDeviceId = MutableStateFlow<Long?>(null)
     val reprocessingDeviceId: StateFlow<Long?> = _reprocessingDeviceId.asStateFlow()
 
-    private val _recoverySessions = MutableStateFlow<List<SyncSession>>(emptyList())
-    val recoverySessions: StateFlow<List<SyncSession>> = _recoverySessions.asStateFlow()
+    // REMOVED: interrupted-sync-recovery
+    // ADDED: interrupted-sync-message
+    private val _syncInterrupted = MutableStateFlow(SyncInterruptedState(show = false))
+    val syncInterrupted: StateFlow<SyncInterruptedState> = _syncInterrupted.asStateFlow()
 
     init {
         // CHANGE 1: default to Device tab if either drivers or devices exist
@@ -107,10 +109,14 @@ class DevicesViewModel @Inject constructor(
             }
         }
 
-        // Check for interrupted syncs that have raw data available for recovery.
+        // ADDED: interrupted-sync-message — detect interrupted syncs on startup, clear them, and show banner
         viewModelScope.launch(Dispatchers.IO) {
             val since = Instant.now().minus(24, ChronoUnit.HOURS)
-            _recoverySessions.value = syncSessionRepository.getRecentInProgress(since)
+            val interrupted = syncSessionRepository.getRecentInProgress(since)
+            if (interrupted.isNotEmpty()) {
+                syncSessionRepository.markOldInProgressAsFailed(Instant.now())
+                _syncInterrupted.value = SyncInterruptedState(show = true)
+            }
         }
     }
 
@@ -162,17 +168,10 @@ class DevicesViewModel @Inject constructor(
 
     fun onDisconnectDismissed() { bleEngine.resetToIdle() }
 
-    fun onRecoverSessionTapped(sessionId: Long) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                syncProcessor.processFromRaw(sessionId)
-                _recoverySessions.value = _recoverySessions.value.filter { it.id != sessionId }
-                _snackbarEvents.send("Recovery complete")
-            } catch (e: Exception) {
-                Timber.e(e, "Recovery failed for session $sessionId")
-                _snackbarEvents.send("Recovery failed: ${e.message}")
-            }
-        }
+    // REMOVED: interrupted-sync-recovery — onRecoverSessionTapped() deleted
+    // ADDED: interrupted-sync-message
+    fun onSyncInterruptedDismissed() {
+        _syncInterrupted.value = SyncInterruptedState(show = false)
     }
 
     fun onReprocessConfirmed(device: Device) {

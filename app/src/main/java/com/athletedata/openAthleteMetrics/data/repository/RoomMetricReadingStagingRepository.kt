@@ -119,10 +119,10 @@ class RoomMetricReadingStagingRepository @Inject constructor(
     override suspend fun getPendingSleepStages(
         source: DataSource,
         driverId: String,
-        startMs: Long,
-        endMs: Long,
+        syncWindowStartMs: Long,
+        syncWindowEndMs: Long,
     ): List<MetricReading> =
-        dao.getPendingSleepStages(source, driverId, startMs, endMs).map { it.toModel() }
+        dao.getPendingSleepStages(source, driverId, syncWindowStartMs, syncWindowEndMs).map { it.toModel() }
 
     override suspend fun deleteByIds(ids: List<Long>) = dao.deleteByIds(ids)
 }

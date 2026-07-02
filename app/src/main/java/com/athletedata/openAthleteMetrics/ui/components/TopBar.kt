@@ -25,6 +25,8 @@ import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
@@ -39,6 +41,8 @@ private val DATE_FORMATTER = DateTimeFormatter.ofPattern("d MMM yyyy")
 
 fun Modifier.horizontalDateSwipe(
     enabled: Boolean = true,
+    exclusionZones: () -> Collection<Rect> = { emptyList() },
+    toWindowPosition: (Offset) -> Offset = { it },
     onDayForward: () -> Unit,
     onDayBack: () -> Unit,
 ): Modifier = pointerInput(enabled, onDayForward, onDayBack) {
@@ -46,6 +50,10 @@ fun Modifier.horizontalDateSwipe(
     val threshold = 25.dp.toPx()
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false)
+        val windowPos = toWindowPosition(down.position)
+        if (exclusionZones().any { it.contains(windowPos) }) {
+            return@awaitEachGesture
+        }
         var dx = 0f
         var dy = 0f
         drag(down.id) { change: PointerInputChange ->

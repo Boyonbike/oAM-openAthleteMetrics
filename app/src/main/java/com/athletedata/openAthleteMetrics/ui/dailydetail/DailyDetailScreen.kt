@@ -39,18 +39,27 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.SnapshotStateMap
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -79,6 +88,14 @@ import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 import java.time.LocalDate
 
+/**
+ * Live on-screen bounds (window coordinates) of currently-composed [ReadingsLineChart]s,
+ * so the page-level swipe-to-change-date gesture can skip touches that start on a chart
+ * and leave its own pan/zoom gesture handling uncontested.
+ */
+private val LocalChartExclusionZones =
+    staticCompositionLocalOf<SnapshotStateMap<Any, Rect>?> { null }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DailyDetailScreen(
@@ -97,6 +114,8 @@ fun DailyDetailScreen(
     val today = remember { LocalDate.now() }
     var categorySheetActivity by remember { mutableStateOf<ActivityUiItem?>(null) }
     var showDatePicker by remember { mutableStateOf(false) }
+    val chartExclusionZones = remember { mutableStateMapOf<Any, Rect>() }
+    var swipeNodeCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
     LaunchedEffect(initialDate) {
         if (initialDate != null) {
@@ -105,44 +124,50 @@ fun DailyDetailScreen(
         }
     }
 
-    Scaffold(
-        modifier = modifier.horizontalDateSwipe(
-            onDayForward = { viewModel.stepDate(true) },
-            onDayBack    = { viewModel.stepDate(false) },
-        ),
-        topBar = {
-            DataPageTopBar(
-                date = localDate,
-                onDateClick = { showDatePicker = true },
-                centre = { Text("Daily Detail", style = MaterialTheme.typography.titleMedium) },
-                actions = {
-                    IconButton(onClick = viewModel::toggleEditMode) {
-                        Icon(
-                            imageVector = if (isEditMode) Icons.Outlined.Check else Icons.Outlined.Edit,
-                            contentDescription = if (isEditMode) "Done editing" else "Edit tiles",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                },
-            )
-        },
-    ) { innerPadding ->
-        when (val state = uiState) {
-            DailyDetailUiState.Loading -> LoadingContent(innerPadding)
-            is DailyDetailUiState.Error -> ErrorContent(state.message, innerPadding)
-            is DailyDetailUiState.Success -> SuccessContent(
-                state = state,
-                innerPadding = innerPadding,
-                isEditMode = isEditMode,
-                expandedTiles = expandedTiles,
-                initialSection = initialSection,
-                initialMetricKey = initialMetricKey,
-                onInitialSectionConsumed = onInitialSectionConsumed,
-                onTileToggle = viewModel::toggleTile,
-                onTileReordered = viewModel::onTileReordered,
-                onTileVisibilityToggle = viewModel::toggleTileVisibility,
-                onActivityTap = { activity -> categorySheetActivity = activity },
-            )
+    CompositionLocalProvider(LocalChartExclusionZones provides chartExclusionZones) {
+        Scaffold(
+            modifier = modifier
+                .onGloballyPositioned { swipeNodeCoords = it }
+                .horizontalDateSwipe(
+                    exclusionZones = { chartExclusionZones.values },
+                    toWindowPosition = { offset -> swipeNodeCoords?.localToWindow(offset) ?: offset },
+                    onDayForward = { viewModel.stepDate(true) },
+                    onDayBack    = { viewModel.stepDate(false) },
+                ),
+            topBar = {
+                DataPageTopBar(
+                    date = localDate,
+                    onDateClick = { showDatePicker = true },
+                    centre = { Text("Daily Detail", style = MaterialTheme.typography.titleMedium) },
+                    actions = {
+                        IconButton(onClick = viewModel::toggleEditMode) {
+                            Icon(
+                                imageVector = if (isEditMode) Icons.Outlined.Check else Icons.Outlined.Edit,
+                                contentDescription = if (isEditMode) "Done editing" else "Edit tiles",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                )
+            },
+        ) { innerPadding ->
+            when (val state = uiState) {
+                DailyDetailUiState.Loading -> LoadingContent(innerPadding)
+                is DailyDetailUiState.Error -> ErrorContent(state.message, innerPadding)
+                is DailyDetailUiState.Success -> SuccessContent(
+                    state = state,
+                    innerPadding = innerPadding,
+                    isEditMode = isEditMode,
+                    expandedTiles = expandedTiles,
+                    initialSection = initialSection,
+                    initialMetricKey = initialMetricKey,
+                    onInitialSectionConsumed = onInitialSectionConsumed,
+                    onTileToggle = viewModel::toggleTile,
+                    onTileReordered = viewModel::onTileReordered,
+                    onTileVisibilityToggle = viewModel::toggleTileVisibility,
+                    onActivityTap = { activity -> categorySheetActivity = activity },
+                )
+            }
         }
     }
 
@@ -915,6 +940,11 @@ private fun ReadingsLineChart(
     modifier: Modifier = Modifier,
 ) {
     val modelProducer = remember { CartesianChartModelProducer() }
+    val exclusionZones = LocalChartExclusionZones.current
+    val chartKey = remember { Any() }
+    DisposableEffect(Unit) {
+        onDispose { exclusionZones?.remove(chartKey) }
+    }
 
     val pairs = remember(readings) {
         readings.mapIndexedNotNull { i, r -> r.value.toDoubleOrNull()?.let { i to it } }
@@ -950,7 +980,9 @@ private fun ReadingsLineChart(
             ),
         ),
         modelProducer = modelProducer,
-        modifier = modifier,
+        modifier = modifier.onGloballyPositioned { coordinates ->
+            exclusionZones?.set(chartKey, coordinates.boundsInWindow())
+        },
     )
 }
 

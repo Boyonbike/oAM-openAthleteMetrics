@@ -173,21 +173,21 @@ abstract class MetricReadingStagingDao {
     )
     abstract suspend fun countSourceDataInRangeOnce(source: DataSource, startMs: Long, endMs: Long): Int
 
-    /** Returns all SLEEP_STAGE rows for a given driver/source within a sync window; used by SleepStagePromoter. */
+    /** Returns all SLEEP_STAGE rows for a given driver/source inserted during a sync window; used by SleepStagePromoter. */
     @Query(
         """
         SELECT * FROM metric_readings_staging
         WHERE metric_type = 'SLEEP_STAGE'
           AND source = :source
           AND driver_id = :driverId
-          AND recorded_at >= :startMs
-          AND recorded_at < :endMs
+          AND created_at >= :syncWindowStartMs
+          AND created_at < :syncWindowEndMs
         """
     )
     abstract suspend fun getPendingSleepStages(
         source: DataSource,
         driverId: String,
-        startMs: Long,
-        endMs: Long,
+        syncWindowStartMs: Long,
+        syncWindowEndMs: Long,
     ): List<MetricReadingStagingEntity>
 }

@@ -1,0 +1,549 @@
+╭─── Claude Code v2.1.195 ─────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting        │
+│                  Welcome back bob!                 │ started                 │
+│                                                    │ Run /init to create a … │
+│                       ▐▛███▜▌                      │ ─────────────────────── │
+│                      ▝▜█████▛▘                     │ What's new              │
+│                        ▘▘ ▝▝                       │ Claude in Chrome is no… │
+│   Sonnet 4.6 · Claude Pro ·                        │ Added background agent… │
+│   innesmcdonaldracing@outlook.com's Organization   │ Added `/dataviz` skill… │
+│                ~/StudioProjects/OAM                │ /release-notes for more │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+ ▎ Fable 5 is back.
+ ▎ Until July 7, you can use up to 50% of your plan's weekly usage limit on Fable 5. If you hit your limit, you can continue on Fable 5 with usage credits. Fable 5 draws down usage faster than Opus 4.8. Learn more
+
+❯ CONTEXT                                                                       
+  I am building a local-first athlete performance tracking Android app.         
+  Package: com.athletedata.openAthleteMetrics                                   
+  Stack: Kotlin, Jetpack Compose, MVVM, Room, Hilt, Coroutines, Flow,           
+  WorkManager, Chicory                                                          
+  (pure-Java WASM interpreter) for BLE device drivers.                          
+  Paste the Master Plan and MVP Build Spec documents before this prompt.        
+                                                                                
+  BACKGROUND                                                                    
+  Sleep data has been broken (sleep_minutes always null in daily_summary, no    
+  sleep_sessions rows) across two prior fix attempts:                           
+                                                                                
+  Prior diagnostic session confirmed two root causes:                           
+  1. Ordering race: DailySummaryWorker was enqueued in                          
+  BleEngine.dispatchPostStreamParse()                                           
+     before DeviceSyncProcessor.process() (which calls                          
+  SleepStagePromoter.promote()) had                                             
+     run, so the worker's read of sleep_sessions always preceded the promoter's 
+  write.                                                                        
+  2. Timezone mismatch: SleepStagePromoter bucketed dates using ZoneOffset.UTC  
+  while every                                                                   
+     other date key in the app (BleEngine.routeReading, MetricRouter) used      
+     ZoneId.systemDefault().                                                    
+                                                                                
+  A fix session addressed both in BleEngine.kt and SleepStagePromoter.kt,       
+  removed the                                                                   
+  diagnostic-only logging, and added regression tests. Sleep is still broken    
+  after this fix.                                                               
+  I do not know whether the fix was incompletely applied, whether a third bug   
+  exists, or                                                                    
+  whether the fix introduced a regression.                                      
+                                                                                
+  TASK — full read-only end-to-end audit, no fixes                              
+                                                                                
+  Do not change any code. Do not assume the prior fix session's diff is correct 
+  or complete                                                                   
+  — verify every claim in it against the current state of the code. Trace the   
+  entire sleep                                                                  
+  data path from raw BLE bytes to the daily_summary query, stage by stage, and  
+  report the                                                                    
+  actual current behavior of each stage (not what a prior session claimed it    
+  does).                                                                        
+                                                                                
+  STAGE 1 — WASM parsing (hume_band.wat / driver output)                        
+  - Confirm $do_sleep (or equivalent sleep-parsing function) still emits        
+  well-formed                                                                   
+    SLEEP_STAGE readings with correct start_ms/end_ms/stage/pending_sleep       
+  fields in metaJson.                                                           
+  - Confirm this has not regressed independent of the app-side fix (i.e. rule   
+  out that the                                                                  
+    WASM side was accidentally touched or was never the problem).               
+                                                                                
+  STAGE 2 — MetricRouter routing                                                
+  - Re-confirm MetricRouter.route() still stages SLEEP_STAGE readings via       
+    stagingRepository.insert(reading.withPendingSleepStageFlag()) exactly as    
+  before.                                                                       
+  - Confirm no other routing branch now intercepts or drops SLEEP_STAGE         
+  readings.                                                                     
+                                                                                
+  STAGE 3 — BleEngine ordering (the primary fix target)                         
+  - Show the CURRENT full code of BleEngine.dispatchPostStreamParse() and,      
+  separately,                                                                   
+    BleEngine.triggerSync(). For each, confirm explicitly whether               
+    syncProcessor.process(...)/sleepStagePromoter.promote() now runs to         
+  completion before                                                             
+    enqueueSummaryWorker() is called for any affected date, or whether the race 
+  still                                                                         
+    exists in one or both methods.                                              
+  - Check for any OTHER call site that enqueues DailySummaryWorker for a date   
+  (e.g. via                                                                     
+    a different sync path, a manual refresh action, a periodic WorkManager job) 
+  that was                                                                      
+    not covered by the fix and may reintroduce the same race.                   
+                                                                                
+  STAGE 4 — SleepStagePromoter                                                  
+  - Show the CURRENT date-bucketing logic. Confirm it uses                      
+  ZoneId.systemDefault() and not                                                
+    ZoneOffset.UTC, matching BleEngine.routeReading() and MetricRouter's        
+  convention exactly                                                            
+    (same time source: reading.recordedAt vs. parsed.startMs — confirm these    
+  are the same                                                                  
+    epoch-ms field, not two different timestamps that happen to diverge).       
+  - Confirm promote() actually performs a Room write to sleep_sessions and      
+  sleep_stages                                                                  
+    (not just staging) and that this write commits/suspends correctly before    
+  returning to                                                                  
+    its caller (no fire-and-forget coroutine launch that returns before the     
+  write lands).                                                                 
+  - Check for silent failure: wrap points in try/catch that could swallow an    
+  exception                                                                     
+    without logging, and any early-return/no-op branches (e.g. "no staged       
+  readings found",                                                              
+    "session already exists", empty pending_sleep) that could cause promote()   
+  to complete                                                                   
+    successfully while writing zero rows.                                       
+                                                                                
+  STAGE 5 — DailySummaryWorker                                                  
+  - Show the CURRENT sleep_minutes computation. Confirm                         
+  getSessionForDateOnce(date) uses                                              
+    the same date value that BleEngine used to enqueue the worker.              
+  - Check whether the worker runs before or after WorkManager considers the     
+  promoter's                                                                    
+    write "durable" — i.e. re-verify there isn't a SECOND race introduced by    
+  the fix, such                                                                 
+    as process() returning before its internal coroutine/suspend chain actually 
+  completes,                                                                    
+    which would make the ordering fix a no-op in practice even though the call  
+  sites look                                                                    
+    sequential.                                                                 
+                                                                                
+  STAGE 6 — Direct DB inspection guidance                                       
+  - Identify the exact SQL/Room query a developer could run against a pulled    
+  .db export                                                                    
+    (per the app's existing Settings > Backup > Export feature) to check        
+  directly whether                                                              
+    sleep_sessions has ANY rows at all, regardless of what DailySummaryWorker   
+  reports. This                                                                 
+    isolates "promoter never writes" from "promoter writes but worker can't     
+  find it."                                                                     
+                                                                                
+  STAGE 7 — Test coverage sanity check                                          
+  - Show the CURRENT content of the regression tests added in the fix session.  
+  Assess                                                                        
+    whether they would actually have caught a regression of either original     
+  bug, or                                                                       
+    whether they test a mocked/faked call order that doesn't reflect the real   
+  suspend/                                                                      
+    coroutine timing in production (a common way "passing tests, still broken"  
+  happens).                                                                     
+                                                                                
+  OUTPUT                                                                        
+  For each stage, state clearly: CONFIRMED WORKING / CONFIRMED BROKEN / CANNOT  
+  CONFIRM                                                                       
+  (with the specific reason), citing exact file:line. End with a single         
+  paragraph naming                                                              
+  the most likely current root cause given all seven stages, distinguishing it  
+  explicitly                                                                    
+  from the two previously-fixed bugs if it is a new/third issue.                
+                                                                                
+  Do not modify any code. Do not touch $do_hrv or other unrelated WAT parser    
+  functions.                                                                    
+  This is a read-only audit only — no fix prompt should come out of this        
+  session.                                                                      
+
+● I'll start by mapping the project structure before diving into each stage.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Bash(find /home/boyonabike/StudioProjects/OAM -type f -name "*.kt" | xargs
+      grep -l -i "sleep" 2>/dev/null | sort)
+  ⎿  /home/boyonabike/StudioProjects/OAM/app/build/generated/ksp/debug/kotl
+     in/com/athletedata/openAthleteMetrics/data/db/AppDatabase_Impl.kt
+     /home/boyonabike/StudioProjects/OAM/app/build/generated/ksp/debug/kotl
+     … +113 lines (ctrl+o to expand)
+
+● Good, I have the full file map. Now I'll read all key files in parallel.
+
+  Searched for 1 pattern, read 5 files (ctrl+o to expand)
+
+● Now let me read the WAT file, test files, and remaining key sources.
+
+  Searched for 1 pattern, read 3 files (ctrl+o to expand)
+
+● Now let me look at the WAT sleep section in full, the staging repository
+  implementation, and check for any other DailySummaryWorker enqueue sites.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Critical discovery: RoomMetricReadingStagingRepository.insert() calls
+  enqueueSummaryWorker immediately on every SLEEP_STAGE row insert, before
+  promote() runs. Let me verify the DAO query and how WASM readings get their
+  recordedAt timestamp.
+
+  Read 2 files (ctrl+o to expand)
+
+● I see a potentially critical bug in getPendingSleepStages. Let me verify the
+  WAT $emit_sleep_stage output and check created_at vs recorded_at in the
+  staging entity.
+
+● Bash(sed -n '400,450p' "/home/boyonabike/StudioProjects/OAM/Driver Builds/Hume
+      Band 1/hume_band.wat")
+  ⎿  (local.set $p (call $wmem (local.get $p) (i32.const 0x40094) (i32.cons
+     t 4)))
+     (local.set $p (call $wmem (local.get $p) (i32.const 0x40022) (i32.cons
+     … +48 lines (ctrl+o to expand)
+
+  Read 1 file (ctrl+o to expand)
+
+● Bash(find /home/boyonabike/StudioProjects/OAM/app/src/main/java -name
+      "MetricReadingStagingEntity.kt" | xargs cat)
+  ⎿  package com.athletedata.openAthleteMetrics.data.db
+
+     import androidx.room.ColumnInfo
+     … +69 lines (ctrl+o to expand)
+
+● I need to see what value is passed as $ts (the recordedAtMs) when $do_sleep
+  calls $emit_sleep_stage.
+
+● Bash(sed -n '536,620p' "/home/boyonabike/StudioProjects/OAM/Driver Builds/Hume
+      Band 1/hume_band.wat")
+  ⎿  ;; Sleep: run-length encode stage bytes into SLEEP_STAGE readings
+     (func $do_sleep (param $base i32) (param $p i32) (result i32)
+     (local $count i32) (local $i i32)
+     … +82 lines (ctrl+o to expand)
+
+● Bash(sed -n '780,820p' "/home/boyonabike/StudioProjects/OAM/Driver Builds/Hume
+      Band 1/hume_band.wat")
+  ⎿  (local.set $b64ptr (i32.load (i32.const 0x40840)))
+     (local.set $b64len (i32.load (i32.const 0x40844)))
+     … +38 lines (ctrl+o to expand)
+
+  Read 1 file (ctrl+o to expand)
+
+● Now I have a complete picture. Let me verify the RoomSleepRepository enqueue
+  behavior and the DeviceReprocessor sleep date issue.
+
+  Read 2 files (ctrl+o to expand)
+
+● I now have all the information needed for a complete audit. Here is the full
+  report:
+
+  ---
+  End-to-End Sleep Data Audit Report
+
+  ---
+  STAGE 1 — WASM Parsing (hume_band.wat / $do_sleep)
+
+  CONFIRMED WORKING
+
+  $do_sleep (hume_band.wat:537) is intact and untouched. It correctly:
+  - Reads the stage count from base+9, computes ts_start = $bcd_ts(base+3)
+  - Run-length encodes stage bytes into spans, calling $emit_sleep_stage at the
+  stage boundary
+  - Passes three i64 values to $emit_sleep_stage: $start_ms, $end_ms, and $ts
+  (hume_band.wat:572–579)
+
+  The critical point: $ts (which becomes recordedAtMs in the outer
+  MetricWasmDto) is set to the same value as $start_ms — ts_start + span_start *
+  60000 (the historical sleep stage start epoch-ms from the BLE packet's BCD
+  timestamp). This is confirmed directly from the WAT:
+
+  wat
+  (call $emit_sleep_stage
+    ...
+    (i64.add (local.get $ts_start)                     ;; $start_ms
+      (i64.mul ... (local.get $span_start)) (i64.const 60000)))
+    (i64.add (local.get $ts_start)                     ;; $end_ms
+      (i64.mul ... (local.get $i)) (i64.const 60000)))
+    (i64.add (local.get $ts_start)                     ;; $ts = recordedAtMs =
+  SAME as $start_ms
+      (i64.mul ... (local.get $span_start)) (i64.const 60000)))
+
+  The WAT $emit_sleep_stage function also embeds "pending_sleep_stage":true
+  directly in the metaJson suffix string at 0xDC91 (hume_band.wat:161). The
+  metaJson output format is
+  {"stage":"AWAKE","start_ms":...,"end_ms":...,"pending_sleep_stage":true}.
+
+  The WASM side has not regressed and was never the problem.
+
+  ---
+  STAGE 2 — MetricRouter Routing
+
+  CONFIRMED WORKING
+
+  MetricRouter.route() (MetricRouter.kt:150) hits:
+  MetricType.SLEEP_STAGE ->
+  stagingRepository.insert(reading.withPendingSleepStageFlag())
+
+  withPendingSleepStageFlag() (MetricRouter.kt:209–213) does a
+  JSONObject.put("pending_sleep_stage", true) merge — redundant since the WAT
+  already writes this flag, but harmless. No other branch can intercept
+  SLEEP_STAGE: implausibleDeltaReason() only checks STEPS and ACTIVE_CALORIES,
+  and the BATTERY early-return path does not apply.
+
+  ---
+  STAGE 3 — BleEngine Ordering (the primary fix target)
+
+  dispatchPostStreamParse() (BleEngine.kt:1155–1253)
+
+  CONFIRMED FIX APPLIED — but moot for the reason identified in Stage 4.
+
+  The current code structure in the IO coroutine (scope.launch(Dispatchers.IO))
+  at BleEngine.kt:1182 is:
+
+  routeReading() for each parsed reading      ← stages SLEEP_STAGE rows AND
+  immediately enqueues worker (see below)
+  ↓
+  val datesToProcess = snapshot affectedDates
+  ↓
+  syncProcessor.process(syncResult, ...)      ← calls
+  sleepStagePromoter.promote() — the fix target
+  ↓  [finally block]
+  datesToProcess.forEach { enqueueSummaryWorker(...) }   ← REPLACE-policy
+  enqueue AFTER process()
+
+  The original Bug 1 race (enqueue before promote) is fixed in this path: the
+  finally block at BleEngine.kt:1246–1251 fires after syncProcessor.process()
+  returns. Because enqueueSummaryWorker uses ExistingWorkPolicy.REPLACE, any
+  worker enqueued prematurely (see below) is cancelled and replaced by this
+  correctly-timed one.
+
+  Residual secondary race via staging repository: routeReading() at
+  BleEngine.kt:1193 calls MetricRouter.route() → stagingRepository.insert() →
+  RoomMetricReadingStagingRepository.insert()
+  (RoomMetricReadingStagingRepository.kt:27–36), which calls
+  enqueueSummaryWorker() immediately before process() has run. This enqueue is
+  premature. However, the REPLACE policy enqueue in the finally block
+  compensates: the worker is always re-enqueued after promote() completes. So
+  the ordering bug is functionally resolved in this path — but is moot because
+  promote() writes nothing (Stage 4).
+
+  triggerSync() (BleEngine.kt:435–529)
+
+  CONFIRMED FIX APPLIED — same structure.
+
+  syncProcessor.process() is called at BleEngine.kt:517 (inside try), and the
+  finally block at BleEngine.kt:523–528 calls enqueueSummaryWorker() after
+  process() returns. Same REPLACE-policy guarantee. Same mootness.
+
+  Other call sites for DailySummaryWorker
+
+  Five additional enqueue sites exist:
+  - RoomMetricReadingStagingRepository.insert/insertAll/insertManual
+  (RoomMetricReadingStagingRepository.kt:32, 47, 68) — fires immediately on any
+  staging insert including SLEEP_STAGE; covered by REPLACE
+  - RoomSleepRepository.insert and insertOrReplace
+  (RoomSleepRepository.kt:26, 60) — fires when sleepRepository.insert() is
+  called from inside SleepStagePromoter.promote(); this is correctly timed since
+  it fires only after the session row exists
+  - RoomActivityRepository — irrelevant to sleep
+  - SeederService — irrelevant to live device sync
+  - DeviceReprocessor (DeviceReprocessor.kt:185) — enqueues after promote() but
+  only for metricDates + activityDates, not sleepDates; relies on
+  RoomSleepRepository.insertOrReplace() for sleep dates, which is inside the
+  transaction block before promote() — an unresolved race in the reprocessor
+  path, but not the primary issue
+
+  None of these sites represent a missed "other call site" in the live sync path
+  that could re-introduce the race.
+
+  ---
+  STAGE 4 — SleepStagePromoter
+
+  CONFIRMED BROKEN — this is the active root cause (new third bug)
+
+  Timezone fix: CONFIRMED APPLIED
+
+  SleepStagePromoter.kt:75:
+  val date = Instant.ofEpochMilli(parsed.startMs).atZone(ZoneId.systemDefault())
+  .toLocalDate()
+  ZoneId.systemDefault() is used. Bug 2 is fixed.
+
+  Also: parsed.startMs comes from rowJson.getLong("start_ms")
+  (SleepStagePromoter.kt:65), and reading.recordedAt for SLEEP_STAGE =
+  Instant.ofEpochMilli(start_ms) (confirmed from Stage 1 — WAT sets recordedAtMs
+  = $ts = $start_ms). These are the same epoch-ms value, so there is no
+  divergence between the two timestamps.
+
+  The time-window filter in getPendingSleepStages is wrong
+
+  SleepStagePromoter.promote() calls (SleepStagePromoter.kt:40–45):
+  stagingRepository.getPendingSleepStages(
+      source = DataSource.DEVICE,
+      driverId = driverId,
+      startMs = syncWindowStartMs,
+      endMs = syncWindowEndMs,
+  )
+
+  Where syncWindowStartMs = result.syncStartedAt.toEpochMilli() = the epoch-ms
+  when BleEngine.connect() set syncStartedAt = Instant.now() (i.e., when the
+  morning BLE connection was initiated — e.g., 07:00 today).
+
+  The DAO query (MetricReadingStagingDao.kt:177–192):
+  WHERE metric_type = 'SLEEP_STAGE'
+    AND source = :source
+    AND driver_id = :driverId
+    AND recorded_at >= :startMs       ← sync start time (e.g., 07:00 today)
+    AND recorded_at < :endMs          ← sync end time (e.g., 07:02 today)
+
+  SLEEP_STAGE rows have recorded_at = historical sleep stage start time (Stage
+  1: WAT sets recordedAtMs = ts_start + span_start * 60000 = the BCD-decoded BLE
+  timestamp of the sleep stage). For a typical overnight sleep session, every
+  stage's recorded_at is between 22:00 last night and 06:00 this morning.
+
+  The condition recorded_at >= syncWindowStartMs evaluates to:
+  ~22:00 last night >= 07:00 this morning → FALSE
+
+  Every single SLEEP_STAGE row fails the filter. getPendingSleepStages() returns
+  an empty list every sync.
+
+  Consequently: byDate is empty (SleepStagePromoter.kt:54), the for ((date, 
+  stages) in byDate) loop never executes (SleepStagePromoter.kt:84), zero rows
+  are written to sleep_sessions or sleep_stages, promote() returns
+  SleepPromotionResult(datesProcessed=[], stagesInserted=0, sessionsCreated=0, 
+  errors=[]) without any exception — so the call site in process() sees a clean
+  return and cannot detect the failure.
+
+  The table has a created_at column (MetricReadingStagingEntity.kt, column
+  created_at), set to Instant.now() at parse time (WasmDriverEngine.kt:123: val 
+  now = Instant.now()). created_at is the time the row was inserted during the
+  current sync session — which IS within the sync window. Filtering by
+  created_at would correctly find historical sleep data staged during this sync.
+  Filtering by recorded_at does not.
+
+  No try/catch in promote() swallows this. The empty result is not an exception.
+  The early-return is the if (pendingRows.isEmpty()) { /* byDate stays empty */
+  } implicit path — perfectly silent success with zero side effects. The errors
+  list remains empty.
+
+  ---
+  STAGE 5 — DailySummaryWorker
+
+  CONFIRMED BROKEN — as direct consequence of Stage 4
+
+  DailySummaryWorker.kt:90:
+  val session = sleepSessionDao.getSessionForDateOnce(date)
+
+  getSessionForDateOnce(date) (SleepSessionDao.kt:51) queries sleep_sessions 
+  WHERE date = :date LIMIT 1. Since sleep_sessions is always empty (promote()
+  never inserts), this always returns null.
+
+  DailySummaryWorker.kt:164:
+  val sleepMinutes = session?.durationMinutes   // always null
+
+  The date passed to the worker is correct: it comes from affectedDates, which
+  is populated by routeReading() using
+  reading.recordedAt.atZone(ZoneId.systemDefault()).toLocalDate()
+  (BleEngine.kt:1138) — the same systemDefault() zone as SleepStagePromoter —
+  and matches the date used in getSessionForDateOnce.
+
+  There is no second race from the fix. process() (which includes promote()) is
+  a suspend fun that runs withContext(Dispatchers.IO) (SleepStagePromoter.kt:37)
+  — Room writes suspend to completion before returning. The finally block
+  enqueue fires after process() is fully awaited. The issue is not timing;
+  promote() simply has nothing to write.
+
+  ---
+  STAGE 6 — Direct DB Inspection SQL
+
+  Pull the .db file via Settings > Backup > Export and run these queries:
+
+  -- 1. Verify staging rows exist AND compare timestamps
+  SELECT
+    id,
+    driver_id,
+    datetime(recorded_at / 1000, 'unixepoch', 'localtime') AS recorded_local,
+    datetime(created_at  / 1000, 'unixepoch', 'localtime') AS created_local,
+    meta_json
+  FROM metric_readings_staging
+  WHERE metric_type = 'SLEEP_STAGE'
+  ORDER BY recorded_at DESC
+  LIMIT 20;
+
+  -- 2. Verify sleep_sessions is empty
+  SELECT * FROM sleep_sessions ORDER BY date DESC LIMIT 20;
+
+  -- 3. Confirm the time-domain mismatch directly
+  SELECT
+    (SELECT MIN(recorded_at) FROM metric_readings_staging WHERE metric_type =
+  'SLEEP_STAGE')
+      AS earliest_sleep_stage_recorded_at_ms,
+    (SELECT MAX(recorded_at) FROM metric_readings_staging WHERE metric_type =
+  'SLEEP_STAGE')
+      AS latest_sleep_stage_recorded_at_ms,
+    (SELECT MIN(created_at)  FROM metric_readings_staging WHERE metric_type =
+  'SLEEP_STAGE')
+      AS earliest_sleep_stage_created_at_ms;
+
+  Interpreting the result:
+  - If Query 1 has rows and Query 2 has none → sleep_sessions is empty because
+  promote() never writes. The bug is in getPendingSleepStages.
+  - In Query 1 you will see recorded_local timestamps in the 10pm–6am range and
+  created_local timestamps within the sync session (a few minutes around when
+  you synced). This is the concrete proof of the column mismatch.
+  - If Query 1 has no rows at all → the bug is earlier (WASM or MetricRouter),
+  but Stage 1 and 2 analysis makes this unlikely.
+
+  ---
+  STAGE 7 — Test Coverage Sanity Check
+
+  CONFIRMED: Tests pass but cannot catch the bug
+
+  Both tests in SleepStagePromoterTest.kt use MockK:
+
+  coEvery {
+      stagingRepository.getPendingSleepStages(DataSource.DEVICE, "hume-band-1",
+  any(), any())
+  } returns listOf(row)
+
+  The any(), any() matchers match any startMs/endMs values. The mock returns the
+  test row regardless of the time window parameters — completely bypassing the
+  SQL predicate that is the actual failure point. Neither test ever exercises
+  the real WHERE recorded_at >= :startMs clause against real epoch-ms values.
+
+  Additionally, the first test calls:
+  promoter.promote("hume-band-1", startMs, endMs)
+  // where startMs = sleep stage start time (22:00)
+  By coincidence this matches the row's recorded_at. But in production,
+  syncWindowStartMs is the morning BLE connection time (~07:00), not the sleep
+  stage time. The test cannot detect this mismatch because the DAO is mocked.
+
+  To catch this bug, the test would need a real Room in-memory database
+  (@RunWith(AndroidJUnit4::class) + Room.inMemoryDatabaseBuilder(...)) and a
+  staging row inserted with recorded_at set to a historical sleep time and
+  created_at set to a sync time, then asserting getPendingSleepStages(source, 
+  driverId, syncStartMs, syncEndMs) returns that row — which it currently does
+  not, and the test would fail, correctly identifying the bug.
+
+  ---
+  Conclusion
+
+  The most likely current root cause is a third bug, distinct from both 
+  previously-fixed bugs: the getPendingSleepStages SQL query in
+  MetricReadingStagingDao (MetricReadingStagingDao.kt:177–192) filters by
+  recorded_at >= :startMs AND recorded_at < :endMs, where startMs/endMs are the
+  live BLE sync session timestamps. SLEEP_STAGE readings have recorded_at set to
+  the historical sleep epoch-ms (the actual time the sleep occurred, decoded
+  from the device's BCD timestamp), which is always hours before the sync
+  session starts. The filter excludes 100% of sleep stage rows on every sync.
+  SleepStagePromoter.promote() receives an empty list, exits silently, writes
+  zero rows to sleep_sessions and sleep_stages, and the DailySummaryWorker
+  consequently finds no session and writes sleepMinutes = null.
+
+  This is not a call-ordering race (Bug 1 — fixed in both
+  dispatchPostStreamParse() and triggerSync()). It is not a timezone mismatch
+  (Bug 2 — the promoter now correctly uses ZoneId.systemDefault()). It is a
+  time-domain mismatch: the query predicate column (recorded_at, representing
+  when sleep occurred) is being compared against a sync-session timestamp
+  (representing when the device was connected), and these two time domains never
+  overlap because the device transmits historical data. The staging entity has
+  a separate created_at column that correctly represents when the row was
+  inserted during this sync session; the query should use that column instead.
+
+✻ Worked for 8m 19s

@@ -40,8 +40,8 @@ class SleepStagePromoter @Inject constructor(
         val pendingRows = stagingRepository.getPendingSleepStages(
             source = DataSource.DEVICE,
             driverId = driverId,
-            startMs = syncWindowStartMs,
-            endMs = syncWindowEndMs,
+            syncWindowStartMs = syncWindowStartMs,
+            syncWindowEndMs = syncWindowEndMs,
         )
 
         data class ParsedStage(

@@ -53,12 +53,12 @@ interface MetricReadingStagingRepository {
     /** One-shot version; used by the seeder to guard against re-seeding a date. */
     suspend fun hasSeederReadingsForDateOnce(date: LocalDate): Boolean
 
-    /** Returns all SLEEP_STAGE rows for a given driver/source within a sync window. */
+    /** Returns all SLEEP_STAGE rows for a given driver/source inserted during a sync window. */
     suspend fun getPendingSleepStages(
         source: DataSource,
         driverId: String,
-        startMs: Long,
-        endMs: Long,
+        syncWindowStartMs: Long,
+        syncWindowEndMs: Long,
     ): List<MetricReading>
 
     /** Deletes specific staging rows by id; used by SleepStagePromoter after promotion. */

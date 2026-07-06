@@ -10,6 +10,7 @@ import com.athletedata.openAthleteMetrics.data.repository.HrReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.HrvReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.RespirationReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.SkinTempReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.SleepRepository
 import com.athletedata.openAthleteMetrics.data.repository.SpO2ReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.StepsReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailySummaryRepository
@@ -44,6 +45,7 @@ class MetricDetailViewModel @AssistedInject constructor(
     private val totalCalorieRepo: TotalCalorieReadingRepository,
     private val bloodPressureRepo: BloodPressureReadingRepository,
     private val dailySummaryRepo: DailySummaryRepository,
+    private val sleepRepo: SleepRepository,
 ) : ViewModel() {
 
     @AssistedFactory
@@ -127,9 +129,50 @@ class MetricDetailViewModel @AssistedInject constructor(
                 .groupBy { it.recordedAt.localDate() }
                 .mapValues { (_, es) -> es.map { it.bpm.toDouble() }.average() }
 
-            MetricType.HRV -> hrvRepo.getReadingsInRangeOnce(startMs, endMs)
-                .groupBy { it.recordedAt.localDate() }
-                .mapValues { (_, es) -> es.map { it.rmssdMs }.average() }
+            MetricType.HRV -> {
+                // HRV must be bucketed by the sleep session it was recorded during (which
+                // can start the evening before its wake date), not by the reading's own
+                // calendar date -- see OvernightHrvCalculator's doc comment for why a
+                // naive date(recorded_at) query wrongly excludes pre-midnight readings.
+                val fromDate = Instant.ofEpochMilli(startMs).localDate()
+                val toDate = Instant.ofEpochMilli(endMs).localDate().minusDays(1)
+                val sessions = sleepRepo.getSessionsForRange(fromDate, toDate).first()
+
+                val result = mutableMapOf<LocalDate, MutableList<Double>>()
+
+                // Bucket 1: readings inside a known sleep session's own window, keyed by
+                // the session's wake date -- mirrors OvernightHrvCalculator /
+                // DailyDetailViewModel / HrvMetricWidget, which all query
+                // session.sleepStartMs..sleepEndMs+1 directly rather than a calendar-day
+                // range, since the session can start the evening before its wake date.
+                for (session in sessions) {
+                    val sessionStartMs = session.sleepStartMs.toEpochMilli()
+                    val sessionEndMs = session.sleepEndMs.toEpochMilli() + 1 // upper bound is exclusive
+                    val filtered = hrvRepo.getReadingsInRangeOnce(sessionStartMs, sessionEndMs)
+                        .filter { it.rmssdMs in 10.0..250.0 }
+                    if (filtered.isNotEmpty()) {
+                        result.getOrPut(session.date) { mutableListOf() }.addAll(filtered.map { it.rmssdMs })
+                    }
+                }
+
+                // Bucket 2 (fallback): a reading in the requested range that isn't covered
+                // by any known sleep session -- e.g. a daytime manual/spot reading, if the
+                // driver ever produces one -- has no sleep window to anchor it to, so it
+                // falls back to its own calendar date rather than being silently dropped.
+                hrvRepo.getReadingsInRangeOnce(startMs, endMs)
+                    .filterNot { reading ->
+                        sessions.any { s ->
+                            val sMs = s.sleepStartMs.toEpochMilli()
+                            val eMs = s.sleepEndMs.toEpochMilli() + 1
+                            reading.recordedAt.toEpochMilli() in sMs until eMs
+                        }
+                    }
+                    .filter { it.rmssdMs in 10.0..250.0 }
+                    .groupBy { it.recordedAt.localDate() }
+                    .forEach { (date, es) -> result.getOrPut(date) { mutableListOf() }.addAll(es.map { it.rmssdMs }) }
+
+                result.mapValues { (_, values) -> values.average() }
+            }
 
             MetricType.SPO2 -> spo2Repo.getReadingsInRangeOnce(startMs, endMs)
                 .groupBy { it.recordedAt.localDate() }

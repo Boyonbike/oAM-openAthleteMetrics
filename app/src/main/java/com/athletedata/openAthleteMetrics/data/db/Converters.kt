@@ -1,6 +1,7 @@
 package com.athletedata.openAthleteMetrics.data.db
 
 import androidx.room.TypeConverter
+import com.athletedata.openAthleteMetrics.data.model.BaselineMetric
 import com.athletedata.openAthleteMetrics.data.model.DataSource
 import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.data.model.SleepStage
@@ -72,4 +73,12 @@ class Converters {
 
     @TypeConverter
     fun toSleepStage(value: String): SleepStage = SleepStage.valueOf(value)
+
+    // ── BaselineMetric ↔ String ───────────────────────────────────────────────
+
+    @TypeConverter
+    fun fromBaselineMetric(metric: BaselineMetric): String = metric.name
+
+    @TypeConverter
+    fun toBaselineMetric(value: String): BaselineMetric = BaselineMetric.valueOf(value)
 }

@@ -3,6 +3,7 @@ package com.athletedata.openAthleteMetrics.data.repository
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.athletedata.openAthleteMetrics.data.model.ThemePreference
 import com.athletedata.openAthleteMetrics.ui.dailydetail.DEFAULT_TILE_ORDER
@@ -66,10 +67,20 @@ class DataStoreSettingsRepository @Inject constructor(
         }
     }
 
+    override fun getBaselineWindowDays(): Flow<Int> =
+        dataStore.data.map { prefs -> prefs[BASELINE_WINDOW_DAYS_KEY] ?: 30 }
+
+    override suspend fun setBaselineWindowDays(days: Int) {
+        dataStore.edit { prefs ->
+            prefs[BASELINE_WINDOW_DAYS_KEY] = days
+        }
+    }
+
     private companion object {
         val THEME_KEY                    = stringPreferencesKey("theme_preference")
         val HISTORY_METRIC_KEY           = stringPreferencesKey("history_metric_key")
         val DAILY_DETAIL_TILE_CONFIG_KEY = stringPreferencesKey("daily_detail_tile_config")
+        val BASELINE_WINDOW_DAYS_KEY     = intPreferencesKey("baseline_window_days")
 
         fun encodeTileConfig(configs: List<TileConfig>): String {
             val arr = JSONArray()

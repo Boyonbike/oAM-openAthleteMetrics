@@ -21,9 +21,11 @@ import com.athletedata.openAthleteMetrics.data.db.SleepStageDao
 import com.athletedata.openAthleteMetrics.data.db.SpO2ReadingDao
 import com.athletedata.openAthleteMetrics.data.db.StepsReadingDao
 import com.athletedata.openAthleteMetrics.data.db.TotalCalorieReadingDao
+import com.athletedata.openAthleteMetrics.data.model.BaselineMetric
 import com.athletedata.openAthleteMetrics.data.model.DailySummary
 import com.athletedata.openAthleteMetrics.data.model.DataSource
 import com.athletedata.openAthleteMetrics.data.model.SleepStage
+import com.athletedata.openAthleteMetrics.data.repository.BaselineRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailySummaryRepository
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -58,6 +60,8 @@ class DailySummaryWorker @AssistedInject constructor(
     private val sleepSessionDao: SleepSessionDao,
     private val sleepStageDao: SleepStageDao,
     private val dailySummaryRepository: DailySummaryRepository,
+    private val overnightHrvCalculator: OvernightHrvCalculator,
+    private val baselineRepository: BaselineRepository,
 ) : CoroutineWorker(context, workerParams) {
 
     override suspend fun doWork(): Result {
@@ -74,7 +78,6 @@ class DailySummaryWorker @AssistedInject constructor(
             val dayStartMs     = date.atStartOfDay(zone).toInstant().toEpochMilli()
             val dayEndMs       = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
             val nightEndMs     = date.atTime(6, 0).atZone(zone).toInstant().toEpochMilli()
-            val morningStartMs = date.atTime(5, 0).atZone(zone).toInstant().toEpochMilli()
 
             // ── Fetch raw readings ────────────────────────────────────────────
             val hrReadings          = hrReadingDao.getReadingsInRangeOnce(dayStartMs, dayEndMs)
@@ -101,12 +104,13 @@ class DailySummaryWorker @AssistedInject constructor(
 
             // ── HRV ───────────────────────────────────────────────────────────
             val avgHrvMs     = hrvReadings.averageOrNull { it.rmssdMs }
-            val morningHrvMs = hrvReadings
-                .filter { it.recordedAt.toEpochMilli() >= morningStartMs }
-                .minByOrNull { it.recordedAt }
-                ?.rmssdMs
             val hrvMinMs     = hrvReadings.minByOrNull { it.rmssdMs }?.rmssdMs
             val hrvMaxMs     = hrvReadings.maxByOrNull { it.rmssdMs }?.rmssdMs
+            // Deliberately keyed off the sleep session's own timestamps (via
+            // OvernightHrvCalculator), not dayStartMs/dayEndMs — do not
+            // "simplify" this into a calendar-day query, the overnight
+            // window can start the evening before `date`.
+            val overnightHrvMs = overnightHrvCalculator.calculate(date)
 
             // ── SpO2 ──────────────────────────────────────────────────────────
             val avgSpo2Pct  = spo2Readings.averageOrNull { it.percentage }
@@ -193,7 +197,7 @@ class DailySummaryWorker @AssistedInject constructor(
                     avgHrBpm           = avgHrBpm,
                     restingHrBpm       = restingHrBpm,
                     avgHrvMs           = avgHrvMs,
-                    morningHrvMs       = morningHrvMs,
+                    overnightHrvMs     = overnightHrvMs,
                     hrvMinMs           = hrvMinMs,
                     hrvMaxMs           = hrvMaxMs,
                     avgSpo2Pct         = avgSpo2Pct,
@@ -220,6 +224,10 @@ class DailySummaryWorker @AssistedInject constructor(
                     computedAt         = Instant.now(),
                 )
             )
+
+            // Baseline has no periodic job — recalculate on-demand once per metric now
+            // that the day's summary is up to date.
+            BaselineMetric.entries.forEach { metric -> baselineRepository.recalculate(metric) }
 
             Timber.tag(TAG).d("[STAGE-7 SUMMARY-WORKER] complete — avgHr=%s restingHr=%s avgHrv=%s steps=%s sleepMin=%s", // DPT
                 avgHrBpm, restingHrBpm, avgHrvMs, steps, sleepMinutes) // DPT

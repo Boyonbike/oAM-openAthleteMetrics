@@ -15,7 +15,8 @@ import java.time.LocalDate
  * @property avgHrBpm Mean heart rate for the day.
  * @property restingHrBpm Lowest 5-minute HR window found during the day.
  * @property avgHrvMs Mean HRV across all readings for the day.
- * @property morningHrvMs First HRV reading after wake time.
+ * @property overnightHrvMs HRV computed from the overnight sleep window. Null if there
+ * was insufficient overnight data to compute a value.
  * @property avgSpo2Pct Mean blood-oxygen saturation across overnight readings.
  * @property steps Total step count for the day.
  * @property sleepMinutes Total sleep duration from the night's session.
@@ -46,7 +47,7 @@ data class DailySummary(
     val avgHrBpm: Double? = null,
     val restingHrBpm: Double? = null,
     val avgHrvMs: Double? = null,
-    val morningHrvMs: Double? = null,
+    val overnightHrvMs: Double? = null,
     val avgSpo2Pct: Double? = null,
     val steps: Int? = null,
     val sleepMinutes: Int? = null,

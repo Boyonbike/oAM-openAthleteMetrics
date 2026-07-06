@@ -477,7 +477,7 @@ private fun CardiovascularTile(
                 val parts = buildList {
                     data.avgHrBpm?.let { add("HR %.0f bpm".format(it)) }
                     data.restingHrBpm?.let { add("RHR %.0f bpm".format(it)) }
-                    data.morningHrvMs?.let { add("HRV %.0f ms".format(it)) }
+                    data.overnightHrvMs?.let { add("HRV %.0f ms".format(it)) }
                     data.avgSpo2Pct?.let { add("SpO₂ %.1f%%".format(it)) }
                 }
                 Text(
@@ -514,21 +514,11 @@ private fun CardiovascularTile(
                         )
                     }
                 }
-                data.morningHrvMs?.let { morning ->
-                    MetricSubsection(
-                        title = "HRV",
-                        valueLine = "Morning %.0f ms".format(morning),
-                        extraLines = listOfNotNull(
-                            data.avgHrvMs?.let { "Avg: %.0f ms".format(it) },
-                            data.hrvMinMs?.let { min ->
-                                data.hrvMaxMs?.let { max -> "Range: %.0f – %.0f ms".format(min, max) }
-                            },
-                        ),
-                        readings = state.rawReadings.hrvReadings,
-                        isReadingsExpanded = "HRV" in openReadingTables,
-                        onToggleReadings = { onToggleReadings("HRV") },
-                    )
-                }
+                HrvSection(
+                    section = state.hrv,
+                    isReadingsExpanded = "HRV" in openReadingTables,
+                    onToggleReadings = { onToggleReadings("HRV") },
+                )
                 data.avgSpo2Pct?.let { avg ->
                     MetricSubsection(
                         title = "SpO₂",
@@ -929,6 +919,69 @@ private fun MetricSubsection(
                 onToggle = onToggleReadings,
             )
         }
+    }
+}
+
+// ── HRV section ───────────────────────────────────────────────────────────────
+
+@Composable
+private fun HrvSection(
+    section: HrvSectionState,
+    isReadingsExpanded: Boolean,
+    onToggleReadings: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("HRV", style = TypographyTitle)
+        when (section) {
+            is HrvSectionState.NoSleepSession ->
+                EmptyStateText("No sleep session recorded")
+
+            is HrvSectionState.InsufficientData -> {
+                EmptyStateText("Not enough overnight data")
+                HrvReadingsBody(section.rawReadings, isReadingsExpanded, onToggleReadings)
+            }
+
+            is HrvSectionState.HasData -> {
+                Text("Last Night HRV: %.0f ms".format(section.headlineMs), style = MaterialTheme.typography.bodyMedium)
+                section.baseline?.let { baseline ->
+                    val note = when {
+                        section.headlineMs > baseline.upper -> " · Above baseline"
+                        section.headlineMs < baseline.lower -> " · Below baseline"
+                        else -> ""
+                    }
+                    Text(
+                        text = "Baseline: %.0f – %.0f ms%s".format(baseline.lower, baseline.upper, note),
+                        style = TypographyMeta,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                HrvReadingsBody(section.rawReadings, isReadingsExpanded, onToggleReadings)
+            }
+        }
+    }
+}
+
+@Composable
+private fun HrvReadingsBody(
+    readings: List<TimestampedReading>,
+    isReadingsExpanded: Boolean,
+    onToggleReadings: () -> Unit,
+) {
+    if (readings.size >= 2) {
+        Spacer(Modifier.height(4.dp))
+        ReadingsLineChart(
+            readings = readings,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(120.dp),
+        )
+    }
+    if (readings.isNotEmpty()) {
+        ReadingsTable(
+            readings = readings,
+            isExpanded = isReadingsExpanded,
+            onToggle = onToggleReadings,
+        )
     }
 }
 

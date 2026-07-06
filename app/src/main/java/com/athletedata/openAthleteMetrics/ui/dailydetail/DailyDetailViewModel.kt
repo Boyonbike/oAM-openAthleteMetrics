@@ -11,6 +11,7 @@ import com.athletedata.openAthleteMetrics.data.db.SleepStageEntity
 import com.athletedata.openAthleteMetrics.data.db.StepsReadingEntity
 import com.athletedata.openAthleteMetrics.data.db.TotalCalorieReadingEntity
 import com.athletedata.openAthleteMetrics.data.model.Activity
+import com.athletedata.openAthleteMetrics.data.model.BaselineMetric
 import com.athletedata.openAthleteMetrics.data.model.QuestionCategory
 import com.athletedata.openAthleteMetrics.data.model.QuestionDefinition
 import com.athletedata.openAthleteMetrics.data.model.QuestionResponse
@@ -19,6 +20,7 @@ import com.athletedata.openAthleteMetrics.data.model.SleepSession
 import com.athletedata.openAthleteMetrics.data.model.UserCategory
 import com.athletedata.openAthleteMetrics.data.repository.ActiveCalorieReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.ActivityRepository
+import com.athletedata.openAthleteMetrics.data.repository.BaselineRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailyContextRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailySummaryRepository
 import com.athletedata.openAthleteMetrics.data.repository.HrReadingRepository
@@ -62,6 +64,7 @@ class DailyDetailViewModel @Inject constructor(
     private val questionRepo: QuestionRepository,
     private val sleepRepo: SleepRepository,
     private val sleepStageRepo: SleepStageRepository,
+    private val baselineRepo: BaselineRepository,
     private val hrRepo: HrReadingRepository,
     private val hrvRepo: HrvReadingRepository,
     private val spo2Repo: SpO2ReadingRepository,
@@ -165,6 +168,20 @@ class DailyDetailViewModel @Inject constructor(
                 _optimisticTileOrder,
             ) { persisted, optimistic -> optimistic ?: persisted }
 
+            val hrvSectionFlow: Flow<HrvSectionState> = combine(
+                sleepRepo.getSessionForDate(date),
+                summaryRepo.getSummaryForDate(date),
+                baselineRepo.observeRange(BaselineMetric.HRV),
+            ) { session, summary, baseline ->
+                if (session == null) return@combine HrvSectionState.NoSleepSession
+                val hrvStartMs = session.sleepStartMs.toEpochMilli()
+                val hrvEndMs = session.sleepEndMs.toEpochMilli() + 1
+                val readings = hrvRepo.getReadingsInRangeOnce(hrvStartMs, hrvEndMs).map { it.toTimestamped() }
+                val headline = summary?.overnightHrvMs
+                if (headline == null) HrvSectionState.InsufficientData(readings)
+                else HrvSectionState.HasData(headline, baseline, readings)
+            }
+
             val primaryFlow = combine(
                 summaryRepo.getSummaryForDate(date),
                 contextRepo.getForDate(date),
@@ -178,8 +195,9 @@ class DailyDetailViewModel @Inject constructor(
                 sleepWithStagesFlow,
                 rawReadingsFlow,
                 tileConfigFlow,
-            ) { sleepWithStages, rawReadings, tileConfig ->
-                SecondaryData(sleepWithStages, rawReadings, tileConfig)
+                hrvSectionFlow,
+            ) { sleepWithStages, rawReadings, tileConfig, hrvSection ->
+                SecondaryData(sleepWithStages, rawReadings, tileConfig, hrvSection)
             }
 
             combine(primaryFlow, secondaryFlow) { primary, secondary ->
@@ -188,15 +206,12 @@ class DailyDetailViewModel @Inject constructor(
 
                 val cardio = if (summary != null && (
                     summary.avgHrBpm != null || summary.restingHrBpm != null ||
-                    summary.morningHrvMs != null || summary.avgSpo2Pct != null
+                    summary.overnightHrvMs != null || summary.avgSpo2Pct != null
                 )) {
                     CardiovascularData(
                         avgHrBpm = summary.avgHrBpm,
                         restingHrBpm = summary.restingHrBpm,
-                        morningHrvMs = summary.morningHrvMs,
-                        avgHrvMs = summary.avgHrvMs,
-                        hrvMinMs = summary.hrvMinMs,
-                        hrvMaxMs = summary.hrvMaxMs,
+                        overnightHrvMs = summary.overnightHrvMs,
                         avgSpo2Pct = summary.avgSpo2Pct,
                         spo2MinPct = summary.spo2MinPct,
                         spo2MaxPct = summary.spo2MaxPct,
@@ -280,6 +295,7 @@ class DailyDetailViewModel @Inject constructor(
                     contextScores = contextScores,
                     activities = primary.activities.map { it.toUiItem() },
                     rawReadings = secondary.rawReadings,
+                    hrv = secondary.hrvSection,
                 ) as DailyDetailUiState
             }.catch { e ->
                 emit(DailyDetailUiState.Error(e.message ?: "Unknown error"))
@@ -294,7 +310,6 @@ class DailyDetailViewModel @Inject constructor(
     private suspend fun loadRawReadings(startMs: Long, endMs: Long): RawReadingsForDay =
         coroutineScope {
             val hr = async { hrRepo.getReadingsInRangeOnce(startMs, endMs) }
-            val hrv = async { hrvRepo.getReadingsInRangeOnce(startMs, endMs) }
             val spo2 = async { spo2Repo.getReadingsInRangeOnce(startMs, endMs) }
             val resp = async { respirationRepo.getReadingsInRangeOnce(startMs, endMs) }
             val steps = async { stepsRepo.getReadingsInRangeOnce(startMs, endMs) }
@@ -302,7 +317,6 @@ class DailyDetailViewModel @Inject constructor(
             val totalCal = async { totalCalRepo.getReadingsInRangeOnce(startMs, endMs) }
             RawReadingsForDay(
                 hrReadings = hr.await().map { it.toTimestamped() },
-                hrvReadings = hrv.await().map { it.toTimestamped() },
                 spo2Readings = spo2.await().map { it.toTimestamped() },
                 respirationReadings = resp.await().map { it.toTimestamped() },
                 stepsReadings = steps.await().map { it.toTimestamped() },
@@ -359,6 +373,7 @@ class DailyDetailViewModel @Inject constructor(
         val sleepWithStages: Pair<SleepSession, List<SleepStageEntity>>?,
         val rawReadings: RawReadingsForDay,
         val tileConfig: List<TileConfig>,
+        val hrvSection: HrvSectionState,
     )
 }
 

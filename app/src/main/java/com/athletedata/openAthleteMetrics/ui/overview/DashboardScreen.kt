@@ -65,6 +65,7 @@ import com.athletedata.openAthleteMetrics.ui.dailydetail.DailyDetailSection
 import com.athletedata.openAthleteMetrics.ui.nav.LocalBottomNavScrollBehavior
 import com.athletedata.openAthleteMetrics.ui.nav.rememberBottomNavNestedScrollConnection
 import com.athletedata.openAthleteMetrics.ui.overview.widgets.ActivitiesWidget
+import com.athletedata.openAthleteMetrics.ui.overview.widgets.HrvMetricWidget
 import com.athletedata.openAthleteMetrics.ui.overview.widgets.MetricWidget
 import com.athletedata.openAthleteMetrics.ui.overview.widgets.StarredHabitsBarWidget
 import com.athletedata.openAthleteMetrics.ui.overview.widgets.StarredLifestyleBarWidget
@@ -298,11 +299,22 @@ private fun WidgetHost(
 ) {
     val combinedModifier = modifier.then(draggableHandleModifier)
     when (widget.type) {
-        is WidgetType.Hr, WidgetType.Hrv, WidgetType.Rhr,
+        is WidgetType.Hr, WidgetType.Rhr,
         WidgetType.Sleep, WidgetType.Spo2, WidgetType.Steps ->
             MetricWidget(
                 widgetId = widget.id,
                 widgetType = widget.type,
+                date = date,
+                size = widget.size,
+                isEditMode = isEditMode,
+                wiggleAngle = wiggleAngle,
+                onTap = onTap,
+                onRemove = onRemove,
+                modifier = combinedModifier,
+            )
+        is WidgetType.Hrv ->
+            HrvMetricWidget(
+                widgetId = widget.id,
                 date = date,
                 size = widget.size,
                 isEditMode = isEditMode,

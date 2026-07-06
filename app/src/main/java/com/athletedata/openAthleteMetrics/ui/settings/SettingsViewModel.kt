@@ -201,6 +201,7 @@ class SettingsViewModel @Inject constructor(
                     appDatabase.dailySummaryDao().deleteAll()
                     appDatabase.dailyContextDao().deleteAll()
                     appDatabase.activityDao().deleteAll()
+                    appDatabase.baselineDao().deleteAll() // RESET-SYSTEM
                 }
                 if (state.profileSelected) {
                     userProfileRepository.deleteProfile()

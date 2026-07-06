@@ -307,7 +307,7 @@ class HistoryViewModel @Inject constructor(
 
     private fun extractWearableValue(key: String, s: DailySummary): Float? = when (key) {
         "HR"    -> s.avgHrBpm?.toFloat()
-        "HRV"   -> s.morningHrvMs?.toFloat() ?: s.avgHrvMs?.toFloat()
+        "HRV"   -> s.overnightHrvMs?.toFloat()
         "RHR"   -> s.restingHrBpm?.toFloat()
         "SPO2"  -> s.avgSpo2Pct?.toFloat()
         "STEPS" -> s.steps?.toFloat()

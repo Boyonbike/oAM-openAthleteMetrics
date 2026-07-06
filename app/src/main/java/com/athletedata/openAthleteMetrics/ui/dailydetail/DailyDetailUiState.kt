@@ -1,5 +1,6 @@
 package com.athletedata.openAthleteMetrics.ui.dailydetail
 
+import com.athletedata.openAthleteMetrics.data.model.BaselineRange
 import com.athletedata.openAthleteMetrics.data.model.QuestionCategory
 import com.athletedata.openAthleteMetrics.data.model.SleepStage
 import com.athletedata.openAthleteMetrics.data.model.UserCategory
@@ -22,7 +23,22 @@ sealed class DailyDetailUiState {
         val contextScores: ContextScores?,
         val activities: List<ActivityUiItem>,
         val rawReadings: RawReadingsForDay,
+        val hrv: HrvSectionState,
     ) : DailyDetailUiState()
+}
+
+sealed class HrvSectionState {
+    data class HasData(
+        val headlineMs: Double,
+        val baseline: BaselineRange?,
+        val rawReadings: List<TimestampedReading>,
+    ) : HrvSectionState()
+
+    data class InsufficientData(
+        val rawReadings: List<TimestampedReading>,
+    ) : HrvSectionState()
+
+    object NoSleepSession : HrvSectionState()
 }
 
 data class TileConfig(val id: String, val isVisible: Boolean, val sortOrder: Int)
@@ -39,10 +55,7 @@ val DEFAULT_TILE_ORDER = listOf(
 data class CardiovascularData(
     val avgHrBpm: Double?,
     val restingHrBpm: Double?,
-    val morningHrvMs: Double?,
-    val avgHrvMs: Double?,
-    val hrvMinMs: Double?,
-    val hrvMaxMs: Double?,
+    val overnightHrvMs: Double?,
     val avgSpo2Pct: Double?,
     val spo2MinPct: Double?,
     val spo2MaxPct: Double?,
@@ -89,7 +102,6 @@ data class ContextScores(
 
 data class RawReadingsForDay(
     val hrReadings: List<TimestampedReading> = emptyList(),
-    val hrvReadings: List<TimestampedReading> = emptyList(),
     val spo2Readings: List<TimestampedReading> = emptyList(),
     val respirationReadings: List<TimestampedReading> = emptyList(),
     val stepsReadings: List<TimestampedReading> = emptyList(),

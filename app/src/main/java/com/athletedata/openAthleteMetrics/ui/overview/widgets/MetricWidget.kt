@@ -97,7 +97,7 @@ class MetricWidgetViewModel @Inject constructor(
 
     private fun valueFor(type: WidgetType, summary: DailySummary?): String? = when (type) {
         WidgetType.Hr    -> summary?.avgHrBpm?.let { "%.0f".format(it) }
-        WidgetType.Hrv   -> summary?.morningHrvMs?.let { "%.0f".format(it) }
+        WidgetType.Hrv   -> summary?.overnightHrvMs?.let { "%.0f".format(it) }
         WidgetType.Rhr   -> summary?.restingHrBpm?.let { "%.0f".format(it) }
         WidgetType.Sleep -> summary?.sleepMinutes?.let { formatWidgetSleep(it) }
         WidgetType.Spo2  -> summary?.avgSpo2Pct?.let { "%.0f".format(it) }
@@ -117,7 +117,7 @@ class MetricWidgetViewModel @Inject constructor(
 
     private fun rawValueFor(type: WidgetType, summary: DailySummary?): Double? = when (type) {
         WidgetType.Hr    -> summary?.avgHrBpm
-        WidgetType.Hrv   -> summary?.morningHrvMs
+        WidgetType.Hrv   -> summary?.overnightHrvMs
         WidgetType.Rhr   -> summary?.restingHrBpm
         WidgetType.Sleep -> summary?.sleepMinutes?.toDouble()
         WidgetType.Spo2  -> summary?.avgSpo2Pct

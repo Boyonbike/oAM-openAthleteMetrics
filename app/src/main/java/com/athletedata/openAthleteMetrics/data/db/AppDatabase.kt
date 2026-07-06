@@ -27,6 +27,13 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *  13 — added widget_layout table for configurable Dashboard widget grid; seeded with default layout
  *  14 — added user_profile table (single-row athlete profile with biometrics and HR zones)
  *  15 — added avg_systolic_mm_hg, avg_diastolic_mm_hg, avg_glucose_mmol_l to daily_summary // BP-GLUCOSE-SUMMARY
+ *  16 — replaced daily_summary.morning_hrv_ms with overnight_hrv_ms (overnight-window HRV
+ *       computed in a later change; old morning values are not reinterpreted)
+ *  17 — added baseline_range table for computed per-metric baseline ranges (mean ± 1 SD
+ *       over a rolling window; see BaselineRepository)
+ *  18 — added baseline_window_config table for per-BaselineMetric overrides of the
+ *       baseline rolling window and minimum-days requirement (window_days/minimum_days
+ *       nullable so either can be overridden independently; see BaselineWindowConfigRepository)
  */
 @Database(
     entities = [
@@ -53,8 +60,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SleepStageEntity::class,
         WidgetLayoutEntity::class,
         UserProfileEntity::class,
+        BaselineEntity::class,
+        BaselineWindowConfigEntity::class,
     ],
-    version = 15,
+    version = 18,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -85,6 +94,10 @@ abstract class AppDatabase : RoomDatabase() {
 
     /** Provides DAO access to the single-row athlete profile table. */
     abstract fun userProfileDao(): UserProfileDao
+
+    abstract fun baselineDao(): BaselineDao
+
+    abstract fun baselineWindowConfigDao(): BaselineWindowConfigDao
 
     companion object {
         const val DATABASE_NAME = "athlete_data.db"
@@ -867,6 +880,109 @@ abstract class AppDatabase : RoomDatabase() {
                         arrayOf(type, size, order)
                     )
                 }
+            }
+        }
+
+        // Replaces morning_hrv_ms with overnight_hrv_ms. SQLite can't DROP COLUMN before
+        // 3.35.5, so this recreates the table via the standard Room drop/recreate pattern.
+        // morning_hrv_ms values are intentionally NOT copied into overnight_hrv_ms — the
+        // two fields have different semantics and old values must not be reinterpreted.
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `daily_summary_new` (
+                        `date`                 TEXT NOT NULL PRIMARY KEY,
+                        `avg_hr_bpm`           REAL,
+                        `resting_hr_bpm`       REAL,
+                        `avg_hrv_ms`           REAL,
+                        `overnight_hrv_ms`     REAL,
+                        `avg_spo2_pct`         REAL,
+                        `steps`                INTEGER,
+                        `sleep_minutes`        INTEGER,
+                        `sleep_deep_minutes`   INTEGER,
+                        `sleep_light_minutes`  INTEGER,
+                        `sleep_rem_minutes`    INTEGER,
+                        `sleep_awake_minutes`  INTEGER,
+                        `skin_temp_avg_c`      REAL,
+                        `skin_temp_min_c`      REAL,
+                        `skin_temp_max_c`      REAL,
+                        `respiration_avg`      REAL,
+                        `hrv_min_ms`           REAL,
+                        `hrv_max_ms`           REAL,
+                        `spo2_min_pct`         REAL,
+                        `spo2_max_pct`         REAL,
+                        `steps_active_minutes` INTEGER,
+                        `total_calories`       REAL,
+                        `active_calories`      REAL,
+                        `computed_by_version`  INTEGER NOT NULL DEFAULT 0,
+                        `source`               TEXT NOT NULL,
+                        `computed_at`          INTEGER NOT NULL,
+                        `avg_systolic_mm_hg`   REAL,
+                        `avg_diastolic_mm_hg`  REAL,
+                        `avg_glucose_mmol_l`   REAL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO `daily_summary_new` (
+                        `date`, `avg_hr_bpm`, `resting_hr_bpm`, `avg_hrv_ms`, `overnight_hrv_ms`,
+                        `avg_spo2_pct`, `steps`, `sleep_minutes`, `sleep_deep_minutes`,
+                        `sleep_light_minutes`, `sleep_rem_minutes`, `sleep_awake_minutes`,
+                        `skin_temp_avg_c`, `skin_temp_min_c`, `skin_temp_max_c`, `respiration_avg`,
+                        `hrv_min_ms`, `hrv_max_ms`, `spo2_min_pct`, `spo2_max_pct`,
+                        `steps_active_minutes`, `total_calories`, `active_calories`,
+                        `computed_by_version`, `source`, `computed_at`,
+                        `avg_systolic_mm_hg`, `avg_diastolic_mm_hg`, `avg_glucose_mmol_l`
+                    )
+                    SELECT
+                        `date`, `avg_hr_bpm`, `resting_hr_bpm`, `avg_hrv_ms`, NULL,
+                        `avg_spo2_pct`, `steps`, `sleep_minutes`, `sleep_deep_minutes`,
+                        `sleep_light_minutes`, `sleep_rem_minutes`, `sleep_awake_minutes`,
+                        `skin_temp_avg_c`, `skin_temp_min_c`, `skin_temp_max_c`, `respiration_avg`,
+                        `hrv_min_ms`, `hrv_max_ms`, `spo2_min_pct`, `spo2_max_pct`,
+                        `steps_active_minutes`, `total_calories`, `active_calories`,
+                        `computed_by_version`, `source`, `computed_at`,
+                        `avg_systolic_mm_hg`, `avg_diastolic_mm_hg`, `avg_glucose_mmol_l`
+                    FROM `daily_summary`
+                    """.trimIndent()
+                )
+                db.execSQL("DROP TABLE `daily_summary`")
+                db.execSQL("ALTER TABLE `daily_summary_new` RENAME TO `daily_summary`")
+            }
+        }
+
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `baseline_range` (
+                        `metric_type`   TEXT NOT NULL PRIMARY KEY,
+                        `mean`          REAL NOT NULL,
+                        `std_dev`       REAL NOT NULL,
+                        `lower`         REAL NOT NULL,
+                        `upper`         REAL NOT NULL,
+                        `window_days`   INTEGER NOT NULL,
+                        `calculated_at` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
+        val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `baseline_window_config` (
+                        `metric_type`  TEXT NOT NULL PRIMARY KEY,
+                        `window_days`  INTEGER,
+                        `minimum_days` INTEGER,
+                        `updated_at`   INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
             }
         }
     }

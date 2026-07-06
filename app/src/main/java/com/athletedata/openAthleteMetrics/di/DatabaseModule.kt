@@ -5,6 +5,8 @@ import androidx.room.Room
 import com.athletedata.openAthleteMetrics.data.db.ActiveCalorieReadingDao
 import com.athletedata.openAthleteMetrics.data.db.ActivityDao
 import com.athletedata.openAthleteMetrics.data.db.AppDatabase
+import com.athletedata.openAthleteMetrics.data.db.BaselineDao
+import com.athletedata.openAthleteMetrics.data.db.BaselineWindowConfigDao
 import com.athletedata.openAthleteMetrics.data.db.BloodPressureReadingDao
 import com.athletedata.openAthleteMetrics.data.db.DailyContextDao
 import com.athletedata.openAthleteMetrics.data.db.DailySummaryDao
@@ -26,6 +28,8 @@ import com.athletedata.openAthleteMetrics.data.db.SyncSessionDao
 import com.athletedata.openAthleteMetrics.data.db.TotalCalorieReadingDao
 import com.athletedata.openAthleteMetrics.data.repository.ActiveCalorieReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.ActivityRepository
+import com.athletedata.openAthleteMetrics.data.repository.BaselineRepository
+import com.athletedata.openAthleteMetrics.data.repository.BaselineWindowConfigRepository
 import com.athletedata.openAthleteMetrics.data.repository.BloodPressureReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailyContextRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailySummaryRepository
@@ -39,6 +43,8 @@ import com.athletedata.openAthleteMetrics.data.repository.RawDeviceDataRepositor
 import com.athletedata.openAthleteMetrics.data.repository.RespirationReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.RoomActiveCalorieReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.RoomActivityRepository
+import com.athletedata.openAthleteMetrics.data.repository.RoomBaselineRepository
+import com.athletedata.openAthleteMetrics.data.repository.RoomBaselineWindowConfigRepository
 import com.athletedata.openAthleteMetrics.data.repository.RoomBloodPressureReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.RoomDailyContextRepository
 import com.athletedata.openAthleteMetrics.data.repository.RoomDailySummaryRepository
@@ -150,6 +156,12 @@ abstract class DatabaseModule {
     @Binds @Singleton
     abstract fun bindUserProfileRepository(impl: RoomUserProfileRepository): UserProfileRepository
 
+    @Binds @Singleton
+    abstract fun bindBaselineRepository(impl: RoomBaselineRepository): BaselineRepository
+
+    @Binds @Singleton
+    abstract fun bindBaselineWindowConfigRepository(impl: RoomBaselineWindowConfigRepository): BaselineWindowConfigRepository
+
     companion object {
 
         // ── Database & DAO providers ──────────────────────────────────────────
@@ -177,6 +189,9 @@ abstract class DatabaseModule {
                 AppDatabase.MIGRATION_12_13,
                 AppDatabase.MIGRATION_13_14,
                 AppDatabase.MIGRATION_14_15, // BP-GLUCOSE-SUMMARY
+                AppDatabase.MIGRATION_15_16,
+                AppDatabase.MIGRATION_16_17,
+                AppDatabase.MIGRATION_17_18,
             )
             .build()
 
@@ -250,5 +265,11 @@ abstract class DatabaseModule {
 
         @Provides @Singleton
         fun provideUserProfileDao(db: AppDatabase): UserProfileDao = db.userProfileDao()
+
+        @Provides @Singleton
+        fun provideBaselineDao(db: AppDatabase): BaselineDao = db.baselineDao()
+
+        @Provides @Singleton
+        fun provideBaselineWindowConfigDao(db: AppDatabase): BaselineWindowConfigDao = db.baselineWindowConfigDao()
     }
 }

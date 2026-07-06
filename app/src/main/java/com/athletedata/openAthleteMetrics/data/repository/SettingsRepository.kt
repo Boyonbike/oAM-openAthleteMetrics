@@ -32,4 +32,10 @@ interface SettingsRepository {
 
     /** Persist the full tile config list. */
     suspend fun setDailyDetailTileConfig(configs: List<TileConfig>)
+
+    /** Global rolling window (days) used for automatic baseline range calculation; 30 or 90. Defaults to 30. */
+    fun getBaselineWindowDays(): Flow<Int>
+
+    /** Persists the baseline window choice. */
+    suspend fun setBaselineWindowDays(days: Int)
 }

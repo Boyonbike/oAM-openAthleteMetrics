@@ -1612,6 +1612,30 @@ pacing: it fires as soon as the sentinel arrives rather than after a fixed wall-
 | `awaitEndOfStream.endByte.offset` | integer | yes | — | Zero-based byte index in the notification payload |
 | `awaitEndOfStream.endByte.value` | integer | yes | — | Expected value at that offset (decimal or `0x` hex) |
 | `awaitEndOfStream.timeoutMs` | long | no | `30000` | Milliseconds to wait before advancing regardless |
+| `awaitEndOfStream.strategy` | string | no | — | Selects a detection technique other than the fixed-offset-byte check (see below) |
+| `awaitEndOfStream.params` | object | no | — | Strategy-specific parameters (shape depends on `strategy`) |
+
+If `strategy` is omitted, behavior is identical to the description above — this is the
+default. `endByte` is only required when relying on this default (or explicitly setting
+`strategy` to `"FIXED_OFFSET_BYTE"`); other strategies ignore it.
+
+#### Alternative strategies
+
+Real devices signal stream completion in different ways. Set `strategy` to one of the
+following, with a matching `params` object, instead of the default offset/value check:
+
+| `strategy` | `params` | Behavior |
+|---|---|---|
+| `"FIXED_OFFSET_BYTE"` | — (uses `endByte`) | Same as omitting `strategy`; explicit form. |
+| `"SENTINEL_PACKET"` | `{"terminatorByte": int, "matchOpcode": bool}` | Completes on a standalone short sentinel packet, not a byte inside a normal data packet. `matchOpcode: true` requires the sentinel to be `[echoedOpcode, terminatorByte]`; `false` requires it to be a single `terminatorByte` byte. |
+| `"IN_STREAM_TERMINATOR"` | `{"terminatorBytes": "0xAA 0xBB"}` **or** `{"matchOpcode": bool, "terminatorSuffix": "0xBB"}` | Completes when a notification's trailing bytes equal a terminator sequence. Static form: the tail must equal the literal `terminatorBytes` hex string. `matchOpcode: true` form: the tail must equal `[echoedOpcode] + terminatorSuffix`, where `echoedOpcode` is the write's own first byte — lets one shared `params` block serve every command that shares the same trailing-terminator shape without a literal opcode baked into each command's JSON. |
+| `"RECORD_COUNT"` | `{"source": "fixed", "count": int}` | Completes after `count` notifications on the armed characteristic. (`"source": "fromField"` is schema-recognized but not yet supported — falls back to timeout-only.) |
+| `"EXPLICIT_EVENT"` | `{"eventOpcode": int, "characteristicUuid": string (optional)}` | Completes when a notification's first byte equals `eventOpcode`. `characteristicUuid` is accepted but not currently enforced — `BleEngine` still only ever listens on the single characteristic named in `awaitEndOfStream.characteristic`. |
+| `"QUIET_PERIOD"` | `{"quietMs": long}` | Completes after `quietMs` of silence since the last notification, with no explicit terminal signal required. |
+| `"CUSTOM"` | `{"wasmExport": string}` | Delegates the decision to a driver-exported WASM function, for signaling that doesn't fit any strategy above. See [Custom](#example-3--driver-supplied-predicate-custom) below. |
+
+An unrecognized `strategy` value falls back to relying solely on `timeoutMs` (a warning
+is logged) — it is never guessed as a different strategy.
 
 ```json
 {
@@ -1635,7 +1659,9 @@ pacing: it fires as soon as the sentinel arrives rather than after a fixed wall-
   and advances to the next command anyway. Sync is never aborted due to a timeout.
 - **Pass-through guarantee:** the matched packet still flows to the normal notification
   channel and will be parsed by `parseMetrics` / `parseSleep` as usual. `awaitEndOfStream`
-  does not consume the packet.
+  does not consume the packet. **Exception:** `"SENTINEL_PACKET"`'s matched packet is a
+  standalone protocol-control signal, not a data record, and is excluded from the
+  notification channel — it never reaches reassembly, `sessionCache`, or `parseSession`.
 - **Mutual exclusion:** `awaitEndOfStream` and `awaitReply` are mutually exclusive on a
   single Write command. If both are present, `awaitEndOfStream` takes precedence.
 
@@ -1676,9 +1702,11 @@ The device echoes the opcode in byte[0] of a single notification.
 The engine waits for a packet where `byte[0] == 0x01`, then advances immediately. No
 terminal sentinel is required — one matching packet is enough.
 
-#### Example 2 — data request with multi-packet stream (opcode `0x55`)
+#### Example 2 — data request with multi-packet stream (Hume Band GetHR, opcode `0x55`)
 
-The device sends multiple data packets; the final packet has `0xFF` at `byte[1]`.
+The device sends multiple data packets; the *last* data-bearing notification's final
+two bytes are the terminator `[echoedOpcode, 0xFF]` — there is no standalone sentinel
+packet distinct from the data itself.
 
 ```json
 {
@@ -1687,14 +1715,77 @@ The device sends multiple data packets; the final packet has `0xFF` at `byte[1]`
   "bytes": "0x55 0x00",
   "awaitEndOfStream": {
     "characteristic": "notify",
-    "endByte": { "offset": 1, "value": 255 },
+    "strategy": "IN_STREAM_TERMINATOR",
+    "params": { "matchOpcode": true, "terminatorSuffix": "0xFF" },
     "timeoutMs": 30000
   }
 }
 ```
 
-The engine waits for a packet where `byte[1] == 0xFF`. All prior packets in the stream
-flow through to `parseMetrics` / `parseSleep` normally.
+The engine waits for a notification whose *trailing* two bytes equal `[0x55, 0xFF]`
+(`matchOpcode: true` echoes the write's own opcode) — matching regardless of how much
+real payload precedes them in that same notification. Every notification in the
+stream, including the one that completes it, flows through to `parseMetrics` /
+`parseSleep` normally: unlike `SENTINEL_PACKET`, `IN_STREAM_TERMINATOR` has no
+pass-through exception (see Behaviour above). Because the opcode is derived
+dynamically from the write's own first byte rather than baked into `params`, this
+same `params` block is reused unchanged across all of Hume Band's six fetch commands
+(`0x55`, `0x52`, `0x53`, `0x66`, `0x56`, `0x65`) — none of them copy-paste a literal
+opcode into their JSON.
+
+#### Example 3 — driver-supplied predicate (`CUSTOM`)
+
+For signaling that doesn't fit any strategy above, the driver can export its own predicate
+function and have the engine call it once per notification.
+
+```json
+{
+  "type": "WRITE",
+  "characteristic": "write",
+  "bytes": "0x77 0x00",
+  "awaitEndOfStream": {
+    "characteristic": "notify",
+    "strategy": "CUSTOM",
+    "params": { "wasmExport": "isStreamDone" },
+    "timeoutMs": 30000
+  }
+}
+```
+
+The named export must implement this ABI:
+
+```
+(func (export "isStreamDone") (param $ptr i32) (param $len i32) (param $opcode i32) (param $elapsedMs i32) (result i32))
+```
+
+- `$ptr`/`$len` point to a scratch region of the module's own linear memory where the engine
+  has just written the raw bytes of the notification that arrived.
+- `$opcode` is byte[0] of the write that armed this command (0 if the write was empty).
+- `$elapsedMs` is time since the write was sent.
+- Return `1` to signal the stream has ended, any other value to keep waiting.
+
+**Pass-through note:** unlike `SENTINEL_PACKET`, `CUSTOM`'s completing notification is *not*
+excluded from the data path — it still flows to `parseSession`/`parseMetrics` like any other
+notification (see the Pass-through guarantee above). If your predicate's completing packet is
+a standalone control/signal packet rather than a real data record, give it a shape the parser
+will not recognize as valid data, so it degrades safely to "no reading" instead of a phantom
+one:
+
+- an opcode byte the driver's parser doesn't route (no matching `do_*`/handler), or
+- a length shorter than that opcode's minimum safe record length.
+
+`hume_band.wat`'s opcode handlers all bounds-check their reads against the decoded frame's
+actual length and bail out without emitting a reading if it's too short (see the memory-safety
+notes near `$b64_decode` and `$parseSession` in `hume_band.wat`) — so a short completing packet
+is safe there today. This guarantee is specific to `hume_band.wat`'s current implementation; a
+different driver's WASM module must implement equivalent length-checking itself for this same
+pattern to be safe for it.
+
+The export runs under a short (tens-of-milliseconds) execution-time budget enforced
+independently of `timeoutMs` — a predicate that traps, throws, is missing, or runs long is
+logged and treated as "still waiting" rather than crashing the sync or hanging past
+`timeoutMs`. Keep the predicate's real work (inspecting a few header bytes) far under that
+budget; it is not a place to do general parsing.
 
 ---
 
@@ -1713,6 +1804,7 @@ is rejected entirely with an error message shown to the user.
 | `parsing.wasmBase64` | Must decode to a valid WASM binary (magic header check: first 4 bytes must be `0x00 0x61 0x73 0x6D`) |
 | `exports.parseMetrics` | Must not be blank |
 | `specVersion` | Only `"1"`, `"2"`, and `"3"` produce defined behaviour. Other values fall back silently to spec v1 layout. No rejection. |
+| `awaitEndOfStream` `CUSTOM` strategy | Any statically-declared `syncCommands` entry using `"strategy": "CUSTOM"` must name a `wasmExport` that the WASM module actually exports. Only covers static `syncCommands` — a `CUSTOM` command returned by `buildSyncCommands` at runtime isn't declared in the manifest and can't be checked here. |
 
 > **Advisory (not enforced by the validator):** At least one of `matchByName` or
 > `matchByServiceUuid` should be present so the scanner can identify candidate

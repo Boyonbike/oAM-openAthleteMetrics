@@ -15,10 +15,13 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.Build
 import android.os.ParcelUuid
+import android.os.SystemClock
 import androidx.annotation.RequiresApi
 import androidx.work.WorkManager
 import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
-import com.athletedata.openAthleteMetrics.ble.wasm.SessionFrame // CHANGED
+import com.athletedata.openAthleteMetrics.ble.driver.EndOfStreamStrategy
+import com.athletedata.openAthleteMetrics.ble.driver.EndOfStreamStrategyFactory
+import com.athletedata.openAthleteMetrics.ble.wasm.SessionFrame
 import com.athletedata.openAthleteMetrics.ble.wasm.WasmParseResult
 import com.athletedata.openAthleteMetrics.ble.driver.ParsingConfig
 import com.athletedata.openAthleteMetrics.ble.driver.CaloriesMode // CALORIES-MODE
@@ -49,11 +52,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.withContext
@@ -77,7 +82,7 @@ data class DiscoveredCandidate(
 class BleEngine @Inject constructor(
     @param:ApplicationContext val context: Context,
     private val driverRegistry: DriverRegistry,
-    private val syncContextFactory: SyncContextFactory, // CHANGED
+    private val syncContextFactory: SyncContextFactory,
     private val syncProcessor: DeviceSyncProcessor,
     private val validator: SyncValidator,
     private val deviceRepository: DeviceRepository,
@@ -137,27 +142,28 @@ class BleEngine @Inject constructor(
     @Volatile private var gattCacheRefreshAttempted = false
     @Volatile private var silentSyncTimeoutJob: Job? = null
 
-    // CHANGED: per-command await-reply state. Written on Main (executeNextSyncCommand),
+    // per-command await-reply state. Written on Main (executeNextSyncCommand),
     // read on the BLE callback thread (onCharacteristicChanged). @Volatile for visibility;
     // CompletableDeferred.complete() is thread-safe so no lock is needed.
     @Volatile private var awaitReplyDeferred: CompletableDeferred<Unit>? = null
     @Volatile private var awaitReplyCharUuid: String? = null
     @Volatile private var awaitReplyTimeoutMs: Long = 5000L
 
-    // ADDED: per-command await-end-of-stream state, parallel to awaitReply fields.
+    // per-command await-end-of-stream state, parallel to awaitReply fields.
     // Armed before writeCharacteristic(); checked in onCharacteristicChanged on callback thread.
     @Volatile private var awaitEndOfStreamDeferred: CompletableDeferred<Unit>? = null
     @Volatile private var awaitEndOfStreamCharUuid: String? = null
-    @Volatile private var awaitEndOfStreamOffset: Int = 0
-    @Volatile private var awaitEndOfStreamValue: Int = 0
+    // Pluggable end-of-stream detection strategy.
+    @Volatile private var awaitEndOfStreamStrategy: EndOfStreamStrategy? = null
+    @Volatile private var awaitEndOfStreamArmedAtMs: Long = 0L
     @Volatile private var awaitEndOfStreamTimeoutMs: Long = 30_000L
 
-    // CHANGED: session-scoped frame buffer; cleared at fresh sync start, parsed post-disconnect.
-    private val sessionCache = mutableListOf<SessionFrame>() // CHANGED
-    // CHANGED: set when awaitEndOfStream deferred completes; triggers close-then-parse path.
-    @Volatile private var endOfStreamReceived = false // CHANGED
-    // CHANGED: set before intentional post-stream GATT close; suppresses scheduleRetry().
-    @Volatile private var postStreamDisconnecting = false // CHANGED
+    // session-scoped frame buffer; cleared at fresh sync start, parsed post-disconnect.
+    private val sessionCache = mutableListOf<SessionFrame>()
+    // set when awaitEndOfStream deferred completes; triggers close-then-parse path.
+    @Volatile private var endOfStreamReceived = false
+    // set before intentional post-stream GATT close; suppresses scheduleRetry().
+    @Volatile private var postStreamDisconnecting = false
 
     private var activeGatt: BluetoothGatt? = null
     private var bleScanner: android.bluetooth.le.BluetoothLeScanner? = null
@@ -382,14 +388,14 @@ class BleEngine @Inject constructor(
         // Full packet assembled — buffer for post-stream parse and reset this characteristic's buffer.
         reassemblyBuffers[characteristicUuid] = ByteArray(0)
 
-        // CHANGED: append assembled frame to session cache for post-disconnect parseSession call.
-        if (accumulated.isNotEmpty()) { // CHANGED
-            val opcode = "0x%02X".format(accumulated[0]) // CHANGED
-            val charRole = resolveCharacteristicRole(characteristicUuid) // CHANGED
-            synchronized(sessionCache) { // CHANGED
-                sessionCache.add(SessionFrame(charRole, opcode, accumulated.copyOf())) // CHANGED
-            } // CHANGED
-        } // CHANGED
+        // append assembled frame to session cache for post-disconnect parseSession call.
+        if (accumulated.isNotEmpty()) {
+            val opcode = "0x%02X".format(accumulated[0])
+            val charRole = resolveCharacteristicRole(characteristicUuid)
+            synchronized(sessionCache) {
+                sessionCache.add(SessionFrame(charRole, opcode, accumulated.copyOf()))
+            }
+        }
 
         // Lazily create the session row on the first assembled packet (already on Dispatchers.IO).
         if (currentSyncSessionId == null) {
@@ -588,7 +594,7 @@ class BleEngine @Inject constructor(
             synchronized(pendingMetrics) { pendingMetrics.clear() }
             synchronized(pendingSleep) { pendingSleep.clear(); seenSleepStartMs.clear() }
             synchronized(pendingActivities) { pendingActivities.clear() }
-            synchronized(sessionCache) { sessionCache.clear() } // CHANGED
+            synchronized(sessionCache) { sessionCache.clear() }
             currentSyncSessionId = null
             packetCount = 0
             isQuiescent = false
@@ -606,7 +612,7 @@ class BleEngine @Inject constructor(
         effectiveSyncCommands = emptyList()
         inSyncCommandNotify = false
         userDisconnecting = false
-        Timber.tag(TAG).d("[CONN] connecting address=%s driver=%s retry=%d", device.address, manifest.id, retryCount) // ADDED
+        Timber.tag(TAG).d("[CONN] connecting address=%s driver=%s retry=%d", device.address, manifest.id, retryCount)
         _connectionState.value = BleConnectionState.Connecting(device.address)
         activeGatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
     }
@@ -620,31 +626,31 @@ class BleEngine @Inject constructor(
                     newState == BluetoothProfile.STATE_CONNECTED &&
                             status == BluetoothGatt.GATT_SUCCESS -> {
                         Timber.d("BleEngine: connected, requesting MTU $MTU_REQUEST")
-                        Timber.tag(TAG).d("[CONN] connected address=%s requesting MTU %d", gatt.device.address, MTU_REQUEST) // ADDED
+                        Timber.tag(TAG).d("[CONN] connected address=%s requesting MTU %d", gatt.device.address, MTU_REQUEST)
                         gatt.requestMtu(MTU_REQUEST)
                     }
                     newState == BluetoothProfile.STATE_DISCONNECTED && userDisconnecting -> {
                         Timber.d("BleEngine: user-initiated disconnect complete")
-                        Timber.tag(TAG).d("[CONN] disconnected address=%s user-initiated", gatt.device.address) // ADDED
+                        Timber.tag(TAG).d("[CONN] disconnected address=%s user-initiated", gatt.device.address)
                         closeGatt()
                         activeManifest = null
                         activeDeviceAddress = null
                         _connectionState.value = BleConnectionState.Idle
                     }
-                    // CHANGED: intentional post-stream disconnect — parse is in progress, skip retry.
-                    newState == BluetoothProfile.STATE_DISCONNECTED && postStreamDisconnecting -> { // CHANGED
-                        Timber.tag(TAG).d("[CONN] post-stream disconnect — parse in progress, no retry") // CHANGED
-                        closeGatt() // no-op: activeGatt already null // CHANGED
-                    } // CHANGED
+                    // intentional post-stream disconnect — parse is in progress, skip retry.
+                    newState == BluetoothProfile.STATE_DISCONNECTED && postStreamDisconnecting -> {
+                        Timber.tag(TAG).d("[CONN] post-stream disconnect — parse in progress, no retry")
+                        closeGatt() // no-op: activeGatt already null
+                    }
                     newState == BluetoothProfile.STATE_DISCONNECTED -> {
                         Timber.w("BleEngine: unexpected disconnect, scheduling retry")
-                        Timber.tag(TAG).d("[CONN] unexpected disconnect address=%s retryCount=%d", gatt.device.address, retryCount) // ADDED
+                        Timber.tag(TAG).d("[CONN] unexpected disconnect address=%s retryCount=%d", gatt.device.address, retryCount)
                         closeGatt()
                         scheduleRetry()
                     }
                     else -> {
                         Timber.e("BleEngine: GATT error status=$status newState=$newState")
-                        Timber.tag(TAG).d("[CONN] GATT error status=%d newState=%d", status, newState) // ADDED
+                        Timber.tag(TAG).d("[CONN] GATT error status=%d newState=%d", status, newState)
                         closeGatt()
                         scheduleRetry()
                     }
@@ -659,7 +665,7 @@ class BleEngine @Inject constructor(
                 } else {
                     negotiatedMtu = mtu
                     Timber.i("MTU negotiated: $mtu bytes")
-                    Timber.tag(TAG).d("[CONN] MTU=%d discovering services", mtu) // ADDED
+                    Timber.tag(TAG).d("[CONN] MTU=%d discovering services", mtu)
                 }
                 gatt.discoverServices()
             }
@@ -675,7 +681,7 @@ class BleEngine @Inject constructor(
                 }
                 val manifest = activeManifest ?: return@launch
                 Timber.d("BleEngine: services discovered, enabling notifications")
-                Timber.tag(TAG).d("[CONN] services discovered count=%d", gatt.services.size) // ADDED
+                Timber.tag(TAG).d("[CONN] services discovered count=%d", gatt.services.size)
                 notifySetupQueue.clear()
                 manifest.ble.characteristics.values.forEach { uuid ->
                     val char = findCharacteristic(uuid)
@@ -711,7 +717,7 @@ class BleEngine @Inject constructor(
                         executeNextSyncCommand()
                     }
                     else -> {
-                        Timber.tag(TAG).d("[CONN] all notifications enabled, starting sync commands") // ADDED
+                        Timber.tag(TAG).d("[CONN] all notifications enabled, starting sync commands")
                         beginSyncCommandExecution()
                     }
                 }
@@ -727,20 +733,38 @@ class BleEngine @Inject constructor(
                 val bytes = characteristic.value?.clone() ?: return
                 val uuidStr = characteristic.uuid.toString() // DPT: moved up
                 Timber.tag(TAG).d("[STAGE-1 RAW-PACKET] char=%s len=%d bytes=%s", uuidStr.take(8), bytes.size, bytes.toDptHexString()) // DPT
-                if (bytes.isNotEmpty()) Timber.tag(TAG).d("opcode=0x%02X len=%d bytes=%s", bytes[0], bytes.size, bytes.toHexString()) // ADDED
-                // CHANGED: unblock any pending awaitReply wait on this characteristic.
+                if (bytes.isNotEmpty()) Timber.tag(TAG).d("opcode=0x%02X len=%d bytes=%s", bytes[0], bytes.size, bytes.toHexString())
+                // unblock any pending awaitReply wait on this characteristic.
                 // Notification still flows to the channel — pass-through is preserved.
                 if (awaitReplyCharUuid.equals(uuidStr, ignoreCase = true)) awaitReplyDeferred?.complete(Unit)
-                // ADDED: complete awaitEndOfStream deferred if this notification satisfies the end-byte condition.
+                // Consults the armed EndOfStreamStrategy to detect the terminal packet.
+                var isSentinelTermination = false
+                var isStaleEndOfStreamNotification = false
                 if (awaitEndOfStreamCharUuid.equals(uuidStr, ignoreCase = true)) {
-                    val off = awaitEndOfStreamOffset
-                    val expected = awaitEndOfStreamValue
-                    if (bytes.size > off && (bytes[off].toInt() and 0xFF) == expected) {
-                        awaitEndOfStreamDeferred?.complete(Unit)
+                    val strategy = awaitEndOfStreamStrategy
+                    if (strategy != null) {
+                        val elapsedMs = SystemClock.elapsedRealtime() - awaitEndOfStreamArmedAtMs
+                        if (strategy.onNotification(bytes, elapsedMs)) {
+                            awaitEndOfStreamDeferred?.complete(Unit)
+                            // SentinelPacket's terminator is a standalone protocol-control
+                            // packet, not a data record — exclude it from reassembly/sessionCache/
+                            // parseSession input. Other strategies' matched packet still passes
+                            // through (documented in DRIVER_AUTHORING_GUIDE.md).
+                            isSentinelTermination = strategy is EndOfStreamStrategy.SentinelPacket
+                        }
+                    } else {
+                        // charUuid matched but nothing is currently armed — a stray/duplicate
+                        // notification arriving in the gap between one command's stream resolving
+                        // and the next command (if any) arming its own awaitEndOfStream. Drop it
+                        // instead of silently forwarding it as if it were ordinary session data.
+                        Timber.w("BleEngine: stray notification on $uuidStr with no command currently awaiting end-of-stream — dropping")
+                        isStaleEndOfStreamNotification = true
                     }
                 }
-                val result = notificationChannel.trySend(Pair(uuidStr, bytes))
-                if (result.isFailure) Timber.w("BleEngine: notification channel full — BLE packet dropped")
+                if (!isSentinelTermination && !isStaleEndOfStreamNotification) {
+                    val result = notificationChannel.trySend(Pair(uuidStr, bytes))
+                    if (result.isFailure) Timber.w("BleEngine: notification channel full — BLE packet dropped")
+                }
             }
         }
 
@@ -750,22 +774,40 @@ class BleEngine @Inject constructor(
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray,
         ) {
-            val cloned = value.clone() // ADDED
+            val cloned = value.clone()
             val uuidStr = characteristic.uuid.toString() // DPT: moved up
             Timber.tag(TAG).d("[STAGE-1 RAW-PACKET] char=%s len=%d bytes=%s", uuidStr.take(8), cloned.size, cloned.toDptHexString()) // DPT
-            if (cloned.isNotEmpty()) Timber.tag(TAG).d("opcode=0x%02X len=%d bytes=%s", cloned[0], cloned.size, cloned.toHexString()) // ADDED
-            // CHANGED: unblock any pending awaitReply wait on this characteristic.
+            if (cloned.isNotEmpty()) Timber.tag(TAG).d("opcode=0x%02X len=%d bytes=%s", cloned[0], cloned.size, cloned.toHexString())
+            // unblock any pending awaitReply wait on this characteristic.
             if (awaitReplyCharUuid.equals(uuidStr, ignoreCase = true)) awaitReplyDeferred?.complete(Unit)
-            // ADDED: complete awaitEndOfStream deferred if this notification satisfies the end-byte condition.
+            // Consults the armed EndOfStreamStrategy to detect the terminal packet.
+            var isSentinelTermination = false
+            var isStaleEndOfStreamNotification = false
             if (awaitEndOfStreamCharUuid.equals(uuidStr, ignoreCase = true)) {
-                val off = awaitEndOfStreamOffset
-                val expected = awaitEndOfStreamValue
-                if (cloned.size > off && (cloned[off].toInt() and 0xFF) == expected) {
-                    awaitEndOfStreamDeferred?.complete(Unit)
+                val strategy = awaitEndOfStreamStrategy
+                if (strategy != null) {
+                    val elapsedMs = SystemClock.elapsedRealtime() - awaitEndOfStreamArmedAtMs
+                    if (strategy.onNotification(cloned, elapsedMs)) {
+                        awaitEndOfStreamDeferred?.complete(Unit)
+                        // SentinelPacket's terminator is a standalone protocol-control
+                        // packet, not a data record — exclude it from reassembly/sessionCache/
+                        // parseSession input. Other strategies' matched packet still passes
+                        // through (documented in DRIVER_AUTHORING_GUIDE.md).
+                        isSentinelTermination = strategy is EndOfStreamStrategy.SentinelPacket
+                    }
+                } else {
+                    // charUuid matched but nothing is currently armed — a stray/duplicate
+                    // notification arriving in the gap between one command's stream resolving and
+                    // the next command (if any) arming its own awaitEndOfStream. Drop it instead of
+                    // silently forwarding it as if it were ordinary session data.
+                    Timber.w("BleEngine: stray notification on $uuidStr with no command currently awaiting end-of-stream — dropping")
+                    isStaleEndOfStreamNotification = true
                 }
             }
-            val result = notificationChannel.trySend(Pair(uuidStr, cloned))
-            if (result.isFailure) Timber.w("BleEngine: notification channel full — BLE packet dropped")
+            if (!isSentinelTermination && !isStaleEndOfStreamNotification) {
+                val result = notificationChannel.trySend(Pair(uuidStr, cloned))
+                if (result.isFailure) Timber.w("BleEngine: notification channel full — BLE packet dropped")
+            }
         }
 
         override fun onCharacteristicWrite(
@@ -782,9 +824,9 @@ class BleEngine @Inject constructor(
                     scheduleRetry()
                     return@launch
                 }
-                // CHANGED: three-way branch — awaitReply, awaitEndOfStream, or immediate advance.
+                // three-way branch — awaitReply, awaitEndOfStream, or immediate advance.
                 val arDeferred  = awaitReplyDeferred
-                val aesDeferred = awaitEndOfStreamDeferred  // ADDED
+                val aesDeferred = awaitEndOfStreamDeferred
                 when {
                     arDeferred != null -> {
                         // Existing awaitReply logic — completely unchanged.
@@ -805,22 +847,45 @@ class BleEngine @Inject constructor(
                             }
                         }
                     }
-                    // ADDED: awaitEndOfStream path — hold until terminal byte arrives or timeout elapses.
+                    // awaitEndOfStream path — hold until the armed strategy signals completion or timeout elapses.
                     aesDeferred != null -> {
                         val charUuid  = awaitEndOfStreamCharUuid
                         val timeoutMs = awaitEndOfStreamTimeoutMs
+                        val strategy  = awaitEndOfStreamStrategy
                         scope.launch {
-                            val received = withTimeoutOrNull(timeoutMs) { aesDeferred.await() }
+                            val received = withTimeoutOrNull(timeoutMs) {
+                                coroutineScope { // races the deferred against a QuietPeriod poll loop, if armed
+                                    if (strategy is EndOfStreamStrategy.QuietPeriod) {
+                                        launch {
+                                            val pollMs = (strategy.quietMs / 4).coerceAtLeast(100L)
+                                            while (isActive) {
+                                                delay(pollMs.milliseconds)
+                                                val elapsed = SystemClock.elapsedRealtime() - awaitEndOfStreamArmedAtMs
+                                                if (strategy.isQuietNowMs(elapsed)) {
+                                                    aesDeferred.complete(Unit)
+                                                    break
+                                                }
+                                            }
+                                        }
+                                    }
+                                    aesDeferred.await()
+                                }
+                            }
                             if (received == null) {
                                 Timber.w("BleEngine: awaitEndOfStream timed out on $charUuid — continuing")
                             }
                             // Guard: skip advancement if closeGatt() reset the fields during the wait.
                             if (awaitEndOfStreamDeferred === aesDeferred) {
                                 awaitEndOfStreamDeferred  = null
-                                awaitEndOfStreamCharUuid  = null
-                                awaitEndOfStreamOffset    = 0
-                                awaitEndOfStreamValue     = 0
-                                endOfStreamReceived = true // CHANGED: triggers close-then-parse in executeNextSyncCommand
+                                // deliberately NOT nulling awaitEndOfStreamCharUuid here
+                                // (kept sticky across resolution) so a stray/duplicate notification
+                                // arriving before the next command arms still hits the charUuid-match
+                                // check in onCharacteristicChanged instead of skipping it entirely.
+                                // awaitEndOfStreamStrategy == null (still cleared below) is what now
+                                // signals "nothing currently armed" there.
+                                awaitEndOfStreamStrategy  = null
+                                awaitEndOfStreamArmedAtMs = 0L
+                                endOfStreamReceived = true // triggers close-then-parse in executeNextSyncCommand
                                 commandIndex++
                                 executeNextSyncCommand()
                             }
@@ -871,25 +936,25 @@ class BleEngine @Inject constructor(
     // Sync command execution
     // -------------------------------------------------------------------------
 
-    // CHANGED: when buildSyncCommands is exported, WASM owns the full sequence.
+    // when buildSyncCommands is exported, WASM owns the full sequence.
     private suspend fun beginSyncCommandExecution() {
         val manifest = activeManifest ?: return
-        val wasm = manifest.parsing as? ParsingConfig.WasmParsing                   // CHANGED
-        val hasBuildSyncCommands = wasm?.exports?.buildSyncCommands != null         // CHANGED
+        val wasm = manifest.parsing as? ParsingConfig.WasmParsing
+        val hasBuildSyncCommands = wasm?.exports?.buildSyncCommands != null
         Timber.tag(TAG).d("[SYNC] beginSyncCommandExecution: driver=%s hasBuildSyncCommands=%b exportName=%s",
             manifest.id, hasBuildSyncCommands, wasm?.exports?.buildSyncCommands)
-        effectiveSyncCommands = if (hasBuildSyncCommands) {                         // CHANGED
-            val cmds = resolveContextCommands(manifest)    // CHANGED: WASM output is the complete sequence
+        effectiveSyncCommands = if (hasBuildSyncCommands) {
+            val cmds = resolveContextCommands(manifest)    // WASM output is the complete sequence
             Timber.tag(TAG).d("[SYNC] resolveContextCommands returned %d commands", cmds.size)
             cmds
         } else {
-            manifest.syncCommands               // CHANGED: static list, used as-is
+            manifest.syncCommands               // static list, used as-is
         }
         Timber.tag(TAG).d("[SYNC] effectiveSyncCommands count=%d", effectiveSyncCommands.size)
         executeNextSyncCommand()
     }
 
-    // CHANGED: reads syncRequirements, builds the appropriate SyncContext (with or without a
+    // reads syncRequirements, builds the appropriate SyncContext (with or without a
     // DB fetch), and calls the driver's buildSyncCommands WASM export. Returns emptyList when
     // the export is absent or SyncContextFactory throws — the connection is never aborted.
     private suspend fun resolveContextCommands(
@@ -915,7 +980,7 @@ class BleEngine @Inject constructor(
         return driverRegistry.buildSyncCommands(manifest, syncContext)
     }
 
-    // CHANGED: constructs a time-only SyncContext without hitting the DB.
+    // constructs a time-only SyncContext without hitting the DB.
     private fun buildMinimalContext(): SyncContext {
         val epochMs = System.currentTimeMillis()
         val instant = Instant.ofEpochMilli(epochMs)
@@ -938,17 +1003,17 @@ class BleEngine @Inject constructor(
     private fun executeNextSyncCommand() {
         val manifest = activeManifest ?: return
         val address = activeDeviceAddress ?: return
-        val commands = effectiveSyncCommands  // CHANGED: effectiveSyncCommands is always set correctly by beginSyncCommandExecution
+        val commands = effectiveSyncCommands  // effectiveSyncCommands is always set correctly by beginSyncCommandExecution
 
         if (commandIndex >= commands.size) {
             Timber.d("BleEngine: sync commands done, device ready")
-            Timber.tag(TAG).d("[SYNC] all %d commands complete endOfStreamReceived=%b", commands.size, endOfStreamReceived) // CHANGED
-            // CHANGED: if awaitEndOfStream fired, close GATT immediately and parse the buffered
+            Timber.tag(TAG).d("[SYNC] all %d commands complete endOfStreamReceived=%b", commands.size, endOfStreamReceived)
+            // if awaitEndOfStream fired, close GATT immediately and parse the buffered
             // session. Otherwise fall through to the Connected + quiescence path (non-EOS drivers).
-            if (endOfStreamReceived) { // CHANGED
-                dispatchPostStreamParse() // CHANGED
-                return // CHANGED
-            } // CHANGED
+            if (endOfStreamReceived) {
+                dispatchPostStreamParse()
+                return
+            }
             _connectionState.value = BleConnectionState.Connected(address, manifest.displayName)
             silentSyncTimeoutJob?.cancel()
             silentSyncTimeoutJob = scope.launch {
@@ -992,7 +1057,10 @@ class BleEngine @Inject constructor(
                     executeNextSyncCommand()
                     return
                 }
-                // CHANGED: arm the await-reply deferred before issuing the write so a
+                // hoisted above the await-arming blocks (pure computation) so the
+                // awaitEndOfStream strategy can derive its opcode from the outgoing bytes.
+                val bytes = parseHexBytes(cmd.bytes)
+                // arm the await-reply deferred before issuing the write so a
                 // notification that arrives before the write-ACK callback is not missed.
                 val ar = cmd.awaitReply
                 if (ar != null) {
@@ -1005,13 +1073,20 @@ class BleEngine @Inject constructor(
                         Timber.w("BleEngine: awaitReply role '${ar.characteristicRole}' not in manifest — treating as fire-and-forget")
                     }
                 }
-                // ADDED: arm awaitEndOfStream deferred before the write so a fast terminal notification is not missed.
+                // arm awaitEndOfStream deferred before the write so a fast terminal notification is not missed.
                 val aes = cmd.awaitEndOfStream
                 if (aes != null) {
                     val aesUuid = manifest.ble.characteristics[aes.characteristic]
                     if (aesUuid != null) {
-                        awaitEndOfStreamOffset    = aes.endByte.offset
-                        awaitEndOfStreamValue     = aes.endByte.value
+                        // customInvoker bridges CUSTOM strategy instances to the currently
+                        // loaded driver's WASM instance; every other strategy ignores this parameter.
+                        val strategy = EndOfStreamStrategyFactory.from(aes) { wasmExport, notifBytes, notifOpcode, elapsedMs ->
+                            driverRegistry.evaluateCustomPredicate(manifest.id, wasmExport, notifBytes, notifOpcode, elapsedMs)
+                        }
+                        val opcode = bytes.firstOrNull()?.toInt()?.and(0xFF) ?: 0
+                        strategy.onStreamStart(opcode)
+                        awaitEndOfStreamStrategy  = strategy
+                        awaitEndOfStreamArmedAtMs = SystemClock.elapsedRealtime()
                         awaitEndOfStreamTimeoutMs = aes.timeoutMs
                         awaitEndOfStreamCharUuid  = aesUuid
                         awaitEndOfStreamDeferred  = CompletableDeferred()
@@ -1019,8 +1094,7 @@ class BleEngine @Inject constructor(
                         Timber.w("BleEngine: awaitEndOfStream characteristic '${aes.characteristic}' not in manifest — treating as fire-and-forget")
                     }
                 }
-                val bytes = parseHexBytes(cmd.bytes)
-                Timber.tag(TAG).d("[SYNC] write[%d] char=%s bytes=%s", commandIndex, charUuid, bytes.toHexString()) // ADDED
+                Timber.tag(TAG).d("[SYNC] write[%d] char=%s bytes=%s", commandIndex, charUuid, bytes.toHexString())
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     activeGatt?.writeCharacteristic(
                         char,
@@ -1042,7 +1116,7 @@ class BleEngine @Inject constructor(
                     executeNextSyncCommand()
                     return
                 }
-                Timber.tag(TAG).d("[SYNC] enable-notify[%d] char=%s", commandIndex, charUuid) // ADDED
+                Timber.tag(TAG).d("[SYNC] enable-notify[%d] char=%s", commandIndex, charUuid)
                 inSyncCommandNotify = true
                 if (!enableNotification(charUuid)) {
                     // Characteristic or CCCD not present; skip without waiting for callback
@@ -1053,7 +1127,7 @@ class BleEngine @Inject constructor(
                 // onDescriptorWrite (inSyncCommandNotify branch) advances commandIndex
             }
             is SyncCommand.Delay -> {
-                Timber.tag(TAG).d("[SYNC] delay[%d] millis=%d", commandIndex, cmd.millis) // ADDED
+                Timber.tag(TAG).d("[SYNC] delay[%d] millis=%d", commandIndex, cmd.millis)
                 scope.launch {
                     delay(cmd.millis.milliseconds)
                     commandIndex++
@@ -1094,18 +1168,18 @@ class BleEngine @Inject constructor(
 
     @SuppressLint("MissingPermission")
     private suspend fun closeGatt() {
-        // CHANGED: null the await-reply fields so any in-flight wait-coroutine's
-        // === deferred guard fails and commandIndex is not advanced after a reset.
+        // null the await-reply fields so any in-flight wait-coroutine's
+        // deferred guard fails and commandIndex is not advanced after a reset.
         awaitReplyDeferred = null
         awaitReplyCharUuid = null
-        // ADDED: null awaitEndOfStream fields to invalidate any in-flight timeout coroutine.
+        // null awaitEndOfStream fields to invalidate any in-flight timeout coroutine.
         awaitEndOfStreamDeferred  = null
         awaitEndOfStreamCharUuid  = null
-        awaitEndOfStreamOffset    = 0
-        awaitEndOfStreamValue     = 0
+        awaitEndOfStreamStrategy  = null
+        awaitEndOfStreamArmedAtMs = 0L
         awaitEndOfStreamTimeoutMs = 30_000L
-        endOfStreamReceived       = false // CHANGED
-        postStreamDisconnecting   = false // CHANGED
+        endOfStreamReceived       = false
+        postStreamDisconnecting   = false
         withContext(Dispatchers.Main) {
             activeGatt?.close()
             activeGatt = null
@@ -1139,119 +1213,119 @@ class BleEngine @Inject constructor(
         synchronized(affectedDates) { affectedDates.add(date) }
     }
 
-    // CHANGED: reverse-lookup characteristic UUID → manifest role name for SessionFrame.characteristic.
+    // reverse-lookup characteristic UUID → manifest role name for SessionFrame.characteristic.
     // Returns the UUID string itself as a fallback if the manifest does not recognise it.
-    private fun resolveCharacteristicRole(uuid: String): String = // CHANGED
-        activeManifest?.ble?.characteristics // CHANGED
-            ?.entries // CHANGED
-            ?.firstOrNull { it.value.equals(uuid, ignoreCase = true) } // CHANGED
-            ?.key ?: uuid // CHANGED
+    private fun resolveCharacteristicRole(uuid: String): String =
+        activeManifest?.ble?.characteristics
+            ?.entries
+            ?.firstOrNull { it.value.equals(uuid, ignoreCase = true) }
+            ?.key ?: uuid
 
-    // CHANGED: called when all sync commands are complete AND awaitEndOfStream has fired.
+    // called when all sync commands are complete AND awaitEndOfStream has fired.
     // Closes the GATT connection synchronously (before parse), then on Dispatchers.IO:
     // parses the session cache, routes readings via MetricRouter, enqueues DailySummaryWorker,
     // finalises the sync session row, and transitions to SyncComplete.
     @SuppressLint("MissingPermission")
-    private fun dispatchPostStreamParse() { // CHANGED
-        val manifest = activeManifest ?: return // CHANGED
-        val address  = activeDeviceAddress ?: return // CHANGED
-        val capturedPacketCount = packetCount // CHANGED
-        val preSyncSessionId    = currentSyncSessionId // CHANGED
-        currentSyncSessionId = null // CHANGED
+    private fun dispatchPostStreamParse() {
+        val manifest = activeManifest ?: return
+        val address  = activeDeviceAddress ?: return
+        val capturedPacketCount = packetCount
+        val preSyncSessionId    = currentSyncSessionId
+        currentSyncSessionId = null
 
         // 1. Close GATT immediately — parse must not start until the link is closed.
-        postStreamDisconnecting   = true // CHANGED
-        endOfStreamReceived       = false // CHANGED
-        awaitReplyDeferred        = null // CHANGED
-        awaitReplyCharUuid        = null // CHANGED
-        awaitEndOfStreamDeferred  = null // CHANGED
-        awaitEndOfStreamCharUuid  = null // CHANGED
-        awaitEndOfStreamOffset    = 0 // CHANGED
-        awaitEndOfStreamValue     = 0 // CHANGED
-        awaitEndOfStreamTimeoutMs = 30_000L // CHANGED
-        activeGatt?.disconnect() // CHANGED
-        activeGatt?.close() // CHANGED
-        activeGatt = null // CHANGED
+        postStreamDisconnecting   = true
+        endOfStreamReceived       = false
+        awaitReplyDeferred        = null
+        awaitReplyCharUuid        = null
+        awaitEndOfStreamDeferred  = null
+        awaitEndOfStreamCharUuid  = null
+        awaitEndOfStreamStrategy  = null
+        awaitEndOfStreamArmedAtMs = 0L
+        awaitEndOfStreamTimeoutMs = 30_000L
+        activeGatt?.disconnect()
+        activeGatt?.close()
+        activeGatt = null
 
-        val frames = synchronized(sessionCache) { sessionCache.toList() } // CHANGED
+        val frames = synchronized(sessionCache) { sessionCache.toList() }
 
         // 2. Log cache complete before parse begins.
-        Timber.tag(TAG).d("session-cache-complete: frames=%d", frames.size) // CHANGED
+        Timber.tag(TAG).d("session-cache-complete: frames=%d", frames.size)
 
         // 3–6. Parse on IO, route readings, enqueue workers, transition state.
-        scope.launch(Dispatchers.IO) { // CHANGED
-            val result = driverRegistry.parseSession(manifest, frames) // CHANGED
-            val batteryReadings = mutableListOf<MetricReading>() // CHANGED
+        scope.launch(Dispatchers.IO) {
+            val result = driverRegistry.parseSession(manifest, frames)
+            val batteryReadings = mutableListOf<MetricReading>()
 
-            when (result) { // CHANGED
-                is WasmParseResult.Success -> { // CHANGED
-                    val readingResults = validator.validateReadings(result.readings) // CHANGED
-                    for (vr in readingResults) { // CHANGED
-                        when (vr) { // CHANGED
-                            is ValidationResult.Accepted -> { // CHANGED
-                                routeReading(vr.item) // CHANGED
-                                if (vr.item.metricType == MetricType.BATTERY) { // CHANGED
-                                    batteryReadings.add(vr.item) // CHANGED
-                                } // CHANGED
-                            } // CHANGED
-                            is ValidationResult.Rejected -> // CHANGED
-                                Timber.w("dispatchPostStreamParse: dropped %s — %s", // CHANGED
-                                    vr.item.metricType, vr.reason) // CHANGED
-                        } // CHANGED
-                    } // CHANGED
-                    Timber.tag(TAG).d("parse-complete: readings=%d", result.readings.size) // CHANGED
-                } // CHANGED
-                is WasmParseResult.Empty -> // CHANGED
-                    Timber.tag(TAG).d("parse-session: empty — no readings produced") // CHANGED
-                is WasmParseResult.WasmTrap -> // CHANGED
-                    Timber.tag(TAG).e("parse-session: wasm trap message=%s", result.message) // CHANGED
-                is WasmParseResult.DeserialisationError -> // CHANGED
-                    Timber.tag(TAG).e("parse-session: deserialisation error message=%s", result.message) // CHANGED
-                is WasmParseResult.EngineNotInitialised -> // CHANGED
-                    Timber.tag(TAG).e("parse-session: engine not initialised") // CHANGED
-            } // CHANGED
+            when (result) {
+                is WasmParseResult.Success -> {
+                    val readingResults = validator.validateReadings(result.readings)
+                    for (vr in readingResults) {
+                        when (vr) {
+                            is ValidationResult.Accepted -> {
+                                routeReading(vr.item)
+                                if (vr.item.metricType == MetricType.BATTERY) {
+                                    batteryReadings.add(vr.item)
+                                }
+                            }
+                            is ValidationResult.Rejected ->
+                                Timber.w("dispatchPostStreamParse: dropped %s — %s",
+                                    vr.item.metricType, vr.reason)
+                        }
+                    }
+                    Timber.tag(TAG).d("parse-complete: readings=%d", result.readings.size)
+                }
+                is WasmParseResult.Empty ->
+                    Timber.tag(TAG).d("parse-session: empty — no readings produced")
+                is WasmParseResult.WasmTrap ->
+                    Timber.tag(TAG).e("parse-session: wasm trap message=%s", result.message)
+                is WasmParseResult.DeserialisationError ->
+                    Timber.tag(TAG).e("parse-session: deserialisation error message=%s", result.message)
+                is WasmParseResult.EngineNotInitialised ->
+                    Timber.tag(TAG).e("parse-session: engine not initialised")
+            }
 
             // 6. Clear cache regardless of parse result.
-            synchronized(sessionCache) { sessionCache.clear() } // CHANGED
+            synchronized(sessionCache) { sessionCache.clear() }
 
             // Drain affectedDates now; the actual worker enqueue is deferred to the
             // finally block below so it always runs after syncProcessor.process() (and
             // therefore sleepStagePromoter.promote()) has completed — matching triggerSync().
-            val datesToProcess = synchronized(affectedDates) { // CHANGED
-                affectedDates.toSet().also { affectedDates.clear() } // CHANGED
-            } // CHANGED
+            val datesToProcess = synchronized(affectedDates) {
+                affectedDates.toSet().also { affectedDates.clear() }
+            }
 
             // Finalise sync session row and transition UI state.
-            val syncResult = DriverSyncResult( // CHANGED
-                deviceId        = address, // CHANGED
-                driverId        = manifest.id, // CHANGED
-                syncStartedAt   = syncStartedAt, // CHANGED
-                syncEndedAt     = Instant.now(), // CHANGED
-                metricReadings  = batteryReadings, // CHANGED: others already written by routeReading
-                sleepSessions   = emptyList(), // CHANGED: sleep metrics arrive as MetricReading via parseSession
-                activities      = emptyList(), // CHANGED: activity metrics arrive as MetricReading via parseSession
-                rawPayloads     = emptyList(), // CHANGED: packets already persisted on arrival
-                packetsReceived = capturedPacketCount, // CHANGED
-            ) // CHANGED
-            try { // CHANGED
-                val summary = syncProcessor.process(syncResult, preSyncSessionId = preSyncSessionId) // CHANGED
-                withContext(Dispatchers.Main) { // CHANGED
-                    _connectionState.value = BleConnectionState.SyncComplete(summary, address) // CHANGED
-                } // CHANGED
-            } catch (e: Exception) { // CHANGED
-                withContext(Dispatchers.Main) { // CHANGED
-                    _connectionState.value = BleConnectionState.Error(e.message ?: "Sync failed") // CHANGED
-                } // CHANGED
-            } finally { // CHANGED
-                datesToProcess.forEach { date -> // CHANGED
-                    Timber.tag(TAG).d("[STAGE-6 DB-WRITE] enqueuing DailySummaryWorker for date=%s stepsMode=%s", // CHANGED
-                        date, manifest.stepsMode) // CHANGED
-                    enqueueSummaryWorker(date, workManager, manifest.stepsMode) // CHANGED
-                } // CHANGED
-                postStreamDisconnecting = false // CHANGED
-            } // CHANGED
-        } // CHANGED
-    } // CHANGED
+            val syncResult = DriverSyncResult(
+                deviceId        = address,
+                driverId        = manifest.id,
+                syncStartedAt   = syncStartedAt,
+                syncEndedAt     = Instant.now(),
+                metricReadings  = batteryReadings, // others already written by routeReading
+                sleepSessions   = emptyList(), // sleep metrics arrive as MetricReading via parseSession
+                activities      = emptyList(), // activity metrics arrive as MetricReading via parseSession
+                rawPayloads     = emptyList(), // packets already persisted on arrival
+                packetsReceived = capturedPacketCount,
+            )
+            try {
+                val summary = syncProcessor.process(syncResult, preSyncSessionId = preSyncSessionId)
+                withContext(Dispatchers.Main) {
+                    _connectionState.value = BleConnectionState.SyncComplete(summary, address)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _connectionState.value = BleConnectionState.Error(e.message ?: "Sync failed")
+                }
+            } finally {
+                datesToProcess.forEach { date ->
+                    Timber.tag(TAG).d("[STAGE-6 DB-WRITE] enqueuing DailySummaryWorker for date=%s stepsMode=%s",
+                        date, manifest.stepsMode)
+                    enqueueSummaryWorker(date, workManager, manifest.stepsMode)
+                }
+                postStreamDisconnecting = false
+            }
+        }
+    }
 
     private fun findCharacteristic(uuid: String): BluetoothGattCharacteristic? =
         activeGatt?.services
@@ -1280,8 +1354,8 @@ class BleEngine @Inject constructor(
             false
         }
 
-    private fun ByteArray.toHexString(): String = // ADDED
-        joinToString(" ") { "%02X".format(it) }   // ADDED
+    private fun ByteArray.toHexString(): String =
+        joinToString(" ") { "%02X".format(it) }
 
     private fun ByteArray.toDptHexString(): String = // DPT
         joinToString(" ") { "0x%02X".format(it) }    // DPT

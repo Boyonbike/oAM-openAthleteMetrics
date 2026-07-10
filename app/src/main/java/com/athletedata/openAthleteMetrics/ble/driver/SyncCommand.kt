@@ -3,27 +3,32 @@ package com.athletedata.openAthleteMetrics.ble.driver
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonClassDiscriminator
+import kotlinx.serialization.json.JsonObject
 
-// ADDED: byte-position match condition used by AwaitEndOfStream to detect the terminal packet.
+// byte-position match condition used by AwaitEndOfStream to detect the terminal packet.
 @Serializable
 data class EndByteCondition(
     val offset: Int,
     val value: Int,
 )
 
-// CHANGED: suspend a WRITE command until a notification arrives on a named characteristic.
+// suspend a WRITE command until a notification arrives on a named characteristic.
 @Serializable
 data class AwaitReply(
     val characteristicRole: String,
     val timeoutMs: Long = 5000L,
 )
 
-// ADDED: suspend a WRITE until a notification whose payload satisfies endByte arrives, or timeout elapses.
+// suspend a WRITE until a notification whose payload satisfies endByte arrives, or timeout elapses.
+// Declares a pluggable EndOfStreamStrategy (see EndOfStreamStrategy.kt). Missing strategy falls
+// back to FixedOffsetByte using endByte.
 @Serializable
 data class AwaitEndOfStream(
     val characteristic: String,
-    val endByte: EndByteCondition,
+    val endByte: EndByteCondition? = null, // optional — only required by FixedOffsetByte
     val timeoutMs: Long = 30_000L,
+    val strategy: String? = null,
+    val params: JsonObject? = null,
 )
 
 /**
@@ -47,8 +52,8 @@ sealed class SyncCommand {
     data class Write(
         val characteristic: String,
         val bytes: String,
-        val awaitReply: AwaitReply? = null,  // CHANGED
-        val awaitEndOfStream: AwaitEndOfStream? = null,  // ADDED
+        val awaitReply: AwaitReply? = null,
+        val awaitEndOfStream: AwaitEndOfStream? = null,
     ) : SyncCommand()
 
     /**

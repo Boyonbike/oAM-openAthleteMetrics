@@ -83,6 +83,22 @@ class WasmHumeBandParseSessionTest {
         percent.toByte(),
     )
 
+    /** 0x55 heart-rate record: opcode, idx LE16, BCD ts x6, bpm. 10 bytes = do_hr's exact min safe length. */
+    private fun hrRecord(bpm: Int): ByteArray = byteArrayOf(
+        0x55, 0x00, 0x00,
+        bcd(26), bcd(6), bcd(15), bcd(9), bcd(0), bcd(0),
+        bpm.toByte(),
+    )
+
+    /** 0x52 steps record: opcode, idx LE16, BCD ts x6, steps/distance/calories LE16 x3. 15 bytes = do_steps's exact min safe length. */
+    private fun stepsRecord(steps: Int, distanceRaw: Int, caloriesTimesTen: Int): ByteArray = byteArrayOf(
+        0x52, 0x00, 0x00,
+        bcd(26), bcd(6), bcd(15), bcd(8), bcd(0), bcd(0),
+        (steps and 0xFF).toByte(), ((steps shr 8) and 0xFF).toByte(),
+        (distanceRaw and 0xFF).toByte(), ((distanceRaw shr 8) and 0xFF).toByte(),
+        (caloriesTimesTen and 0xFF).toByte(), ((caloriesTimesTen shr 8) and 0xFF).toByte(),
+    )
+
     private fun alternatingStages(count: Int): ByteArray =
         ByteArray(count) { i -> if (i % 2 == 0) 1 else 2 }
 
@@ -176,5 +192,86 @@ class WasmHumeBandParseSessionTest {
         val spo2 = chunk2Readings.firstOrNull { it.metricType == MetricType.SPO2 }
         assertTrue("expected an SPO2 reading from chunk 2", spo2 != null)
         assertEquals(97.0, spo2!!.value)
+    }
+
+    /**
+     * Regression test for the unguarded-scratch-buffer-read bug: do_hr/do_steps/do_spo2/do_temp
+     * used to read fixed offsets from the shared 0x3FC00 scratch buffer with no check that the
+     * decoded frame was actually long enough to contain them, so a too-short frame produced a
+     * phantom reading built from a previous (longer) frame's stale bytes. Each opcode's handler
+     * now bails out (no-op) if rawlen is below that opcode's minimum safe length.
+     */
+    @Test
+    fun `truncated frames below an opcode's minimum safe length produce no reading, not a phantom one`() {
+        val instance = Instance.builder(Parser.parse(loadWasmBytes())).build()
+
+        // Poison the shared scratch buffer with recognizable non-zero leftover bytes from a
+        // large, unrecognized-opcode frame first, so each guard below is proven to actually gate
+        // on length -- not merely happen to read zero-initialized memory.
+        callParseSession(instance, "[${frameJson("notify", "0x99", ByteArray(512) { 0xAB.toByte() })}]")
+
+        data class Case(val opcode: String, val minSafeLen: Int, val fullRecord: ByteArray)
+        val cases = listOf(
+            Case("0x55", 10, hrRecord(bpm = 72)),
+            Case("0x52", 15, stepsRecord(steps = 1234, distanceRaw = 800, caloriesTimesTen = 450)),
+            Case("0x66", 10, spo2Record(percent = 97)),
+            Case("0x65", 11, tempRecord(rawTenthsDegC = 366)),
+        )
+
+        for (case in cases) {
+            // One byte short of the minimum safe length -- must be a safe no-op, not a phantom.
+            val truncated = case.fullRecord.copyOf(case.minSafeLen - 1)
+            val truncatedResult = callParseSession(instance, "[${frameJson("notify", case.opcode, truncated)}]")
+            assertEquals(
+                "opcode ${case.opcode}: truncated frame (${truncated.size} bytes, min safe ${case.minSafeLen}) must produce no reading",
+                "[]",
+                truncatedResult,
+            )
+
+            // Same opcode, exact minimum safe length -- must still parse normally (regression
+            // pin that the length guard doesn't also reject valid records).
+            val fullResult = callParseSession(instance, "[${frameJson("notify", case.opcode, case.fullRecord)}]")
+            assertTrue(
+                "opcode ${case.opcode}: full-length (${case.fullRecord.size}-byte) frame must still produce a reading, got: $fullResult",
+                fullResult != "[]",
+            )
+        }
+    }
+
+    /**
+     * do_sleep is the most exposed handler: its record count byte is device-controlled (0-255)
+     * and drives a loop reading that many further bytes, with no relation to the frame's actual
+     * decoded length. Confirms both stages of its guard (can't read the count byte at all; can
+     * read the count byte but not the full stage array it declares).
+     */
+    @Test
+    fun `do_sleep bails out safely when rawlen is too short for the declared stage count`() {
+        val instance = Instance.builder(Parser.parse(loadWasmBytes())).build()
+        callParseSession(instance, "[${frameJson("notify", "0x99", ByteArray(512) { 0xCD.toByte() })}]")
+
+        // count=5 declared, but only 3 stage bytes actually present.
+        val shortStageArray = byteArrayOf(
+            0x53, 0x00, 0x00,
+            bcd(26), bcd(6), bcd(15), bcd(10), bcd(0), bcd(0),
+            5, // count
+            1, 1, 2, // only 3 of the declared 5 stage bytes
+        )
+        val shortResult = callParseSession(instance, "[${frameJson("notify", "0x53", shortStageArray)}]")
+        assertEquals("count=5 but only 3 stage bytes present must produce no reading", "[]", shortResult)
+
+        // Decoded length too short to even read the count byte at base+9.
+        val tooShortForCount = byteArrayOf(
+            0x53, 0x00, 0x00,
+            bcd(26), bcd(6), bcd(15), bcd(10), bcd(0), bcd(0),
+        )
+        val tooShortResult = callParseSession(instance, "[${frameJson("notify", "0x53", tooShortForCount)}]")
+        assertEquals("frame too short to read the count byte must produce no reading", "[]", tooShortResult)
+
+        // A normal, well-formed sleep record on the same instance still parses correctly.
+        val normalResult = callParseSession(
+            instance,
+            "[${frameJson("notify", "0x53", sleepRecord(minute = 11, count = 2, stages = byteArrayOf(3, 3)))}]",
+        )
+        assertTrue("a normal sleep record must still produce a reading, got: $normalResult", normalResult != "[]")
     }
 }

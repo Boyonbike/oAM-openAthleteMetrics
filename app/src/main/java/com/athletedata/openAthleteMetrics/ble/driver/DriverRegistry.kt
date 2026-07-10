@@ -53,7 +53,7 @@ class DriverRegistry @Inject constructor(
         wasmEngine.startSync()
     }
 
-    // CHANGED: context-aware variant; delegates to WasmDriverEngine.buildSyncCommands(context).
+    // context-aware variant; delegates to WasmDriverEngine.buildSyncCommands(context).
     suspend fun buildSyncCommands(
         manifest: WasmDriverManifest,
         context: SyncContext,
@@ -65,6 +65,23 @@ class DriverRegistry @Inject constructor(
     fun allDrivers(): List<WasmDriverManifest> = _drivers.toList()
 
     fun isWasmLoaded(manifest: WasmDriverManifest): Boolean = wasmLoadedId == manifest.id
+
+    /**
+     * Synchronous bridge for [EndOfStreamStrategy.Custom] — called directly from the BLE
+     * notification callback (not a coroutine), so this must never suspend. Returns false
+     * (never throws) if [manifestId]'s driver isn't currently the loaded one; delegates
+     * everything else, including all failure handling, to [WasmDriverEngine.evaluateCustomPredicate].
+     */
+    fun evaluateCustomPredicate(
+        manifestId: String,
+        wasmExport: String,
+        bytes: ByteArray,
+        opcode: Int,
+        elapsedMs: Long,
+    ): Boolean {
+        if (wasmLoadedId != manifestId) return false
+        return wasmEngine.evaluateCustomPredicate(manifestId, wasmExport, bytes, opcode, elapsedMs)
+    }
 
     fun resolve(
         deviceName: String?,

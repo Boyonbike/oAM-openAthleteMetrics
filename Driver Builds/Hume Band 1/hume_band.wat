@@ -12,8 +12,25 @@
 ;;   0x40200-0x4025F  scan patterns (opcode, bytes field, SyncContext field names)
 ;;   0x40300-0x403E8  buildSyncCommands JSON templates
 ;;   0x40400-0x404AF  sleep stage metaJson prefix strings + shared suffixes
-;;   0x40500-0x407E6  newer sync-command templates (ENABLE_NOTIFY/handshake/fetch strings)
+;;   0x40900-0x40C62  newer sync-command templates (ENABLE_NOTIFY/handshake/fetch strings)
 ;;   0x40800-0x4089F  scratch (int-to-string, YMD buf, raw command bytes)
+;;   CHANGED: this block was at 0x40500-0x40862 (base 0x40500) until the SENTINEL_PACKET
+;;   awaitEndOfStream growth (+45 bytes) pushed its tail from 0x407E6 to 0x40862 -- past
+;;   0x40800, into the middle of the scratch region above. epoch_s_to_ymd's $y write at
+;;   0x40860 (see below) landed inside the relocated last segment's own bytes, silently
+;;   corrupting the last 2 bytes of the "0x65 bytes string" template on every call
+;;   (verified: buildSyncCommands emitted garbage instead of the trailing "65"). Moved the
+;;   whole block to start right after scratch (originally 0x408A0, i.e. 0x4089F + 1)
+;;   instead of shrinking it back into the 0x404AF-0x40500 gap, which is only 81 bytes --
+;;   17 bytes short of the 98 bytes needed to undo the overlap.
+;;   CHANGED AGAIN: an exhaustive memory audit found that 0x4089F/0x408A0 had zero slack
+;;   by design -- correct then, but any future 1-byte growth of the scratch region (e.g.
+;;   SetPersonalInfo gaining a 16th byte) would silently re-collide with this block with
+;;   no warning, exactly like the bug above. Padded the block forward by +0x60 (96 bytes)
+;;   to 0x40900, giving genuine headroom instead of a hairline boundary. The same audit
+;;   also found and fixed an unrelated off-by-one in the 0x40200 scan-patterns block (see
+;;   dateOfBirth/heightCm/weightKg/strideLengthCm pattern addresses below) -- a hand-
+;;   tracked-address bug of the same family, not a memory overlap.
 ;;
 ;; The static-tables-and-scratch block above lives on its own page (page 5), entirely
 ;; disjoint from parseSession's output-copy destination (0x1000 onward) and TEMP_OUT's
@@ -119,9 +136,12 @@
 "\22\6f\70\63\6f\64\65\22\3a\22\30\78"
 ;; [DA0C]  9  "bytes":"
 "\22\62\79\74\65\73\22\3a\22"
-;; [DA15] 21  "biologicalSex":"male"
-"\22\62\69\6f\6c\6f\67\69\63\61\6c\53\65\78\22\3a\22\6d\61\6c\65"
-;; [DA29]  1  "   (extra " to complete "male" pattern — now len=21 total)
+;; [DA15] 21  "biologicalSex":"MALE"
+;; FIXED: was lowercase "male" -- $find_pattern is a strict case-sensitive byte
+;; compare, and SyncContextSerializer always emits uppercase "MALE"/"FEMALE"/
+;; "OTHER" (see ProfileTab.kt), so this needle never matched real profile data.
+"\22\62\69\6f\6c\6f\67\69\63\61\6c\53\65\78\22\3a\22\4d\41\4c\45"
+;; [DA29]  1  "   (extra " to complete "MALE" pattern — now len=21 total)
 "\22"
 ;; [DA2A] 15  "dateOfBirth":"
 "\22\64\61\74\65\4f\66\42\69\72\74\68\22\3a\22"
@@ -163,25 +183,56 @@
 )
 
 ;; New sync command templates at 0xDD00
-(data (i32.const 0x40500)
+(data (i32.const 0x40900) ;; CHANGED: was 0x408A0 -- padded +0x60 off scratch's end, see memory-map comment above
 ;; [DD00] 51  [{"type":"ENABLE_NOTIFY","characteristic":"notify"}
 "\5b\7b\22\74\79\70\65\22\3a\22\45\4e\41\42\4c\45\5f\4e\4f\54\49\46\59\22\2c\22\63\68\61\72\61\63\74\65\72\69\73\74\69\63\22\3a\22\6e\6f\74\69\66\79\22\7d"
 ;; [DD33] 194  ,{"type":"WRITE","characteristic":"write","bytes":"0x13 0x00×14 0x13","awaitReply":{"characteristicRole":"notify","timeoutMs":5000}}
 "\2c\7b\22\74\79\70\65\22\3a\22\57\52\49\54\45\22\2c\22\63\68\61\72\61\63\74\65\72\69\73\74\69\63\22\3a\22\77\72\69\74\65\22\2c\22\62\79\74\65\73\22\3a\22\30\78\31\33\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\31\33\22\2c\22\61\77\61\69\74\52\65\70\6c\79\22\3a\7b\22\63\68\61\72\61\63\74\65\72\69\73\74\69\63\52\6f\6c\65\22\3a\22\6e\6f\74\69\66\79\22\2c\22\74\69\6d\65\6f\75\74\4d\73\22\3a\35\30\30\30\7d\7d"
-;; [DDF5] 102  ","awaitEndOfStream":{"characteristic":"notify","endByte":{"offset":1,"value":255},"timeoutMs":30000}}
-"\22\2c\22\61\77\61\69\74\45\6e\64\4f\66\53\74\72\65\61\6d\22\3a\7b\22\63\68\61\72\61\63\74\65\72\69\73\74\69\63\22\3a\22\6e\6f\74\69\66\79\22\2c\22\65\6e\64\42\79\74\65\22\3a\7b\22\6f\66\66\73\65\74\22\3a\31\2c\22\76\61\6c\75\65\22\3a\32\35\35\7d\2c\22\74\69\6d\65\6f\75\74\4d\73\22\3a\33\30\30\30\30\7d\7d"
-;; [DE5B] 79  0x55 0x00×14 0x55  (bytes field text, no trailing space)
+;; [DDF5] 147  ","awaitEndOfStream":{"characteristic":"notify","strategy":"SENTINEL_PACKET","params":{"terminatorByte":255,"matchOpcode":true},"timeoutMs":30000}}
+;; DEAD as of the SENTINEL_PACKET -> IN_STREAM_TERMINATOR fix (real device appends
+;; [opcode,0xFF] to the tail of its last DATA notification -- it never sends a
+;; standalone 2-byte sentinel packet, so this block never actually matched on real
+;; hardware). Replaced by the shared IN_STREAM_TERMINATOR matchOpcode block at
+;; 0x40D00 below (see updated $wmem call sites in $buildSyncCommands). Left in
+;; place, unreferenced, rather than resized/removed, to avoid recomputing the six
+;; 79-byte "bytes" templates that immediately follow it in this same data blob --
+;; that's the exact bug class ([DE88]..[E013]'s own history) this avoids repeating.
+"\22\2c\22\61\77\61\69\74\45\6e\64\4f\66\53\74\72\65\61\6d\22\3a\7b\22\63\68\61\72\61\63\74\65\72\69\73\74\69\63\22\3a\22\6e\6f\74\69\66\79\22\2c\22\73\74\72\61\74\65\67\79\22\3a\22\53\45\4e\54\49\4e\45\4c\5f\50\41\43\4b\45\54\22\2c\22\70\61\72\61\6d\73\22\3a\7b\22\74\65\72\6d\69\6e\61\74\6f\72\42\79\74\65\22\3a\32\35\35\2c\22\6d\61\74\63\68\4f\70\63\6f\64\65\22\3a\74\72\75\65\7d\2c\22\74\69\6d\65\6f\75\74\4d\73\22\3a\33\30\30\30\30\7d\7d"
+;; [DE88] 79  0x55 0x00x14 0x55  (bytes field text, no trailing space) -- CHANGED: was [DE5B]
 "\30\78\35\35\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\35\35"
-;; [DEAA] 79  0x52 bytes string
+;; [DED7] 79  0x52 bytes string -- CHANGED: was [DEAA]
 "\30\78\35\32\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\35\32"
-;; [DEF9] 79  0x53 bytes string
+;; [DF26] 79  0x53 bytes string -- CHANGED: was [DEF9]
 "\30\78\35\33\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\35\33"
-;; [DF48] 79  0x66 bytes string
+;; [DF75] 79  0x66 bytes string -- CHANGED: was [DF48]
 "\30\78\36\36\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\36\36"
-;; [DF97] 79  0x56 bytes string
+;; [DFC4] 79  0x56 bytes string -- CHANGED: was [DF97]
 "\30\78\35\36\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\35\36"
-;; [DFE6] 79  0x65 bytes string — ends at 0xE035, safe before 0xE080
+;; [E013] 79  0x65 bytes string -- CHANGED: was [DFE6]; ends at 0xE062, safe before 0xE080 (0x1E bytes headroom, was 0x4B)
 "\30\78\36\35\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\30\30\20\30\78\36\35"
+)
+
+;; New shared IN_STREAM_TERMINATOR awaitEndOfStream tail at 0x40D00 -- placed at a
+;; fresh, unused address rather than resizing the dead 0x409F5 SENTINEL_PACKET block
+;; above, to avoid recomputing the six 79-byte "bytes" templates that immediately
+;; follow it (that exact recompute mistake has already happened twice in this file).
+;; Memory is 5 pages (0x50000 total); 0x40C62 (end of the block above) to 0x50000 is
+;; free, unused by any other segment or scratch region (B64_SCRATCH ends at 0x3FFFF,
+;; well before this range).
+;;
+;; CHANGED AGAIN: matchOpcode:true made the tail-match require [echoedOpcode, 0xFF]
+;; (2 bytes) -- decompiling Hume's own Android client (ResolveUtil.java) shows the
+;; real device-side rule is simply "last raw notification byte == 0xFF", full stop,
+;; identical across all six parse functions and with NO dependency on the opcode or
+;; the byte preceding it. matchOpcode:false + terminatorBytes:"0xFF" (1 byte) already
+;; produces exactly this via InStreamTerminator's existing tail-match logic (see
+;; EndOfStreamStrategy.kt) -- so this ONE template still serves all six Hume Band
+;; fetch opcodes uniformly, just without the opcode-tail constraint that was silently
+;; preventing HR/Steps/Sleep from ever matching on real hardware.
+;;
+;; [40D00] 157  ","awaitEndOfStream":{"characteristic":"notify","strategy":"IN_STREAM_TERMINATOR","params":{"matchOpcode":false,"terminatorBytes":"0xFF"},"timeoutMs":30000}}
+(data (i32.const 0x40D00)
+"\22\2c\22\61\77\61\69\74\45\6e\64\4f\66\53\74\72\65\61\6d\22\3a\7b\22\63\68\61\72\61\63\74\65\72\69\73\74\69\63\22\3a\22\6e\6f\74\69\66\79\22\2c\22\73\74\72\61\74\65\67\79\22\3a\22\49\4e\5f\53\54\52\45\41\4d\5f\54\45\52\4d\49\4e\41\54\4f\52\22\2c\22\70\61\72\61\6d\73\22\3a\7b\22\6d\61\74\63\68\4f\70\63\6f\64\65\22\3a\66\61\6c\73\65\2c\22\74\65\72\6d\69\6e\61\74\6f\72\42\79\74\65\73\22\3a\22\30\78\46\46\22\7d\2c\22\74\69\6d\65\6f\75\74\4d\73\22\3a\33\30\30\30\30\7d\7d"
 )
 
 ;; ── GLOBALS ──────────────────────────────────────────────────────────────────
@@ -433,7 +484,9 @@
 ;; $p    = current output write pointer in temp buffer.
 ;; Returns updated output ptr.
 
-(func $do_hr (param $base i32) (param $p i32) (result i32)
+(func $do_hr (param $base i32) (param $rawlen i32) (param $p i32) (result i32)
+;; CHANGED: reads up to base+9 -- bail out (no-op) if the decoded frame is too short.
+(if (i32.lt_u (local.get $rawlen) (i32.const 10)) (then (return (local.get $p))))
 (local.set $p (call $pre_emit (local.get $p)))
 (call $emit_int
 (i32.const 0x40033) (i32.const 2)
@@ -442,8 +495,10 @@
 (call $bcd_ts (i32.add (local.get $base) (i32.const 3)))
 (local.get $p)))
 
-(func $do_steps (param $base i32) (param $p i32) (result i32)
+(func $do_steps (param $base i32) (param $rawlen i32) (param $p i32) (result i32)
 (local $ts i64)
+;; CHANGED: reads up to base+14 -- bail out (no-op) if the decoded frame is too short.
+(if (i32.lt_u (local.get $rawlen) (i32.const 15)) (then (return (local.get $p))))
 (local.set $ts (call $bcd_ts (i32.add (local.get $base) (i32.const 3))))
 (local.set $p (call $pre_emit (local.get $p)))
 (local.set $p
@@ -512,7 +567,9 @@
   (br $rec_loop)))
 (local.get $p))
 
-(func $do_spo2 (param $base i32) (param $p i32) (result i32)
+(func $do_spo2 (param $base i32) (param $rawlen i32) (param $p i32) (result i32)
+;; CHANGED: reads up to base+9 -- bail out (no-op) if the decoded frame is too short.
+(if (i32.lt_u (local.get $rawlen) (i32.const 10)) (then (return (local.get $p))))
 (local.set $p (call $pre_emit (local.get $p)))
 (call $emit_int
 (i32.const 0x40038) (i32.const 4)
@@ -521,8 +578,10 @@
 (call $bcd_ts (i32.add (local.get $base) (i32.const 3)))
 (local.get $p)))
 
-(func $do_temp (param $base i32) (param $p i32) (result i32)
+(func $do_temp (param $base i32) (param $rawlen i32) (param $p i32) (result i32)
 (local $raw i32)
+;; CHANGED: reads up to base+10 -- bail out (no-op) if the decoded frame is too short.
+(if (i32.lt_u (local.get $rawlen) (i32.const 11)) (then (return (local.get $p))))
 (local.set $raw (call $le16 (i32.add (local.get $base) (i32.const 9))))
 (if (i32.eqz (local.get $raw)) (then (return (local.get $p))))
 (local.set $p (call $pre_emit (local.get $p)))
@@ -534,14 +593,19 @@
 (local.get $p)))
 
 ;; Sleep: run-length encode stage bytes into SLEEP_STAGE readings
-(func $do_sleep (param $base i32) (param $p i32) (result i32)
+(func $do_sleep (param $base i32) (param $rawlen i32) (param $p i32) (result i32)
 (local $count i32) (local $i i32)
 (local $cur_stage i32) (local $span_start i32)
 (local $ts_start i64)
 (local $stage_b i32) (local $mj_ptr i32) (local $mj_len i32)
 
+;; CHANGED: reads the count byte at base+9 -- bail out (no-op) if too short to hold it.
+(if (i32.lt_u (local.get $rawlen) (i32.const 10)) (then (return (local.get $p))))
 (local.set $count (i32.load8_u (i32.add (local.get $base) (i32.const 9))))
 (if (i32.eqz (local.get $count)) (then (return (local.get $p))))
+;; CHANGED: $count (device-controlled, 0-255) drives reads of base+10..base+10+count-1 below
+;; -- bail out (no-op) if the decoded frame doesn't actually contain the full stage array.
+(if (i32.lt_u (local.get $rawlen) (i32.add (i32.const 10) (local.get $count))) (then (return (local.get $p))))
 (local.set $ts_start (call $bcd_ts (i32.add (local.get $base) (i32.const 3))))
 (local.set $cur_stage (i32.const 0xFF))
 (local.set $span_start (i32.const 0))
@@ -691,6 +755,11 @@
 (br $L)))
 (local.get $ptr))
 
+;; ADDED: writes only the $j bytes it returns -- never zeroes $dst first. Bytes at $dst
+;; beyond the returned length are stale leftovers from whatever earlier (possibly longer)
+;; frame last decoded into this same scratch address. Every reader of this buffer (all
+;; do_* handlers in $parseSession) MUST gate its reads on that returned length (rawlen) --
+;; do not add a new reader of 0x3FC00 without adding the same guard.
 (func $b64_decode (param $src i32) (param $srclen i32) (param $dst i32) (result i32)
 (local $i i32) (local $j i32)
 (local $a i32) (local $b i32) (local $c i32) (local $d i32)
@@ -794,17 +863,17 @@
   (block $route
 
     (if (i32.eq (local.get $opcode) (i32.const 0x52))
-      (then (local.set $out (call $do_steps (i32.const 0x3FC00) (local.get $out)))))
+      (then (local.set $out (call $do_steps (i32.const 0x3FC00) (local.get $rawlen) (local.get $out)))))
     (if (i32.eq (local.get $opcode) (i32.const 0x53))
-      (then (local.set $out (call $do_sleep (i32.const 0x3FC00) (local.get $out)))))
+      (then (local.set $out (call $do_sleep (i32.const 0x3FC00) (local.get $rawlen) (local.get $out)))))
     (if (i32.eq (local.get $opcode) (i32.const 0x55))
-      (then (local.set $out (call $do_hr    (i32.const 0x3FC00) (local.get $out)))))
+      (then (local.set $out (call $do_hr    (i32.const 0x3FC00) (local.get $rawlen) (local.get $out)))))
     (if (i32.eq (local.get $opcode) (i32.const 0x56))
       (then (local.set $out (call $do_hrv   (i32.const 0x3FC00) (local.get $rawlen) (local.get $out)))))
     (if (i32.eq (local.get $opcode) (i32.const 0x65))
-      (then (local.set $out (call $do_temp  (i32.const 0x3FC00) (local.get $out)))))
+      (then (local.set $out (call $do_temp  (i32.const 0x3FC00) (local.get $rawlen) (local.get $out)))))
     (if (i32.eq (local.get $opcode) (i32.const 0x66))
-      (then (local.set $out (call $do_spo2  (i32.const 0x3FC00) (local.get $out)))))))
+      (then (local.set $out (call $do_spo2  (i32.const 0x3FC00) (local.get $rawlen) (local.get $out)))))))
 
 ;; Advance to next '{'
 (local.set $cur (i32.add (local.get $fend) (i32.const 1)))
@@ -987,9 +1056,13 @@
 (then (local.set $sex (i32.const 1))))
 
 ;; Birth year from "dateOfBirth":"YYYY
+;; FIXED: pattern address was 0x4022A (off by -1, missing the 1-byte "extra
+;; quote" spacer segment before it) -- the malformed needle never matched real
+;; JSON, so birth_year/age always fell through to the default. True start is
+;; 0x4022B, verified by summing actual data-segment string lengths.
 (local.set $birth_year (i32.const 0))
 (block $dob_done
-(local.set $m2 (call $find_pattern (local.get $ctxPtr) (local.get $ctx_end) (i32.const 0x4022A) (i32.const 15)))
+(local.set $m2 (call $find_pattern (local.get $ctxPtr) (local.get $ctx_end) (i32.const 0x4022B) (i32.const 15)))
 (br_if $dob_done (i32.ge_u (local.get $m2) (local.get $ctx_end)))
 (local.set $m2 (i32.add (local.get $m2) (i32.const 15)))
 (if (i32.ge_u (i32.add (local.get $m2) (i32.const 4)) (local.get $ctx_end))
@@ -1006,9 +1079,12 @@
 (if (i32.gt_u (local.get $birth_year) (i32.const 1900))
 (then (local.set $age (i32.sub (local.get $y) (local.get $birth_year)))))
 
-(local.set $height (call $scan_int_field (local.get $ctxPtr) (local.get $ctx_end) (i32.const 0x40239) (i32.const 11) (i32.const 170)))
-(local.set $weight (call $scan_int_field (local.get $ctxPtr) (local.get $ctx_end) (i32.const 0x40244) (i32.const 11) (i32.const 70)))
-(local.set $stride (call $scan_int_field (local.get $ctxPtr) (local.get $ctx_end) (i32.const 0x4024F) (i32.const 17) (i32.const 70)))
+;; FIXED: heightCm/weightKg/strideLengthCm pattern addresses were each off by
+;; -1 for the same reason as dateOfBirth above -- true starts are 0x4023A,
+;; 0x40245, 0x40250.
+(local.set $height (call $scan_int_field (local.get $ctxPtr) (local.get $ctx_end) (i32.const 0x4023A) (i32.const 11) (i32.const 170)))
+(local.set $weight (call $scan_int_field (local.get $ctxPtr) (local.get $ctx_end) (i32.const 0x40245) (i32.const 11) (i32.const 70)))
+(local.set $stride (call $scan_int_field (local.get $ctxPtr) (local.get $ctx_end) (i32.const 0x40250) (i32.const 17) (i32.const 70)))
 
 ;; Timezone byte: +offset_hours+128, or abs(offset_hours) for negative
 (local.set $tz_byte
@@ -1071,9 +1147,9 @@
 ;; Serialise to JSON at CMD_OUT_OFFSET = 0x0400
 (local.set $p (i32.const 0x0400))
 ;; [DD00] 51 bytes: [{"type":"ENABLE_NOTIFY","characteristic":"notify"}
-(local.set $p (call $wmem (local.get $p) (i32.const 0x40500) (i32.const 51)))
+(local.set $p (call $wmem (local.get $p) (i32.const 0x40900) (i32.const 51))) ;; CHANGED: was 0x408A0, padded +0x60 off scratch's end
 ;; [DD33] 194 bytes: ,{0x13 handshake with awaitReply}
-(local.set $p (call $wmem (local.get $p) (i32.const 0x40533) (i32.const 194)))
+(local.set $p (call $wmem (local.get $p) (i32.const 0x40933) (i32.const 194))) ;; CHANGED: was 0x408D3, padded +0x60 off scratch's end
 ;; [DB73] 51 bytes: ,{"type":"WRITE","characteristic":"write","bytes":"
 (local.set $p (call $wmem (local.get $p) (i32.const 0x40373) (i32.const 51)))
 (local.set $k (i32.const 0))
@@ -1101,28 +1177,28 @@
 (local.set $p (call $wmem (local.get $p) (i32.const 0x40333) (i32.const 64)))
 ;; 0x55 HR fetch
 (local.set $p (call $wmem (local.get $p) (i32.const 0x40373) (i32.const 51)))
-(local.set $p (call $wmem (local.get $p) (i32.const 0x4065B) (i32.const 79)))
-(local.set $p (call $wmem (local.get $p) (i32.const 0x405F5) (i32.const 102)))
+(local.set $p (call $wmem (local.get $p) (i32.const 0x40A88) (i32.const 79))) ;; CHANGED: was 0x40A28, padded +0x60 off scratch's end
+(local.set $p (call $wmem (local.get $p) (i32.const 0x40D00) (i32.const 157))) ;; CHANGED: was 0x409F5,147 (SENTINEL_PACKET), then matchOpcode:true [opcode,0xFF] -- Hume decompile shows the real rule is last-byte==0xFF only, opcode-independent; see IN_STREAM_TERMINATOR block above
 ;; 0x52 HR/SpO2 fetch
 (local.set $p (call $wmem (local.get $p) (i32.const 0x40373) (i32.const 51)))
-(local.set $p (call $wmem (local.get $p) (i32.const 0x406AA) (i32.const 79)))
-(local.set $p (call $wmem (local.get $p) (i32.const 0x405F5) (i32.const 102)))
+(local.set $p (call $wmem (local.get $p) (i32.const 0x40AD7) (i32.const 79))) ;; CHANGED: was 0x40A77, padded +0x60 off scratch's end
+(local.set $p (call $wmem (local.get $p) (i32.const 0x40D00) (i32.const 157))) ;; CHANGED: was 0x409F5,147 (SENTINEL_PACKET), then matchOpcode:true [opcode,0xFF] -- Hume decompile shows the real rule is last-byte==0xFF only, opcode-independent; see IN_STREAM_TERMINATOR block above
 ;; 0x53 Steps fetch
 (local.set $p (call $wmem (local.get $p) (i32.const 0x40373) (i32.const 51)))
-(local.set $p (call $wmem (local.get $p) (i32.const 0x406F9) (i32.const 79)))
-(local.set $p (call $wmem (local.get $p) (i32.const 0x405F5) (i32.const 102)))
+(local.set $p (call $wmem (local.get $p) (i32.const 0x40B26) (i32.const 79))) ;; CHANGED: was 0x40AC6, padded +0x60 off scratch's end
+(local.set $p (call $wmem (local.get $p) (i32.const 0x40D00) (i32.const 157))) ;; CHANGED: was 0x409F5,147 (SENTINEL_PACKET), then matchOpcode:true [opcode,0xFF] -- Hume decompile shows the real rule is last-byte==0xFF only, opcode-independent; see IN_STREAM_TERMINATOR block above
 ;; 0x66 SpO2 fetch
 (local.set $p (call $wmem (local.get $p) (i32.const 0x40373) (i32.const 51)))
-(local.set $p (call $wmem (local.get $p) (i32.const 0x40748) (i32.const 79)))
-(local.set $p (call $wmem (local.get $p) (i32.const 0x405F5) (i32.const 102)))
+(local.set $p (call $wmem (local.get $p) (i32.const 0x40B75) (i32.const 79))) ;; CHANGED: was 0x40B15, padded +0x60 off scratch's end
+(local.set $p (call $wmem (local.get $p) (i32.const 0x40D00) (i32.const 157))) ;; CHANGED: was 0x409F5,147 (SENTINEL_PACKET), then matchOpcode:true [opcode,0xFF] -- Hume decompile shows the real rule is last-byte==0xFF only, opcode-independent; see IN_STREAM_TERMINATOR block above
 ;; 0x56 HRV/BP fetch
 (local.set $p (call $wmem (local.get $p) (i32.const 0x40373) (i32.const 51)))
-(local.set $p (call $wmem (local.get $p) (i32.const 0x40797) (i32.const 79)))
-(local.set $p (call $wmem (local.get $p) (i32.const 0x405F5) (i32.const 102)))
+(local.set $p (call $wmem (local.get $p) (i32.const 0x40BC4) (i32.const 79))) ;; CHANGED: was 0x40B64, padded +0x60 off scratch's end
+(local.set $p (call $wmem (local.get $p) (i32.const 0x40D00) (i32.const 157))) ;; CHANGED: was 0x409F5,147 (SENTINEL_PACKET), then matchOpcode:true [opcode,0xFF] -- Hume decompile shows the real rule is last-byte==0xFF only, opcode-independent; see IN_STREAM_TERMINATOR block above
 ;; 0x65 Skin temp fetch
 (local.set $p (call $wmem (local.get $p) (i32.const 0x40373) (i32.const 51)))
-(local.set $p (call $wmem (local.get $p) (i32.const 0x407E6) (i32.const 79)))
-(local.set $p (call $wmem (local.get $p) (i32.const 0x405F5) (i32.const 102)))
+(local.set $p (call $wmem (local.get $p) (i32.const 0x40C13) (i32.const 79))) ;; CHANGED: was 0x40BB3, padded +0x60 off scratch's end (originally the corrupted one)
+(local.set $p (call $wmem (local.get $p) (i32.const 0x40D00) (i32.const 157))) ;; CHANGED: was 0x409F5,147 (SENTINEL_PACKET), then matchOpcode:true [opcode,0xFF] -- Hume decompile shows the real rule is last-byte==0xFF only, opcode-independent; see IN_STREAM_TERMINATOR block above
 ;; ']'
 (local.set $p (call $wc (local.get $p) (i32.const 93)))
 

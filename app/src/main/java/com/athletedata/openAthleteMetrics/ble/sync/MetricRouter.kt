@@ -33,25 +33,38 @@ import timber.log.Timber
 
 private const val TAG = "data-pathway-tracker" // DPT
 
-// STAGE-4 MAGNITUDE BOUNDS: sane per-sync-interval ceilings for DELTA-mode accumulator
-// metrics. Catches a stale/carried-over BLE frame value (e.g. Hume Band 0x52 frame emitting
-// a leftover reading from when the device wasn't worn) that passes every other check because
-// it is a well-formed, finite, in-range-timestamp number — see incident 2026-06-22
-// (STEPS delta=64767 against a normal 10-850/5min range, correlated ACTIVE_CALORIES=501.83).
-// Bounds are keyed off this device's ~5-minute sync interval (not itself represented in the
-// manifest schema) and set with wide margin above realistic elite-effort values for a single
-// interval, to avoid false-positives on legitimate high-intensity activity:
-//   STEPS: normal 10-850/5min; elite sprint cadence (~240/min) sustained for 5min caps out
-//          around 1200 — ceiling of 2000 leaves headroom while still rejecting 64767.
-//   ACTIVE_CALORIES: normal <25/5min; ~30 kcal/min sustained by a large/fit athlete at extreme
-//          intensity is already generous — ceiling of 150 vs the observed 501.83 anomaly.
+// CHANGED — STAGE-4 MAGNITUDE BOUNDS: generic, device-agnostic physiological rate-of-change
+// ceilings for DELTA-mode accumulator metrics (STEPS / ACTIVE_CALORIES), expressed per
+// minute. These bound how fast a human can plausibly generate the metric, with margin above
+// realistic elite-effort sustained rates, so they hold for any driver regardless of its sync
+// cadence. They exist to catch a stale/carried-over BLE frame value (e.g. a leftover reading
+// from when a device wasn't worn) that passes every other check because it's a well-formed,
+// finite, in-range-timestamp number — see incident 2026-06-22 (STEPS delta=64767 against a
+// normal 10-850/5min range, correlated ACTIVE_CALORIES=501.83). The actual per-sync-interval
+// ceiling used by implausibleDeltaReason() is this rate scaled by the calling driver's
+// declared syncIntervalMs (see DEFAULT_SYNC_INTERVAL_MS below for drivers that don't declare
+// one):
+//   STEPS: elite sprint cadence (~240/min) plus headroom → 400/min ceiling.
+//   ACTIVE_CALORIES: ~30 kcal/min sustained by a large/fit athlete at extreme intensity is
+//          already generous.
 // Only meaningful for DELTA-mode readings; a driver reporting ABSOLUTE running totals is
 // exempt (see implausibleDeltaReason()). DISTANCE is intentionally not included here — it has
-// no dedicated table/consumer in the app today (stages only), so filtering it is out of scope.
-private val MAX_DELTA_PER_INTERVAL: Map<MetricType, Double> = mapOf(
-    MetricType.STEPS to 2_000.0,
-    MetricType.ACTIVE_CALORIES to 150.0,
+// no dedicated table/consumer in the app today (staging only), so filtering it is out of scope.
+private val MAX_PLAUSIBLE_RATE_PER_MINUTE: Map<MetricType, Double> = mapOf(
+    MetricType.STEPS to 400.0,
+    MetricType.ACTIVE_CALORIES to 30.0,
 )
+
+// CHANGED: fallback sync interval for drivers that declare no syncIntervalMs in their
+// manifest — matches the fixed 5-minute interval this bound was originally hardcoded
+// against, preserving existing behavior for drivers that predate the syncIntervalMs field.
+private const val DEFAULT_SYNC_INTERVAL_MS: Long = 300_000L
+
+// CHANGED: scales the per-minute rate ceiling by the effective sync interval to get an
+// absolute per-sync-interval delta ceiling. Returns null for metric types with no declared
+// rate (not subject to magnitude filtering).
+private fun maxPlausibleDelta(metricType: MetricType, syncIntervalMs: Long): Double? =
+    MAX_PLAUSIBLE_RATE_PER_MINUTE[metricType]?.let { it * syncIntervalMs / 60_000.0 }
 
 // REMOVED: dead-code-archaeology
 
@@ -78,11 +91,12 @@ class MetricRouter @Inject constructor(
         reading: MetricReading,
         stepsMode: StepsMode = StepsMode.DELTA, // STEPS-MODE
         caloriesMode: CaloriesMode = CaloriesMode.DELTA, // CALORIES-MODE
+        syncIntervalMs: Long? = null, // CHANGED
     ) {
         if (reading.metricType == MetricType.BATTERY) { // DPT
             Timber.tag(TAG).d("[STAGE-4 FILTER] DROP metric=%s timestamp=%d reason=battery reading discarded — stored in device metadata, not metric tables", reading.metricType, reading.recordedAt.toEpochMilli()) // DPT
         } else { // DPT
-            val implausibleReason = implausibleDeltaReason(reading, stepsMode, caloriesMode) // DPT
+            val implausibleReason = implausibleDeltaReason(reading, stepsMode, caloriesMode, syncIntervalMs) // DPT / CHANGED
             if (implausibleReason != null) { // DPT
                 Timber.tag(TAG).w("[STAGE-4 FILTER] DROP metric=%s timestamp=%d value=%s reason=%s", reading.metricType, reading.recordedAt.toEpochMilli(), reading.value, implausibleReason) // DPT
                 return // DPT — skip insertion entirely; mirrors BATTERY's hard-reject via an
@@ -97,8 +111,8 @@ class MetricRouter @Inject constructor(
             MetricType.RESPIRATION -> respirationReadingRepository.insert(reading.toRespirationEntity())
             MetricType.SKIN_TEMP -> skinTempReadingRepository.insert(reading.toSkinTempEntity())
             MetricType.STEPS -> {
-                // STEPS ACCUMULATION MODE:
-                // DELTA — driver sends per-interval counts; we accumulate. Used by Hume Band J2208.
+                // CHANGED — STEPS ACCUMULATION MODE:
+                // DELTA — driver sends per-interval counts; we accumulate.
                 // ABSOLUTE — driver sends running total; we replace. Used by devices that report
                 //            cumulative steps directly. stepsMode is declared in the driver manifest.
                 Timber.tag(TAG).d("[STAGE-4 ROUTER] STEPS stepsMode=%s", stepsMode) // STEPS-MODE / DPT
@@ -175,8 +189,9 @@ class MetricRouter @Inject constructor(
         readings: List<MetricReading>,
         stepsMode: StepsMode = StepsMode.DELTA, // POST-AUDIT-FIX
         caloriesMode: CaloriesMode = CaloriesMode.DELTA, // CALORIES-MODE
+        syncIntervalMs: Long? = null, // CHANGED
     ) {
-        readings.forEach { route(it, stepsMode = stepsMode, caloriesMode = caloriesMode) } // POST-AUDIT-FIX
+        readings.forEach { route(it, stepsMode = stepsMode, caloriesMode = caloriesMode, syncIntervalMs = syncIntervalMs) } // POST-AUDIT-FIX / CHANGED
     }
 
     /**
@@ -188,8 +203,12 @@ class MetricRouter @Inject constructor(
         reading: MetricReading,
         stepsMode: StepsMode,
         caloriesMode: CaloriesMode,
+        syncIntervalMs: Long?, // CHANGED
     ): String? {
-        val maxPerInterval = MAX_DELTA_PER_INTERVAL[reading.metricType] ?: return null
+        // CHANGED: ceiling is now derived from the driver's declared syncIntervalMs (falling
+        // back to DEFAULT_SYNC_INTERVAL_MS), not a fixed constant.
+        val effectiveIntervalMs = syncIntervalMs ?: DEFAULT_SYNC_INTERVAL_MS
+        val maxPerInterval = maxPlausibleDelta(reading.metricType, effectiveIntervalMs) ?: return null
         val isDeltaValued = when (reading.metricType) {
             MetricType.STEPS -> stepsMode == StepsMode.DELTA
             MetricType.ACTIVE_CALORIES -> caloriesMode == CaloriesMode.DELTA

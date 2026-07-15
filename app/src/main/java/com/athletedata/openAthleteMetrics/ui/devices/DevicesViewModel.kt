@@ -48,6 +48,8 @@ sealed class ReprocessState {
 sealed class DriverEvent {
     data class ValidationError(val errors: List<String>) : DriverEvent()
     data class Error(val message: String) : DriverEvent()
+    // CHANGED: non-blocking cross-driver signature collision warning (see DriverRegistry.register)
+    data class CollisionWarning(val warnings: List<String>) : DriverEvent()
 }
 
 @HiltViewModel
@@ -228,8 +230,10 @@ class DevicesViewModel @Inject constructor(
         viewModelScope.launch {
             when (val result = driverStorage.saveDriver(uri)) {
                 is DriverStorage.DriverSaveResult.Success -> {
-                    driverRegistry.register(result.manifest)
+                    // CHANGED: surface cross-driver collision warnings instead of discarding them
+                    val warnings = driverRegistry.register(result.manifest)
                     refreshDrivers()
+                    if (warnings.isNotEmpty()) _driverEvents.send(DriverEvent.CollisionWarning(warnings))
                 }
                 is DriverStorage.DriverSaveResult.Invalid ->
                     _driverEvents.send(DriverEvent.ValidationError(result.errors))

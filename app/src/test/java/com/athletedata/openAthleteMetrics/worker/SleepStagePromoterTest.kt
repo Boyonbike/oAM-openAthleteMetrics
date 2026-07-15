@@ -16,6 +16,7 @@ import com.athletedata.openAthleteMetrics.data.repository.SleepRepository
 import com.athletedata.openAthleteMetrics.data.repository.SleepStageRepository
 import io.mockk.mockk
 import junit.framework.TestCase.assertEquals
+import junit.framework.TestCase.assertFalse
 import junit.framework.TestCase.assertNotNull
 import junit.framework.TestCase.assertNull
 import junit.framework.TestCase.assertTrue
@@ -314,5 +315,83 @@ class SleepStagePromoterTest {
 
         assertEquals(1, result.sessionsCreated)
         assertEquals(listOf(sharedDate), result.datesProcessed)
+    }
+
+    // CHANGED: sessionGapThresholdMs override — both tests share one fixture (two stages 45
+    // minutes apart, straddling local midnight) so merging vs. splitting also changes which
+    // calendar date(s) get a session, isolating the threshold's effect.
+    @Test
+    fun `promote applies the 1-hour app-level default when the driver declares no sessionGapThresholdMs override`() = runBlocking {
+        val insertedAt = Instant.parse("2026-07-02T01:30:00Z")
+        val syncWindowStartMs = insertedAt.minusSeconds(300).toEpochMilli()
+        val syncWindowEndMs = insertedAt.plusSeconds(300).toEpochMilli()
+
+        val stageAStart = Instant.parse("2026-07-01T23:30:00Z")
+        val stageAEnd = Instant.parse("2026-07-01T23:50:00Z")
+        val stageBStart = Instant.parse("2026-07-02T00:35:00Z") // 45-minute gap after stageAEnd
+        val stageBEnd = Instant.parse("2026-07-02T01:00:00Z")
+        insertStagingRow(SleepStage.LIGHT, stageAStart.toEpochMilli(), stageAEnd.toEpochMilli(), insertedAt)
+        insertStagingRow(SleepStage.DEEP, stageBStart.toEpochMilli(), stageBEnd.toEpochMilli(), insertedAt)
+
+        val eveningDate = LocalDate.parse("2026-07-01")
+        val wakeDate = LocalDate.parse("2026-07-02")
+        val result = promoter.promote("hume-band-1", syncWindowStartMs, syncWindowEndMs)
+
+        // 45-minute gap < 1-hour default -> merged into one session, dated by the wake-end.
+        assertNull(sleepRepository.getByDriverAndDate("hume-band-1", eveningDate))
+        val session = sleepRepository.getByDriverAndDate("hume-band-1", wakeDate)
+        assertNotNull(session)
+        assertEquals(2, sleepStageRepository.getStagesForSessionOnce(session!!.id).size)
+        assertEquals(1, result.sessionsCreated)
+        assertEquals(listOf(wakeDate), result.datesProcessed)
+    }
+
+    @Test
+    fun `promote applies the driver-declared sessionGapThresholdMs instead of the app-level default`() = runBlocking {
+        val insertedAt = Instant.parse("2026-07-02T01:30:00Z")
+        val syncWindowStartMs = insertedAt.minusSeconds(300).toEpochMilli()
+        val syncWindowEndMs = insertedAt.plusSeconds(300).toEpochMilli()
+
+        val stageAStart = Instant.parse("2026-07-01T23:30:00Z")
+        val stageAEnd = Instant.parse("2026-07-01T23:50:00Z")
+        val stageBStart = Instant.parse("2026-07-02T00:35:00Z") // 45-minute gap after stageAEnd
+        val stageBEnd = Instant.parse("2026-07-02T01:00:00Z")
+        insertStagingRow(SleepStage.LIGHT, stageAStart.toEpochMilli(), stageAEnd.toEpochMilli(), insertedAt)
+        insertStagingRow(SleepStage.DEEP, stageBStart.toEpochMilli(), stageBEnd.toEpochMilli(), insertedAt)
+
+        val eveningDate = LocalDate.parse("2026-07-01")
+        val wakeDate = LocalDate.parse("2026-07-02")
+        val result = promoter.promote(
+            "hume-band-1",
+            syncWindowStartMs,
+            syncWindowEndMs,
+            sessionGapThresholdMs = 30 * 60 * 1000L,
+        )
+
+        // 45-minute gap >= 30-minute override -> split into two sessions, one per date.
+        val eveningSession = sleepRepository.getByDriverAndDate("hume-band-1", eveningDate)
+        val wakeSession = sleepRepository.getByDriverAndDate("hume-band-1", wakeDate)
+        assertNotNull(eveningSession)
+        assertNotNull(wakeSession)
+        assertEquals(1, sleepStageRepository.getStagesForSessionOnce(eveningSession!!.id).size)
+        assertEquals(1, sleepStageRepository.getStagesForSessionOnce(wakeSession!!.id).size)
+        assertEquals(2, result.sessionsCreated)
+        assertEquals(setOf(eveningDate, wakeDate), result.datesProcessed.toSet())
+    }
+
+    // ---------------------------------------------------------------------------
+    // Source-level guard: the threshold's justification must be app policy, not a
+    // device-specific protocol citation.
+    // ---------------------------------------------------------------------------
+
+    @Test
+    fun `SleepStagePromoter source does not attribute the session gap threshold to Hume Band's protocol`() {
+        val sourceFile = java.io.File("src/main/java/com/athletedata/openAthleteMetrics/worker/SleepStagePromoter.kt")
+        assertTrue("expected to find SleepStagePromoter.kt at ${sourceFile.absolutePath}", sourceFile.exists())
+        val source = sourceFile.readText()
+        assertFalse(
+            "SESSION_GAP_THRESHOLD_MS's comment must justify it as app-level policy, not attribute it to a specific device's protocol doc",
+            source.contains("Hume"),
+        )
     }
 }

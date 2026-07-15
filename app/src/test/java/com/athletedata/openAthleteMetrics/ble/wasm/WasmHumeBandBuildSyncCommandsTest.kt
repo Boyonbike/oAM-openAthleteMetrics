@@ -9,6 +9,7 @@ import junit.framework.TestCase.assertNotNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Test
 
@@ -80,31 +81,81 @@ class WasmHumeBandBuildSyncCommandsTest {
     }
 
     @Test
-    fun `buildSyncCommands emits IN_STREAM_TERMINATOR with opcode-independent terminatorBytes for all six fetch opcodes`() {
+    fun `buildSyncCommands emits IN_STREAM_TERMINATOR with opcode-independent terminatorBytes and per-opcode timeoutMs for all six fetch opcodes`() {
         val instance = Instance.builder(Parser.parse(loadWasmBytes())).build()
 
         val resultJson = callBuildSyncCommands(instance, minimalContextJson)
         val commands = json.decodeFromString<List<SyncCommand>>(resultJson)
 
-        val fetchOpcodes = listOf("0x55", "0x52", "0x53", "0x66", "0x56", "0x65")
+        // Real [EOS-RESOLVED] device captures show 0x55/0x52/0x53/0x65 never resolve via a
+        // genuine terminator match (device never sends a terminal 0xFF for those streams) --
+        // 8000ms is ample margin over the observed non-match behavior. 0x66/0x56 DO resolve
+        // via a genuine match (observed up to ~3.3s) -- 10000ms is ample margin there without
+        // waiting anywhere near the old 60000ms.
+        val expectedTimeoutMsByOpcode = mapOf(
+            "0x55" to 8000L,
+            "0x52" to 8000L,
+            "0x53" to 8000L,
+            "0x66" to 10000L,
+            "0x56" to 10000L,
+            "0x65" to 8000L,
+        )
         val fetchWrites = commands.filterIsInstance<SyncCommand.Write>().filter { write ->
-            fetchOpcodes.any { opcode -> write.bytes.startsWith(opcode) }
+            expectedTimeoutMsByOpcode.keys.any { opcode -> write.bytes.startsWith(opcode) }
         }
         assertEquals(6, fetchWrites.size)
 
-        // All six share the SAME config -- terminatorBytes="0xFF" matches on the last
-        // raw notification byte alone, with no opcode dependency (see Hume decompile
-        // note above), so one uniform template correctly serves all six opcodes.
+        // All six share terminatorBytes="0xFF", matching on the last raw notification
+        // byte alone with no opcode dependency (see Hume decompile note above).
         for (write in fetchWrites) {
+            val opcode = expectedTimeoutMsByOpcode.keys.single { write.bytes.startsWith(it) }
             val aes: AwaitEndOfStream? = write.awaitEndOfStream
             assertNotNull("write for bytes=${write.bytes} must have awaitEndOfStream", aes)
             assertEquals("IN_STREAM_TERMINATOR", aes!!.strategy)
-            assertEquals(30000L, aes.timeoutMs)
+            assertEquals(
+                "opcode=$opcode must declare its per-opcode timeoutMs",
+                expectedTimeoutMsByOpcode.getValue(opcode),
+                aes.timeoutMs,
+            )
 
             val params = aes.params
             assertNotNull("awaitEndOfStream.params must be present", params)
             assertEquals(false, params!!["matchOpcode"]?.jsonPrimitive?.booleanOrNull)
             assertEquals("0xFF", params["terminatorBytes"]?.jsonPrimitive?.contentOrNull)
+        }
+    }
+
+    // CHANGED: regression test for the shortPacketRecordSize manifest split. Steps/SpO2/HR
+    // each got their own awaitEndOfStream template (0x40E00/0x40EC0 in hume_band.wat) with
+    // shortPacketRecordSize baked into params; Sleep/HRV/Temp still share the original
+    // 0x40D00 template, which never declares that key. Drives the real compiled WASM so it
+    // catches any wrong address/length in the .wat data-segment split, not just a Kotlin-side
+    // assumption about what the manifest should say.
+    @Test
+    fun `buildSyncCommands declares shortPacketRecordSize only for Steps SpO2 HR, with the correct per-opcode value`() {
+        val instance = Instance.builder(Parser.parse(loadWasmBytes())).build()
+
+        val resultJson = callBuildSyncCommands(instance, minimalContextJson)
+        val commands = json.decodeFromString<List<SyncCommand>>(resultJson)
+        val fetchWrites = commands.filterIsInstance<SyncCommand.Write>()
+
+        val expectedShortPacketRecordSize = mapOf(
+            "0x52" to 15, // Steps
+            "0x66" to 10, // SpO2
+            "0x55" to 10, // HR
+            "0x53" to null, // Sleep
+            "0x56" to null, // HRV
+            "0x65" to null, // Temp
+        )
+
+        for ((opcode, expected) in expectedShortPacketRecordSize) {
+            val write = fetchWrites.single { it.bytes.startsWith(opcode) }
+            val actual = write.awaitEndOfStream?.params?.get("shortPacketRecordSize")?.jsonPrimitive?.intOrNull
+            assertEquals(
+                "opcode $opcode should have shortPacketRecordSize=$expected in its manifest-declared params",
+                expected,
+                actual,
+            )
         }
     }
 

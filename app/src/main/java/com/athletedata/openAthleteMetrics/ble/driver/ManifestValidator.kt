@@ -4,6 +4,35 @@ import com.dylibso.chicory.wasm.Parser
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
+// CHANGED: a driver's signature for collision-detection purposes — one tuple per
+// statically-declared WRITE command that arms an EOS strategy. Shared by ManifestValidator's
+// intra-driver check (below) and DriverRegistry's cross-driver check.
+data class DriverCommandSignature(
+    val characteristicUuid: String,
+    val opcode: Int,
+    val strategyType: String,
+)
+
+// CHANGED: pure, manifest-only derivation — no engine coupling, no I/O, no Timber. Scope
+// note: only sees manifest.syncCommands as declared in JSON; commands built at runtime by a
+// driver's buildSyncCommands WASM export are invisible here (same boundary the CUSTOM-
+// wasmExport check below already documents for that reason).
+fun WasmDriverManifest.commandSignatures(): List<DriverCommandSignature> =
+    syncCommands.filterIsInstance<SyncCommand.Write>().mapNotNull { write ->
+        val aes = write.awaitEndOfStream ?: return@mapNotNull null
+        DriverCommandSignature(
+            characteristicUuid = ble.characteristics[aes.characteristic] ?: aes.characteristic,
+            opcode = firstOpcodeByte(write.bytes),
+            // mirrors EndOfStreamStrategyFactory's null-defaults-to-FIXED_OFFSET_BYTE branch
+            strategyType = aes.strategy ?: "FIXED_OFFSET_BYTE",
+        )
+    }
+
+// CHANGED
+private fun firstOpcodeByte(hex: String): Int =
+    hex.trim().split("\\s+".toRegex()).firstOrNull { it.isNotEmpty() }
+        ?.removePrefix("0x")?.removePrefix("0X")?.toIntOrNull(16) ?: 0
+
 /**
  * Validates a fully-deserialised [WasmDriverManifest] before it is used by the runtime.
  *
@@ -33,6 +62,20 @@ class ManifestValidator {
 
         if (manifest.ble.services.isEmpty()) {
             errors += "ble.services must not be empty"
+        }
+
+        // CHANGED: syncIntervalMs feeds MetricRouter's plausibility-ceiling scaling; a
+        // zero/negative value would collapse or invert that ceiling nonsensically.
+        val syncIntervalMs = manifest.syncIntervalMs
+        if (syncIntervalMs != null && syncIntervalMs <= 0) {
+            errors += "syncIntervalMs must be positive if declared"
+        }
+
+        // CHANGED: sessionGapThresholdMs feeds SleepStagePromoter's session-grouping window; a
+        // zero/negative value would collapse or invert grouping nonsensically.
+        val sessionGapThresholdMs = manifest.sessionGapThresholdMs
+        if (sessionGapThresholdMs != null && sessionGapThresholdMs <= 0) {
+            errors += "sessionGapThresholdMs must be positive if declared"
         }
 
         when (val parsing = manifest.parsing) {
@@ -76,6 +119,20 @@ class ManifestValidator {
                         }
                     }
                 }
+            }
+        }
+
+        // CHANGED: intra-driver signature collision check — reject a manifest whose own
+        // declared commands arm two different, incompatible EOS strategies for the same
+        // characteristic+opcode pair.
+        val signatureGroups = manifest.commandSignatures().groupBy { it.characteristicUuid to it.opcode }
+        for ((key, sigs) in signatureGroups) {
+            val distinctStrategies = sigs.map { it.strategyType }.distinct()
+            if (distinctStrategies.size > 1) {
+                val (charUuid, opcode) = key
+                errors += "conflicting end-of-stream strategies declared for characteristic " +
+                    "'$charUuid' opcode 0x${opcode.toString(16).padStart(2, '0')}: " +
+                    distinctStrategies.joinToString(" vs ")
             }
         }
 

@@ -16,9 +16,13 @@ BLE Device
     ▼
 BleEngine.handleNotification()          ble/BleEngine.kt
     │  byte[] → reassemble fragmented packets
+    │  → buffer as SessionFrame in sessionCache (nothing parsed yet)
     ▼
-WasmDriverEngine.parseMetrics()         ble/wasm/WasmDriverEngine.kt
-    │  WASM export called; returns JSON string
+── repeats for every notification until the sync completes ──
+    ▼
+WasmDriverEngine.parseSession()         ble/wasm/WasmDriverEngine.kt
+    │  all buffered frames serialised to one JSON array, passed to the
+    │  WASM `parseSession` export once (or once per chunk); returns JSON string
     ▼
 MetricWasmDto (deserialised)            ble/wasm/WasmParseDto.kt
     │  { metricType: HRV, value: 45.0, unit: "ms",
@@ -32,8 +36,7 @@ MetricReading (domain model)            data/model/MetricReading.kt
 SyncValidator.validateReadings()        ble/sync/SyncValidator.kt
     │  drop if invalid; pass if accepted
     ▼
-BleEngine.routeReading()
-    │  HRV is a DEDICATED_METRIC_TYPE → skips pendingMetrics staging map
+BleEngine.routeReading()                (called once per accepted reading)
     ▼
 MetricRouter.route()                    ble/sync/MetricRouter.kt
     │  when (MetricType.HRV) → HrvReadingRepository.insert(reading.toHrvEntity())
@@ -58,7 +61,13 @@ SQLite  hrv_readings table
 
 ## Stage 1 — Driver Output
 
-The WASM driver engine is called when a BLE characteristic notification arrives. It invokes the WASM binary's `parseMetrics` export, which returns a JSON array. Each element is decoded into a `MetricWasmDto`:
+The WASM driver engine is **not** called as each BLE notification arrives — each
+complete notification is only buffered (as a `SessionFrame`) into an in-memory
+session cache. Once the sync completes, the app calls the WASM binary's
+`parseSession` export exactly once (or once per chunk, for a very large session),
+passing the entire buffered session as a single JSON array of frames. It returns a
+single JSON array covering every reading produced from that array, HRV included.
+Each element is decoded into a `MetricWasmDto`:
 
 ```kotlin
 // ble/wasm/WasmParseDto.kt
@@ -73,7 +82,7 @@ internal data class MetricWasmDto(
 )
 ```
 
-`WasmDriverEngine.parseMetrics()` immediately converts each DTO to the app's domain model:
+`WasmDriverEngine.parseSession()` immediately converts each DTO to the app's domain model:
 
 ```kotlin
 MetricReading(
@@ -91,7 +100,7 @@ MetricReading(
 
 **Key files:**
 - `ble/wasm/WasmParseDto.kt` — `MetricWasmDto`
-- `ble/wasm/WasmDriverEngine.kt` — `parseMetrics()`
+- `ble/wasm/WasmDriverEngine.kt` — `parseSession()`
 - `data/model/MetricReading.kt` — domain model
 - `data/model/MetricType.kt` — `MetricType.HRV` declared here; also in `DEDICATED_METRIC_TYPES`
 
@@ -99,20 +108,22 @@ MetricReading(
 
 ## Stage 2 — Validation & Routing
 
-`BleEngine` passes each `MetricReading` through `SyncValidator.validateReadings()`. Rejected readings are dropped with a warning log. Accepted readings are routed:
+`BleEngine` passes the whole list of readings returned by `parseSession` through
+`SyncValidator.validateReadings()` at once. Rejected readings are dropped with a
+warning log. Accepted readings are routed one at a time:
 
 ```kotlin
 // ble/BleEngine.kt
 when (result) {
-    is ValidationResult.Accepted -> {
-        routeReading(result.item)
-        // HRV is in DEDICATED_METRIC_TYPES so it is NOT added to pendingMetrics
-        if (reading.metricType !in MetricType.DEDICATED_METRIC_TYPES) {
-            pendingMetrics[...] = reading
-        }
-    }
+    is ValidationResult.Accepted -> routeReading(result.item)
+    is ValidationResult.Rejected -> Timber.w(...)
 }
 ```
+
+`routeReading()` calls `MetricRouter.route()` immediately for every accepted
+reading — there is no separate staging map it passes through first. (An older
+`pendingMetrics` map still exists in `BleEngine` but is dead: it is only ever
+cleared, never written to, in the current pipeline.)
 
 `MetricRouter` handles the final dispatch:
 

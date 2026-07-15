@@ -16,5 +16,14 @@ data class BaselineWindowConfig(
 object BaselineFallbackDefaults {
     val values: Map<BaselineMetric, BaselineWindowConfig> = mapOf(
         BaselineMetric.HRV to BaselineWindowConfig(windowDays = 60, minimumDays = 15),
+        // Sleep-detail display averages: mirrors the HRV default as a placeholder pattern-match.
+        // No sleep-specific rationale has been validated for a 60-day/15-day window — flagged
+        // for product review.
+        BaselineMetric.SLEEP_DEEP to BaselineWindowConfig(windowDays = 60, minimumDays = 15),
+        BaselineMetric.SLEEP_LIGHT to BaselineWindowConfig(windowDays = 60, minimumDays = 15),
+        BaselineMetric.SLEEP_REM to BaselineWindowConfig(windowDays = 60, minimumDays = 15),
+        BaselineMetric.SLEEP_AWAKE to BaselineWindowConfig(windowDays = 60, minimumDays = 15),
+        BaselineMetric.SLEEP_ONSET to BaselineWindowConfig(windowDays = 60, minimumDays = 15),
+        BaselineMetric.SLEEP_WAKE to BaselineWindowConfig(windowDays = 60, minimumDays = 15),
     )
 }

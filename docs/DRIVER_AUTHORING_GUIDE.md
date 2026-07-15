@@ -68,14 +68,41 @@ The app then triggers sync automatically — it does not wait for a user action.
 
 ### 4. Parsing
 
-Every incoming BLE notification is routed through the driver's parsing logic.
+Incoming BLE notifications are **not** parsed as they arrive. Each complete
+notification (after short-packet reassembly) is buffered as a `SessionFrame`
+(`{characteristic, opcode, bytes}`) in an in-memory session cache for the
+duration of the sync. Nothing is parsed at notification time.
 
-The app's `WasmDriverEngine` calls the exported WASM functions with the raw bytes.
-The WASM module writes JSON output into shared linear memory. The app reads and
-deserialises that JSON into the standard model objects.
+Once the sync completes — either because the device signalled end-of-stream via
+`awaitEndOfStream` or because a manual/quiescence-triggered sync finished — the
+app calls the driver's `parseSession` WASM export **once**, passing the entire
+buffered session as a single JSON array of frames:
 
-Parsing errors never crash the app or abort a sync. A bad packet is logged and
-skipped. The rest of the sync continues.
+```json
+[
+  { "characteristic": "notify", "opcode": "0x55", "bytes": "<base64>" },
+  { "characteristic": "notify", "opcode": "0x55", "bytes": "<base64>" }
+]
+```
+
+`opcode` is byte 0 of the frame, pre-extracted as a `"0xNN"` hex string so the
+parser can route on it without re-decoding. If the serialised session exceeds
+roughly 50,000 bytes, the app splits the frames into multiple chunks and calls
+`parseSession` once per chunk, concatenating the returned readings — your parser
+never sees more than one chunk's worth of frames in a single call, and must not
+assume it is seeing the *entire* sync in one invocation.
+
+The WASM module writes a single JSON array of parsed readings into shared linear
+memory. The app reads and deserialises that JSON into the standard model
+objects.
+
+Parsing errors never crash the app or abort a sync. A malformed chunk is logged
+and skipped; the rest of the sync continues.
+
+The same `raw_device_data` payloads (buffered the same way, from stored rows
+instead of a live connection) are replayed through `parseSession` again by the
+"Reprocess from raw data" action — see [Raw replay](#raw-replay--devicereprocessorreprocess)
+below.
 
 > **Important — WASM state after errors:** If a Chicory trap occurs during parsing,
 > the WASM module is re-instantiated and all linear memory is reset. Any
@@ -109,37 +136,46 @@ Sleep sessions go to `sleep_sessions`; activities go to `activities`.
 
 #### Live BLE sync — `DeviceSyncProcessor.process()`
 
-During a live sync, `BleEngine.handleNotification()` calls `MetricRouter.route()` **on
-each incoming notification as packets arrive** — before the sync is complete and before
-`process()` is ever called. `MetricRouter` immediately persists dedicated-type readings
-to their typed tables.
+`BleEngine.handleNotification()` does **not** route or parse anything as packets
+arrive — it only reassembles fragments and buffers each complete packet into the
+in-memory session cache described in [Parsing](#4-parsing). Parsing and routing
+both happen together, once, after the session cache is complete: `BleEngine`
+calls `parseSession` and then walks the returned readings, calling
+`MetricRouter.route()` **once per reading** (via the internal `routeReading()`
+helper) — dedicated types go straight to their typed tables, everything else to
+`metric_readings_staging`. This all happens before `DeviceSyncProcessor.process()`
+is invoked.
 
-By the time `process()` is called at the end of the sync, those readings are already in
-the database. The `pendingMetrics` list passed to `process()` contains only non-dedicated
-metric types. `process()` persists these directly into `metric_readings_staging` via
-`metricRepository.insertAllFromDevice()` — it does not call `MetricRouter` at all.
+By the time `process()` runs, every metric reading is already in the database.
+`process()` itself only handles readings of type `BATTERY` (which `MetricRouter`
+never persists to a metric table) plus sleep sessions, activities, sleep-stage
+promotion, sync-session accounting, and device metadata — it never calls
+`MetricRouter` for ordinary metric readings.
 
-> **Invariant:** If dedicated-type readings reach `process()`, the app logs an error and
-> they will be misfiled into `metric_readings_staging`. This indicates a bug in the
-> BleEngine/MetricRouter call sequence, not a driver issue.
-
-After persisting metric and sleep data, `process()`:
+After persisting sleep/activity data, `process()`:
 1. Updates the `SyncSession` row to `SUCCESS`, `PARTIAL`, or `FAILED`
 2. Calls `SleepStagePromoter.promote()` to promote staged sleep stage readings
 3. Stamps the device's `last_sync_ms` and last known battery percentage
 4. Schedules a background prune of `raw_device_data` older than 7 days and
    `sync_sessions` older than 90 days
 
-#### Raw replay — `DeviceSyncProcessor.processFromRaw()`
+#### Raw replay — `DeviceReprocessor.reprocess()`
 
-This path is triggered by the "Reprocess from raw data" action in the Devices screen.
-It re-parses all stored `raw_device_data` packets for a session through the current WASM
-driver without reconnecting to the device.
+This path is triggered by the "Reprocess from raw data" action in the Devices
+screen. It is a separate class from `DeviceSyncProcessor` — not a method on it.
+It rebuilds `SessionFrame`s from every stored `raw_device_data` row for the
+device since a given timestamp, calls `parseSession` once (chunked the same way
+as a live sync, per [Parsing](#4-parsing)) through the currently registered
+driver, and force-replaces stored records without reconnecting to the device.
 
-Unlike the live path, there is no BleEngine pre-routing. `processFromRaw()` calls
-`MetricRouter.routeAll()` directly inside the write transaction, which routes the full
-set of parsed readings in a single pass: dedicated types to their typed tables,
-everything else to `metric_readings_staging`.
+Unlike the live path, there is no `BleEngine` pre-routing — `reprocess()` routes
+the entire parsed result in one pass via `MetricRouter.routeAllForceReplace()`,
+which routes every reading exactly as `MetricRouter.route()` does (dedicated
+types to their typed tables, everything else to `metric_readings_staging`) but
+using **REPLACE-on-conflict** instead of insert-or-ignore, so corrected values
+overwrite the originals. Sleep sessions are merged and force-replaced the same
+way, and `SleepStagePromoter.promote()` runs afterward exactly as it does on the
+live path.
 
 `SleepStagePromoter.promote()` and device metadata updates run afterward, identical to
 the live path.
@@ -285,14 +321,26 @@ driver handles.
 Relative offsets are values like "3600 seconds ago" or "4 hours into the day" that
 must be resolved against a reference point to produce an absolute timestamp.
 
-- **Relative to sync time** → reconstruct as `recordedAtMs = syncStartMs - offsetMs`
-  where `syncStartMs` is read from the metadata region at offset 0 as an i64 (see
-  Memory Layout). The app captures this value once at the start of the sync, before
-  any packets are processed. Use this single value for the entire sync — do not read
-  the system clock per packet, as doing so across a multi-minute sync will corrupt
-  relative timestamps. Document in your driver that timestamps are reconstructed from
-  sync time and are therefore approximate. Historical records reconstructed this way
-  are less reliable than device-native timestamps.
+> **`parseSession` receives no sync-time metadata.** Unlike `buildSyncCommands`
+> (see [Dynamic Sync Commands](#dynamic-sync-commands-buildsyncCommands)),
+> `parseSession` is called with only the buffered session frames — the app does
+> not write a `syncStartMs`/`utcOffsetMinutes` metadata header before this call.
+> If your driver needs a sync-time reference for the reconstructions below, it
+> must capture one itself: declare `syncRequirements.datetime: true` and read
+> `epochMs`/`utcOffsetMinutes` from the `SyncContext` JSON your `buildSyncCommands`
+> export receives at connect time, then cache that value in the module's own WASM
+> global/memory state for `parseSession` to read later in the same connection.
+> Prefer device-native absolute timestamps wherever the device provides them —
+> they don't require this workaround at all.
+
+- **Relative to sync time** → reconstruct as `recordedAtMs = capturedEpochMs - offsetMs`,
+  where `capturedEpochMs` is the value your `buildSyncCommands` export captured
+  and cached at connection time (see the note above). Use that single cached
+  value for the entire sync — do not attempt to read a fresh clock value per
+  packet, as doing so across a multi-minute sync will corrupt relative
+  timestamps. Document in your driver that timestamps are reconstructed from
+  connection time and are therefore approximate. Historical records
+  reconstructed this way are less reliable than device-native timestamps.
 
 - **Relative to a day boundary** → some devices send offsets within a named calendar
   day (e.g. "day index 3, offset 14400 seconds"). Reconstruct as `recordedAtMs =
@@ -303,12 +351,13 @@ must be resolved against a reference point to produce an absolute timestamp.
 
 **Does the device send no timestamp at all?**
 
-Use `syncStartMs` from the metadata region as a last resort. This is only acceptable
-for truly instantaneous readings where the timestamp is genuinely "now" (e.g. a live
-HR reading triggered by a sync command). It is never acceptable for historical
-records — a historical record with no timestamp cannot be reliably attributed to the
-correct date and should be discarded rather than incorrectly dated. Document that the
-driver uses sync time for this metric.
+Use the cached connection-time value described above as a last resort. This is
+only acceptable for truly instantaneous readings where the timestamp is
+genuinely "now" (e.g. a live HR reading triggered by a sync command). It is
+never acceptable for historical records — a historical record with no timestamp
+cannot be reliably attributed to the correct date and should be discarded rather
+than incorrectly dated. Document that the driver uses connection time for this
+metric.
 
 ### Historical Data: Never Use Sync Time as recordedAtMs
 
@@ -384,53 +433,43 @@ routes it automatically. Date attribution rules do not apply to BATTERY.
 
 **Sleep sessions**
 
-Sleep sessions span a date boundary — a person falls asleep on one calendar day and
-wakes on the next.
+Sleep is not emitted as a single session object — there is no live `parseSleep`
+export or `SleepWasmDto`-shaped output (see
+[JSON Output Schema](#json-output-schema)). Instead, emit one `SLEEP_STAGE`
+`MetricReading` per stage transition, with `recordedAtMs` set to the stage's
+`start_ms` and a `metaJson` object of
+`{ "stage": "DEEP" | "LIGHT" | "REM" | "AWAKE", "start_ms": <epoch ms>, "end_ms": <epoch ms> }`
+— both `start_ms` and `end_ms` are UTC epoch milliseconds.
 
-`dateIso` must be the **UTC calendar date of `sleepEndMs`**. The app's validator
-always normalises `date` to the UTC date of `sleepEndMs` regardless of what you
-provide — supplying any other value will produce a correction warning in the logs
-without affecting storage. To avoid the warning, set `dateIso` to `sleepEndMs`
-formatted as a UTC date string (YYYY-MM-DD in UTC).
+`start_ms`/`end_ms` together must cover the full session from first sleep onset to
+final wake. Do not trim `AWAKE` periods from the ends — they are part of the
+session span.
 
-`sleepStartMs` and `sleepEndMs` themselves remain UTC epoch milliseconds — only
-`dateIso` is derived from them.
+`SleepStagePromoter` (see [Sync Processing](#5-sync-processing)) does the session
+assembly after the sync: it groups your emitted stages into continuous sessions by
+gap (a new session starts whenever the gap since the previous stage's end reaches
+the threshold — default 1 hour, overridable per driver via the manifest's
+`sessionGapThresholdMs`), then dates each assembled session by the **local**
+calendar date of the group's *end* (`ZoneId.systemDefault()` on the last stage's
+`end_ms` — not UTC). You do not choose or emit a session date yourself.
 
-`sleepStartMs` and `sleepEndMs` must cover the full session from first sleep onset
-to final wake. Do not trim AWAKE periods from the ends — they are part of the
-session span. `durationMinutes` is ignored by the engine and can be omitted or set
-to 0. Duration is always recomputed from `(sleepEndMs − sleepStartMs) / 60000`.
+**In-progress sleep**
 
-**In-progress sleep sessions**
-
-If the user syncs while asleep (uncommon but possible), the device may report an
-active session with no valid end time — returning 0, a placeholder, or the current
-time. Do not emit a sleep session if `sleepEndMs` is 0, equal to `sleepStartMs`, or
-earlier than `sleepStartMs`. Signal no data by returning 0 from `parseSleep`. The
-correct session will be emitted on the next morning sync, and the deduplication key
-(`driverId + dateIso`) will ensure it inserts cleanly.
-
-#### Sleep date assignment
-
-The `dateIso` field in `SleepWasmDto` is **ignored by the host**. Do not rely on it.
-
-The host always recomputes the sleep session date from `sleepEndMs` (the wake-up
-moment) using the device local timezone. The date filed in the database will be the
-local calendar date on which the user woke up, regardless of what `dateIso` contains.
-
-Your driver is responsible only for providing accurate `sleepStartMs` and `sleepEndMs`
-values as UTC epoch milliseconds. Use the `utcOffsetMinutes` value from the metadata
-block (bytes 8–9) to convert device local-time sleep boundaries to UTC if the device
-encodes them in local wall-clock time.
-
-You may populate `dateIso` for your own debugging purposes, but it has no effect on
-how the session is stored.
+If the user syncs while asleep (uncommon but possible), the device may report a
+stage with no valid end time — 0, a placeholder, or the current time. Do not emit
+a stage reading if its `end_ms` is 0, equal to `start_ms`, or earlier than
+`start_ms` — simply omit that reading from the array. The correct stage will be
+emitted on the next sync once the device has a real end time, and deduplication
+(`driverId + metricType + recordedAtMs`) means re-sending earlier stages from the
+same night on a later sync is safe.
 
 **Activities**
 
-The date an activity belongs to is the UTC date of `startTimeMs`. Use the exact
-device start timestamp. The app derives the date from this field — there is no
-separate date field in the activity schema.
+Activities are not currently reachable through the live pipeline — see the warning
+in [JSON Output Schema](#json-output-schema). The date-attribution rule below
+describes the (currently inert) `Activity` domain model's date field for reference
+only: the date an activity would belong to is the UTC date of `startTimeMs`, derived
+from that field with no separate date field in the schema.
 
 ### Metric Classification: What to Emit and What to Discard
 
@@ -472,7 +511,7 @@ manifest. Omitting the field defaults to `"delta"`.
 
 **`"stepsMode": "delta"` (default)**
 
-Each STEPS reading returned by `parseMetrics` is the step count for a time interval —
+Each STEPS reading returned by `parseSession` is the step count for a time interval —
 a packet-level delta, not a running total. The app sums all readings for a calendar
 day to compute the daily total.
 
@@ -507,7 +546,7 @@ by setting `"caloriesMode"` in the top-level manifest. Omitting the field defaul
 
 **`"caloriesMode": "delta"` (default)**
 
-Each `ACTIVE_CALORIES` or `TOTAL_CALORIES` reading returned by `parseMetrics` is the
+Each `ACTIVE_CALORIES` or `TOTAL_CALORIES` reading returned by `parseSession` is the
 calorie count for a time interval. The app sums all readings for a calendar day to
 compute the daily total.
 
@@ -565,14 +604,16 @@ is retained for 7 days — corrections beyond that window require the device to 
 naturally as new days accumulate.
 
 > **Note — Reprocess routes through MetricRouter, not directly to staging:** Each
-> corrected reading produced during Reprocess passes through MetricRouter, exactly as
-> it does during a live sync. MetricRouter sends readings to the same destination
-> table the original reading went to: `HR`, `HRV`, `SPO2`, `RESPIRATION`,
+> corrected reading produced during Reprocess passes through
+> `MetricRouter.routeAllForceReplace()`, which sends each reading through the
+> same `route()` logic used during a live sync — to the same destination table
+> the original reading went to: `HR`, `HRV`, `SPO2`, `RESPIRATION`,
 > `SKIN_TEMP`, `STEPS`, `ACTIVE_CALORIES`, `TOTAL_CALORIES`, `BLOOD_PRESSURE`, and
 > `GLUCOSE` are written to their own dedicated typed tables; all other metric types
-> go to `metric_readings_staging`. Insert-or-replace applies in both cases. A value
-> fix that affects any metric type — whether it lives in a dedicated table or in
-> staging — will be correctly applied by Reprocess.
+> go to `metric_readings_staging`. The only difference from the live path is that
+> `routeAllForceReplace()` uses REPLACE-on-conflict instead of insert-or-ignore. A
+> value fix that affects any metric type — whether it lives in a dedicated table
+> or in staging — will be correctly applied by Reprocess.
 
 **What Reprocess can and cannot fix:**
 
@@ -649,16 +690,17 @@ Check every arithmetic operation involving timestamps: addition, subtraction,
 multiplication, division, and bit shifts. A single i32 intermediate in a chain of
 i64 operations is enough to corrupt the result.
 
-### The Input Region Is Zeroed Beyond the Current Packet (specVersion 2)
+### The Input Region Is Zeroed Beyond the Current Call's Input
 
-For specVersion 2 drivers, the app writes the current packet starting at offset 16
-and zeroes any bytes beyond `16 + byteLength` that were written by the previous
-packet. Reads past `byteLength` return `0x00` — not stale data from a previous
-packet.
+Before each `parseSession` call, the app writes the frames JSON (or the current
+chunk of it — see [Parsing](#4-parsing)) starting at offset 16, and zeroes any
+bytes beyond `16 + byteLength` that were written by a previous call. Reads past
+`byteLength` return `0x00` — not stale data from a previous call.
 
 Your parser should still treat the input as a slice of exactly `byteLength` bytes
-starting at offset 16 (passed as param 1). Do not rely on zero-padding for packet
-framing — use `byteLength` as the authoritative packet boundary.
+starting at offset 16 (passed as param 1). Do not rely on zero-padding for input
+framing — use `byteLength` (param 2) as the authoritative boundary of the JSON
+you were given.
 
 ---
 
@@ -687,9 +729,11 @@ A driver file is a UTF-8 encoded `.json` file. Every field is described below.
 | `id` | string | yes | Stable unique identifier. Stored in the database — never change it after release. Use lowercase and underscores. |
 | `displayName` | string | yes | Human-readable name shown in the Devices screen. |
 | `version` | string | yes | Semver string, e.g. `"1.0.0"`. |
-| `specVersion` | string | no | Memory layout version. Use `"2"` to enable the 16-byte metadata header (`syncStartMs`, `utcOffsetMinutes`). Omit or set to `"1"` for the legacy layout (BLE bytes at offset 0, no metadata). Any value other than `"2"` falls back to spec v1 behaviour. All new drivers should use `"2"`. |
+| `specVersion` | string | no | Legacy field. It only affects a dead per-packet parsing code path that nothing in the app calls anymore — it does not gate `parseSession` or `buildSyncCommands` behaviour. Safe to omit for any driver written against `parseSession`. |
 | `stepsMode` | string | no | How the driver reports STEPS readings. `"delta"` (default) — each STEPS reading is the step count for a time interval; the app sums all readings for the day. `"absolute"` — each STEPS reading is the running total so far today; the app uses the latest reading's value and discards earlier same-day readings. Omit for delta behaviour. See [Steps Accumulation Mode](#steps-accumulation-mode). |
 | `caloriesMode` | string | no | How the driver reports calorie readings (`ACTIVE_CALORIES`, `TOTAL_CALORIES`). `"delta"` (default) — each reading is the calorie count for a time interval; the app sums all readings for the day. `"absolute"` — each reading is the running total so far today; the app discards earlier same-day readings and uses only the latest value. Omit for delta behaviour. See [Calories Accumulation Mode](#calories-accumulation-mode). |
+| `syncIntervalMs` | integer | no | Expected time between syncs, in milliseconds. Used by the app's plausibility filter to scale the maximum allowed per-sync delta for DELTA-mode `STEPS`/`ACTIVE_CALORIES` readings — a driver syncing more frequently gets a tighter ceiling, one syncing less frequently gets a looser one. Omit to use the app's default (5 minutes). Must be positive if declared. |
+| `sessionGapThresholdMs` | integer | no | Minimum gap, in milliseconds, between the end of one `SLEEP_STAGE` record and the start of the next for them to be treated as separate sleep sessions rather than one continuous night. Omit to use the app's default policy (1 hour). Only set this if this driver's own protocol genuinely requires a different grouping window. Must be positive if declared. |
 | `author` | string | yes | Your name or handle. |
 | `supportedMetrics` | string[] | yes | Array of metric type names this driver can produce. See supported values below. |
 | `ble` | object | yes | BLE discovery and characteristic configuration. |
@@ -721,26 +765,26 @@ BLOOD_PRESSURE   Blood pressure reading — see contract note below
 GLUCOSE          Blood glucose level; unit described by the `unit` field (mmol or mg_dl)
 ```
 
-> **Sleep: two valid reporting paths.** Choose based on how your device exposes sleep data:
->
-> **Path A — end-of-night summary (`parseSleep` export):** The device delivers a complete
-> night of data at once (e.g. after the user wakes up and syncs). Export a `parseSleep`
-> function that returns a `SleepSession` object. Embedded stage breakdown goes in
-> `stagesJson`. Sleep support is declared by including `parseSleep` in `parsing.exports`.
-> Do **not** add `SLEEP_STAGE` to `supportedMetrics` when using this path.
->
-> **Path B — stage-by-stage via `parseMetrics()`:** The device streams individual stage
-> transitions as the night progresses (e.g. via BLE notifications). Emit one
-> `MetricReading` per transition with `metricType = "SLEEP_STAGE"` and a `metaJson`
-> object containing:
+> **Sleep: reported stage-by-stage via `parseSession`.** There is only one live path.
+> Emit one `MetricReading` per stage transition, from `parseSession` like every other
+> metric, with `metricType = "SLEEP_STAGE"` and a `metaJson` object containing:
 > ```json
 > { "stage": "DEEP" | "LIGHT" | "REM" | "AWAKE", "start_ms": <epoch ms>, "end_ms": <epoch ms> }
 > ```
 > Add `SLEEP_STAGE` to `supportedMetrics` when using this path. The app's
 > `SleepStagePromoter` automatically picks up these staged readings after each sync,
-> groups them by UTC calendar date, creates a `SleepSession` if one does not already
-> exist, and inserts `SleepStageEntity` records — no extra work is required beyond
-> emitting correctly formatted readings.
+> groups them into continuous sessions (a new session starts whenever the gap since
+> the previous stage's end reaches a threshold — default 1 hour, overridable per
+> driver via the manifest's `sessionGapThresholdMs`), creates a `SleepSession` dated
+> by the local calendar date of the group's *end* (the wake-up moment) if one does not
+> already exist, and inserts `SleepStageEntity` records — no extra work is required
+> beyond emitting correctly formatted readings.
+>
+> A `parseSleep`-style "end-of-night summary" export is **not** supported by the live
+> engine — there is no code path that calls it. If your device delivers a complete
+> night at once rather than streaming individual stage transitions, still emit it as
+> one or more `SLEEP_STAGE` readings from `parseSession`; `SleepStagePromoter` merges
+> them into a single session the same way.
 
 > **`computed_by_version` — internal field, not set by drivers:** Some records the
 > app derives from your driver's raw output — HRV readings computed from heart-rate
@@ -859,439 +903,23 @@ enters Connected state and sync fires automatically.
 
 Some devices require values that cannot be known at driver-authoring time — for
 example, a Bluetooth Current Time Service (CTS) write (UUID 0x2A2B) that must carry
-the exact current time at the moment of connection. For these cases, declare a
-`buildSyncCommands` export in `parsing.exports`.
+the exact current time at the moment of connection, or a command that needs the
+user's weight or max HR. For these cases, declare a `buildSyncCommands` export in
+`parsing.exports`. There is one live calling convention — it does not vary by
+`specVersion`.
 
 **When to use `buildSyncCommands` vs static `syncCommands`:**
 
 - Use static `syncCommands` for all fixed byte sequences (command codes, enable flags, etc.).
-- Use `buildSyncCommands` only when the device requires a value that is unknowable until
-  sync time (e.g. current wall-clock time, connection counter, random nonce).
-
-**Manifest declaration:**
-
-Add `"buildSyncCommands"` to `parsing.exports`:
-
-```json
-"exports": {
-  "parseMetrics": "parse_metrics",
-  "buildSyncCommands": "build_sync_commands"
-}
-```
-
-**Function signature:**
-
-`(func (result i32))`
-
-No input parameters. The host writes a metadata block to memory offset 0 before
-calling this function (see layout below). The function writes a JSON array at memory
-offset **1024** and returns the byte count written. Return 0 to produce no dynamic
-commands (the static `syncCommands` will still run).
-
-**Metadata block written at offset 0 (16 bytes):**
-
-```
-Bytes 0–7:   currentTimeMs     — i64 little-endian — Instant.now().toEpochMilli() at call time
-Bytes 8–9:   utcOffsetMinutes  — i16 little-endian — ZoneId.systemDefault() offset at call time
-Bytes 10–15: reserved (zeroed)
-Offset 16+:  zeroed (no characteristic bytes for command-build calls)
-```
-
-> **Important:** These values are captured freshly at call time — not from the
-> `syncStartMs` cached at connection time. This ensures DST transitions that occurred
-> after connection are correctly reflected.
-
-**Output JSON format (at memory offset 1024):**
-
-```json
-[
-  {"characteristic": "currentTime", "bytes": "0x07 0xE8 0x06 0x13 0x0C 0x00 0x00"},
-  {"characteristic": "dataRequest", "bytes": "0x01 0x00"}
-]
-```
-
-Each object maps to a `SyncCommand.Write`. `characteristic` is a role name from
-`ble.characteristics`. `bytes` is a space-separated hex string (same format as static
-`syncCommands` WRITE entries). Dynamic commands are appended to the **end** of the static
-`syncCommands` list — static commands execute first.
-
----
-
-#### Canonical Rules for Time Writes
-
-**Device expects UTC epoch seconds:**
-Read `currentTimeMs` from bytes 0–7 of the metadata block and divide by 1000.
-Never use `syncStartMs` — it was captured at connection time and may be stale.
-
-**Device expects local wall-clock time:**
-Derive local time from `currentTimeMs` plus `utcOffsetMinutes` from bytes 8–9.
-Never substitute `ZoneOffset.UTC` and never use a hardcoded offset.
-
-> **WARNING — highest-risk failure in the system:**
-> Using `ZoneOffset.UTC` for a local-wall-clock device sets the device clock off by
-> the full UTC offset permanently. All subsequent readings will carry unrecoverable
-> wrong timestamps. There is no in-app recovery path for this failure.
-
-> **WARNING:**
-> Never use the `syncStartMs` value for time writes. It was captured at connection
-> time and may predate a DST transition. Always read current time from the
-> `currentTimeMs` field in the metadata block provided to `buildSyncCommands`.
-
-> **WARNING:**
-> `SleepWasmDto.dateIso` is ignored by the host. Do not rely on it. The host
-> recomputes the sleep date from `sleepEndMs` using the device local timezone.
-
-#### buildSyncCommands — time write rules (IMPORTANT)
-
-If your driver writes the current time to a device characteristic, follow these rules
-without exception. Getting this wrong corrupts the device clock permanently — all
-readings the device takes after a wrong time write carry unrecoverable wrong timestamps.
-
-**The metadata block for `buildSyncCommands` is different from the parse metadata block.**
-
-For `buildSyncCommands` calls:
-- Bytes 0–7 contain the current UTC epoch milliseconds at the moment the function is
-  called — not `syncStartMs`. Do not assume these are the same value.
-- Bytes 8–9 contain the current UTC offset in minutes, also captured at call time.
-
-**Rules:**
-
-1. If the device expects UTC epoch seconds:
-
-   ```
-   currentTimeS = readI64(memory, 0) / 1000
-   ```
-
-   Write `currentTimeS` as i32 or i64 little-endian as the device requires.
-
-2. If the device expects local wall-clock time (BLE DateTime characteristic or
-   vendor-packed format):
-
-   ```
-   currentUtcMs = readI64(memory, 0)
-   utcOffsetMs  = readI16(memory, 8) * 60_000
-   localTimeMs  = currentUtcMs + utcOffsetMs
-   ```
-
-   Decompose `localTimeMs` into year/month/day/hour/min/sec fields for the device.
-
-3. Never hardcode `ZoneOffset.UTC` or assume UTC = local. A device in India (UTC+5:30)
-   receiving a UTC time when it expects local time will have its clock set 5 hours
-   30 minutes behind reality. Every reading it takes after this will be wrong.
-
-4. Never use `syncStartMs` (bytes 0–7 of the parse metadata block) in a time write.
-   Use only the values provided in the `buildSyncCommands` metadata block, which are
-   captured freshly at execution time.
-
----
-
-### The `parsing` Block
-
-```json
-"parsing": {
-  "mode": "WASM",
-  "wasmBase64": "AGFzbQEAAAA...",
-  "exports": {
-    "parseMetrics": "parse_metrics",
-    "parseSleep": "parse_sleep",
-    "parseActivity": "parse_activity"
-  }
-}
-```
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `mode` | string | yes | Must be `"WASM"`. Drivers using any other mode are rejected. |
-| `wasmBase64` | string | yes | The compiled `.wasm` binary encoded as Base64. |
-| `exports.parseMetrics` | string | yes | Name of the exported WASM function that parses metric readings. |
-| `exports.parseSleep` | string | no | Name of the exported WASM function that parses sleep sessions. Omit if device has no sleep data. |
-| `exports.parseActivity` | string | no | Name of the exported WASM function that parses activities. Omit if device has no activity data. |
-| `exports.buildSyncCommands` | string | no | Name of the exported WASM function that builds dynamic sync commands. Omit if all sync commands are static. See [Dynamic Sync Commands](#dynamic-sync-commands-buildSyncCommands). |
-
----
-
-## Writing a WASM Driver Module
-
-### Requirements
-
-Your WASM module must:
-
-- Export a `memory` with at least 1 page (65,536 bytes)
-- Export the functions listed in `parsing.exports`
-- Use the memory layout and JSON output schemas described below
-
-You can write the module in any language that compiles to WASM: Rust, C,
-AssemblyScript, Kotlin (via kotlin-wasm), or raw WAT. The compiled output must be a
-valid `.wasm` binary encoded as Base64 for the manifest.
-
-### Memory Layout
-
-The app and your WASM module share a single linear memory region. Three fixed areas
-are used:
-
-```
-Offset 0x0000 (    0) — METADATA REGION — 16 bytes
-  The app writes sync context here before every parse call.
-  Bytes 0–7:  syncStartMs — i64 little-endian — UTC epoch ms captured once
-              at the start of the sync, before any packets are processed.
-              Use this as the reference point for relative timestamp
-              reconstruction. Do not call any system clock from WASM.
-  Bytes 8–9:  utcOffsetMinutes — i16 little-endian — the device's current
-              UTC offset in minutes (e.g. UTC+1 = 60, UTC-5 = -300, UTC = 0).
-              Available for any local-time conversion your parser needs.
-              Note: this is the offset at sync time — historical data that
-              was recorded under a different DST offset may be off by one hour.
-  Bytes 10–15: reserved — will always be zero in spec v2. Do not read or
-              write these bytes. Future spec versions may define values here;
-              a non-zero value in bytes 10–15 does not indicate an error.
-
-Offset 0x0010 (   16) — INPUT REGION  — max 4,080 bytes
-  The app writes raw BLE characteristic bytes here before every call.
-  The app zeroes any bytes beyond the current packet length, so reads
-  past byteLength return 0x00, not stale data.
-
-Offset 0x1000 (4,096) — OUTPUT REGION — max 61,440 bytes
-  Your module writes UTF-8 JSON output here and returns the byte count.
-```
-
-These offsets are fixed. Do not change them. Do not write beyond
-`0x1000 + 61440 = 0xF000`. Writing past this boundary will corrupt memory or trap.
-
-To read from the metadata region (AssemblyScript example):
-```typescript
-const syncStartMs: i64 = load<i64>(0);       // offset 0, little-endian i64
-const utcOffsetMinutes: i16 = load<i16>(8);   // offset 8, little-endian i16
-```
-
-### Function Signature
-
-All three exported parse functions use the same signature:
-
-```
-(func (param i32 i32) (result i32))
-  param 1 — memory offset of input bytes (16 / 0x0010 for specVersion 2;
-             0 for specVersion 1 legacy drivers)
-  param 2 — length of input bytes
-  result  — byte length of JSON written at offset 4096
-```
-
-Return `0` to signal "no data for this packet". The app will not read the output
-region.
-
-### Call Sequence (per notification)
-
-1. App writes the 16-byte metadata header: `syncStartMs` (i64 LE) at offset 0,
-   `utcOffsetMinutes` (i16 LE) at offset 8, six zero bytes at offsets 10–15
-2. App writes raw BLE bytes to memory offset `16`
-3. App zeroes bytes `16 + byteLength` through `16 + previousByteLength - 1`
-   (clears stale bytes from the previous packet)
-4. App calls your function with `(16, byteLength)`
-5. Your function parses the bytes, writes JSON at offset `4096`, returns byte count
-6. App reads `byteCount` bytes from offset `4096` and deserialises the JSON
-7. If return value is `0`, app skips reading entirely
-
-### JSON Output Schemas
-
-Your functions must write valid UTF-8 JSON at offset 4096 conforming to these
-schemas. Unknown keys are ignored by the app — you can include extra fields for
-debugging.
-
-**parseMetrics** — writes a JSON array:
-
-```json
-[
-  {
-    "metricType": "HR",
-    "value": 72.0,
-    "unit": "bpm",
-    "recordedAtMs": 1234567890000,
-    "confidence": null,
-    "metaJson": null
-  }
-]
-```
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `metricType` | string | yes | MetricType name. Must be a value from the supported list. |
-| `value` | float | yes | The parsed sensor value. |
-| `unit` | string | yes | Unit string matching the metric type. |
-| `recordedAtMs` | int64 | yes | UTC epoch milliseconds when the sensor recorded this value. |
-| `confidence` | float | no | Signal quality 0.0–1.0 if available. Null otherwise. |
-| `metaJson` | string | no | Any device-specific extra data as a JSON string. Null otherwise. |
-
-> **Deduplication:** `recordedAtMs` is part of the deduplication key for
-> point-in-time metrics. Use the exact timestamp from the device — do not round or
-> normalise. For accumulator metrics, `recordedAtMs` must be UTC midnight of the
-> accumulation day — this is what makes re-syncs idempotent.
-
-An empty array `[]` is valid and equivalent to returning `0`.
-
-**parseSleep** — writes a single JSON object or nothing:
-
-```json
-{
-  "dateIso": "2024-01-15",
-  "sleepStartMs": 1705276800000,
-  "sleepEndMs": 1705305600000,
-  "durationMinutes": 0,
-  "stagesJson": "[{\"stage\":\"DEEP\",\"startMs\":1705276800000,\"endMs\":1705283000000}]"
-}
-```
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `dateIso` | string | yes | The UTC calendar date of `sleepEndMs`, e.g. `"2024-01-15"`. The app always normalises this field to the UTC date of `sleepEndMs` — set it to that value to avoid a correction warning. |
-| `sleepStartMs` | int64 | yes | UTC epoch ms when sleep began. Must be before `sleepEndMs`. |
-| `sleepEndMs` | int64 | yes | UTC epoch ms when sleep ended. Must be greater than `sleepStartMs`. |
-| `durationMinutes` | int | no | Ignored. Set to `0`. Duration is always derived from `(sleepEndMs − sleepStartMs) / 60000`. |
-| `stagesJson` | string | no | JSON array of stage objects: `[{"stage":"DEEP","startMs":...,"endMs":...}]`. Valid stage values: `DEEP`, `LIGHT`, `REM`, `AWAKE`. Must include AWAKE stages — do not omit them. Null if device does not provide stage breakdown. |
-
-> **In-progress sessions:** If `sleepEndMs` is 0, equal to `sleepStartMs`, or less
-> than `sleepStartMs`, the session is in progress or invalid. Return `0` — do not
-> emit it.
-
-> **Multiple sessions per date:** A driver may emit more than one session for the
-> same `dateIso`. The engine merges all sessions sharing the same `(driverId,
-> dateIso)` into a single full-night record: the earliest `sleepStartMs`, the latest
-> `sleepEndMs`, and the union of all stage objects sorted by `startMs`. Total
-> duration is recomputed from the merged span. The merge also includes any session
-> already stored in the database for that `(driverId, date)` pair — so a session
-> split across two syncs (start data in sync 1, end data in sync 2) is correctly
-> assembled on the second sync.
-
-Signal "no sleep data" by returning `0` or writing `{}`.
-
-**parseActivity** — writes a single JSON object or nothing:
-
-```json
-{
-  "startTimeMs": 1705276800000,
-  "endTimeMs": 1705280400000,
-  "durationMinutes": 0,
-  "deviceName": "Outdoor Run",
-  "avgHrBpm": 145.0,
-  "maxHrBpm": 178.0,
-  "minHrBpm": 120.0,
-  "calories": 650.0,
-  "activeCalories": 600.0,
-  "distanceMeters": 10000.0,
-  "steps": 8500,
-  "hrZonesJson": null
-}
-```
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `startTimeMs` | int64 | yes | UTC epoch ms when the activity began. |
-| `endTimeMs` | int64 | yes | UTC epoch ms when the activity ended. |
-| `durationMinutes` | int | no | Ignored by the engine. Set to `0`. Duration is always derived from `(endTimeMs − startTimeMs) / 60000`. |
-| `deviceName` | string | yes | Raw activity label from the device, e.g. `"Outdoor Run"`. The user classifies this after import. |
-| `avgHrBpm` | float | no | Average heart rate in bpm. Null if not available. |
-| `maxHrBpm` | float | no | Peak heart rate in bpm. Null if not available. |
-| `minHrBpm` | float | no | Lowest heart rate in bpm. Null if not available. |
-| `calories` | float | no | Total energy expenditure in kcal. Null if not available. |
-| `activeCalories` | float | no | Active (non-resting) energy in kcal. Null if not available. |
-| `distanceMeters` | float | no | Distance in metres. Null if not available. |
-| `steps` | int | no | Steps during this activity only — not the daily total. Null if not available. |
-| `hrZonesJson` | string | no | HR zone breakdown: `[{"zone":1,"seconds":120},...]`. Null if not available. |
-
-> **Deduplication:** `startTimeMs` is part of the deduplication key. Use the exact
-> start timestamp from the device.
-
-Signal "no activity data" by returning `0` or writing `{}`.
-
----
-
-### Per-Metric Output Requirements
-
-For each MetricType your driver emits, the `value`, `unit`, and any constraints must
-conform to the table below. Readings that violate these contracts are not rejected by
-the validator (which only checks for NaN, infinite, and out-of-range timestamps) but
-will display incorrectly or be misfiled.
-
-| MetricType | `value` semantics | Required `unit` string | Notes |
-|---|---|---|---|
-| `HR` | Heart rate in beats per minute | `"bpm"` | Integer or float; values outside 20–300 are unusual but not rejected |
-| `HRV` | RMSSD in milliseconds | `"ms"` | Must be positive |
-| `RHR` | Resting heart rate in bpm | `"bpm"` | Same constraints as HR |
-| `SPO2` | Blood oxygen saturation as a percentage (0–100) | `"%"` | Typically 85–100 for valid readings |
-| `STEPS` | Step count for the interval (delta mode) or running daily total (absolute mode) | `"steps"` | Non-negative integer; see `stepsMode` |
-| `ACTIVE_CALORIES` | Active calories burned in kcal | `"kcal"` | Non-negative; see `caloriesMode` |
-| `TOTAL_CALORIES` | Full-day calorie expenditure in kcal | `"kcal"` | Non-negative; see `caloriesMode` |
-| `BATTERY` | Battery level as a percentage (0–100) | `"%"` | Routed to device metadata — not written to any metric table |
-| `SKIN_TEMP` | Skin surface temperature in degrees Celsius | `"°C"` | Typically 30–38 °C; the unit string must be the UTF-8 degree symbol followed by `C` |
-| `BODY_TEMP` | Core body temperature in degrees Celsius | `"°C"` | Same unit string as SKIN_TEMP |
-| `TEMP_DEVIATION` | Deviation from the user's baseline temperature in degrees Celsius | `"°C"` | May be negative |
-| `VO2_MAX` | Aerobic capacity in ml/kg/min | `"ml/kg/min"` | Typically 20–90 |
-| `DISTANCE` | Distance covered in metres (daily total only, one reading per day) | `"m"` | Must be in metres, not km |
-| `ELEVATION_GAIN` | Cumulative ascent in metres (daily total) | `"m"` | Non-negative |
-| `ELEVATION_LOSS` | Cumulative descent in metres (daily total) | `"m"` | Non-negative |
-| `RESPIRATION` | Breaths per minute | `"brpm"` | Typically 8–30 |
-| `BLOOD_PRESSURE` | Systolic pressure in mmHg | `"mmHg"` | Diastolic must be in `metaJson` as `{"diastolic": <int>}` — reading falls back to staging if absent |
-| `GLUCOSE` | Blood glucose level | `"mmol"` or `"mg_dl"` | Use the unit the device natively reports |
-| `SLEEP_STAGE` | (not emitted as a float value — use `parseSleep` export instead) | — | Do not emit SLEEP_STAGE via `parseMetrics`; use `parseSleep` for sleep data |
-
-> **`DISTANCE` unit is metres, not kilometres.** Devices commonly report distance in
-> km or miles. Your driver must convert before emitting. Example: 0.03 km → 30 m.
-
-> **`SKIN_TEMP` unit is the UTF-8 string `"°C"`** (U+00B0 DEGREE SIGN followed by
-> capital C). Drivers written in plain ASCII must use the correct multi-byte encoding
-> — not `"C"`, not `"degC"`, not `"oC"`.
-
----
-
-## Complete Example
-
-This example shows a device that supports metrics, sleep, and activities. Note
-`specVersion: "2"` (required for the new memory layout), `parseSleep` in exports
-(how sleep capability is declared — not via `supportedMetrics`), and
-`durationMinutes: 0` in the activity object (ignored by the engine).
-
-```json
-{
-  "id": "example_complex_v1",
-  "displayName": "Example Complex Device",
-  "version": "1.0.0",
-  "specVersion": "2",
-  "author": "example-author",
-  "supportedMetrics": ["HR", "HRV", "SPO2", "STEPS", "BATTERY"],
-  "ble": {
-    "matchByName": "ComplexDevice",
-    "matchByServiceUuid": "0000abcd-0000-1000-8000-00805f9b34fb",
-    "matchConfidence": "CERTAIN",
-    "services": ["0000abcd-0000-1000-8000-00805f9b34fb"],
-    "characteristics": {
-      "notify": "0000abce-0000-1000-8000-00805f9b34fb",
-      "write":  "0000abcf-0000-1000-8000-00805f9b34fb"
-    }
-  },
-  "syncCommands": [
-    { "type": "WRITE", "characteristic": "write", "bytes": "0xAA 0x01" },
-    { "type": "DELAY", "millis": 500 },
-    { "type": "WRITE", "characteristic": "write", "bytes": "0xAA 0x02" }
-  ],
-  "parsing": {
-    "mode": "WASM",
-    "wasmBase64": "AGFzbQEAAAA...",
-    "exports": {
-      "parseMetrics":  "parse_metrics",
-      "parseSleep":    "parse_sleep",
-      "parseActivity": "parse_activity"
-    }
-  }
-}
-```
-
----
-
-## specVersion 3
-
-### syncRequirements
-
-The `syncRequirements` block declares what data the app must assemble and pass to
-the driver at connect time. The app reads this block before initiating the connection
-and will warn the user if any declared required fields are missing from their profile.
+- Use `buildSyncCommands` when the device requires a value that is unknowable until
+  connect time (current wall-clock time, a user-profile value, a connection counter,
+  a random nonce). When present, its return value **is** the complete sync command
+  sequence — the static `syncCommands` list is not executed at all.
+
+**Declaring what the driver needs — `syncRequirements`:**
+
+Before the app can call `buildSyncCommands`, it needs to know what context to
+assemble. Declare this with an optional top-level `syncRequirements` block:
 
 ```json
 "syncRequirements": {
@@ -1325,28 +953,21 @@ and will warn the user if any declared required fields are missing from their pr
 > driver declares `["weight_kg", "max_hr"]`, the `SyncContext` will contain only those
 > two fields — all other profile keys will be absent from the JSON.
 
-> **If `datetime` is `false` or omitted**, `epochMs`, `utcOffsetMinutes`, and
-> `isoDateTime` are not populated in the `SyncContext`.
-
 > **The `syncRequirements` block is optional.** Omitting it entirely is equivalent to
-> `{ "datetime": false, "userProfile": [] }` — no datetime, no profile data.
+> `{ "datetime": false, "userProfile": [] }` — no datetime, no profile data — but the
+> app still calls `buildSyncCommands` if it's exported; the `SyncContext` it receives
+> will just be nearly empty.
 
----
+**Manifest declaration:**
 
-### buildSyncCommands (specVersion 3)
+Add `"buildSyncCommands"` to `parsing.exports`, alongside `parseSession`:
 
-> **This is the specVersion 3 variant of `buildSyncCommands`.** It has a different
-> function signature and a different memory contract from the specVersion 2 variant
-> documented in [Dynamic Sync Commands](#dynamic-sync-commands-buildSyncCommands) above.
-> In specVersion 3, when `buildSyncCommands` is exported, its return value **is** the
-> complete command sequence — the static `syncCommands` list is not executed.
-
-The `buildSyncCommands` export is optional. When present, the app calls it at connect
-time with a `SyncContext` JSON string. The function returns a pointer to a JSON array
-of Write commands. That array **is** the complete sync command sequence — the static
-`syncCommands` list is not executed. The driver author is responsible for the full
-sequence, including any setup commands (e.g. SetDeviceTime) that must precede data
-requests.
+```json
+"exports": {
+  "parseSession": "parseSession",
+  "buildSyncCommands": "buildSyncCommands"
+}
+```
 
 **Function signature:**
 
@@ -1357,14 +978,29 @@ requests.
   result  — byte count of the JSON written at memory offset 1024 (0x400); return 0 for no commands
 ```
 
-The output JSON must be written at memory offset 1024. This matches the specVersion 2
-`buildSyncCommands` output convention.
+Before calling, the host writes a 16-byte metadata block at offset 0, then the
+`SyncContext` JSON string starting at offset 16 (`contextJsonPtr`/`contextJsonLen`
+point there):
 
-**SyncContext JSON schema:**
+```
+Bytes 0–7:   currentTimeMs     — i64 little-endian — Instant.now().toEpochMilli() at call time
+Bytes 8–9:   utcOffsetMinutes  — i16 little-endian — ZoneId.systemDefault() offset at call time
+Bytes 10–15: reserved (zeroed)
+Offset 16+:  SyncContext JSON string (see schema below), contextJsonLen bytes
+```
 
-The app serialises the assembled context and writes it to WASM linear memory before
-calling the function. Fields that were not declared in `syncRequirements` are absent
-from the object — do not assume any field is present; check before reading.
+> **Important:** `currentTimeMs`/`utcOffsetMinutes` are captured freshly at call
+> time, at connection, before any BLE data has been exchanged. They are unrelated to
+> anything captured later during `parseSession` — `parseSession` receives no
+> metadata header at all (see [Parsing](#4-parsing) and
+> [Sourcing Timestamps](#sourcing-timestamps-a-decision-tree)). If your parser
+> needs a time reference, cache the value from here (or from `SyncContext.epochMs`,
+> if `syncRequirements.datetime: true`) in the module's own WASM state.
+
+**`SyncContext` JSON schema (written at offset 16):**
+
+Fields that were not declared in `syncRequirements` are absent from the object — do
+not assume any field is present; check before reading.
 
 ```json
 {
@@ -1408,66 +1044,331 @@ from the object — do not assume any field is present; check before reading.
 | `maxHr` | integer | `"max_hr"` declared in `userProfile` |
 | `hrZones` | array | `"hr_zones"` declared in `userProfile` |
 
-**Return value:**
-
-Return a pointer to a UTF-8 JSON array written somewhere in WASM linear memory. The
-array must contain only Write commands — `ENABLE_NOTIFY` and `DELAY` are not supported
-in `buildSyncCommands` return values and will be ignored. The engine enables notifications
-automatically in `onServicesDiscovered` regardless of the command sequence.
-
-`awaitEndOfStream` is valid in `buildSyncCommands` return values and is the recommended
-way to sequence setup commands that require device acknowledgement before the next write.
-See [awaitEndOfStream](#awaitendofstream--waiting-for-a-terminal-packet).
+**Output JSON format (written at memory offset 1024 / 0x400):**
 
 ```json
 [
-  { "characteristic": "write", "bytes": "0x01 0x02 0x03" }
+  {"characteristic": "currentTime", "bytes": "0x07 0xE8 0x06 0x13 0x0C 0x00 0x00"},
+  {"characteristic": "dataRequest", "bytes": "0x01 0x00"}
 ]
 ```
 
-`characteristic` is a role name from `ble.characteristics`. `bytes` is a
-space-separated hex string (same format as static `syncCommands` WRITE entries).
+Each object maps to a `SyncCommand.Write`. `characteristic` is a role name from
+`ble.characteristics`. `bytes` is a space-separated hex string (same format as static
+`syncCommands` WRITE entries). The array must contain only Write commands —
+`ENABLE_NOTIFY` and `DELAY` are not supported in `buildSyncCommands` return values
+and will be ignored; the engine enables notifications automatically in
+`onServicesDiscovered` regardless of the command sequence. `awaitEndOfStream` and
+`awaitReply` are valid on `Write` entries returned here — see
+[awaitEndOfStream](#awaitendofstream--waiting-for-a-terminal-packet).
 
-Return `0` to produce no commands. When the export is present, the static `syncCommands`
-list is not executed regardless of the return value.
+**Execution order:** When `buildSyncCommands` is exported (and its export name is
+non-null), its return value **is** the complete command sequence — the static
+`syncCommands` list is **not** executed, regardless of the returned array's
+contents. Return `0` to produce no commands (still no static commands run). When
+`buildSyncCommands` is absent or its export name is `null`, the static
+`syncCommands` list runs unchanged. The two modes are mutually exclusive.
 
-**Execution order:**
+---
 
-When `buildSyncCommands` is exported and its name is non-null in the manifest, the
-return value **is** the complete command sequence — the static `syncCommands` list is
-**not** executed. When `buildSyncCommands` is absent or its export name is `null`, the
-static `syncCommands` list runs as before. The two modes are mutually exclusive.
+#### Canonical Rules for Time Writes
 
-**Omit or null:**
+**Device expects UTC epoch seconds:**
+Read `currentTimeMs` from bytes 0–7 of the metadata block and divide by 1000.
 
-If the driver does not need dynamic commands, omit the export entirely or set it to
-`null` in the manifest. The app handles both cases identically — no dynamic commands
-are issued and no error is logged.
+**Device expects local wall-clock time:**
+Derive local time from `currentTimeMs` plus `utcOffsetMinutes` from bytes 8–9.
+Never substitute `ZoneOffset.UTC` and never use a hardcoded offset.
 
-**Manifest declaration:**
+> **WARNING — highest-risk failure in the system:**
+> Using `ZoneOffset.UTC` for a local-wall-clock device sets the device clock off by
+> the full UTC offset permanently. All subsequent readings will carry unrecoverable
+> wrong timestamps. There is no in-app recovery path for this failure.
+
+> **WARNING:**
+> `SleepWasmDto.dateIso` (a legacy, unused DTO field) is not read by the host. The
+> host always derives the sleep date from `sleepEndMs` using the local timezone —
+> see [Sleep date assignment](#sleep-date-assignment).
+
+#### buildSyncCommands — time write rules (IMPORTANT)
+
+If your driver writes the current time to a device characteristic, follow these rules
+without exception. Getting this wrong corrupts the device clock permanently — all
+readings the device takes after a wrong time write carry unrecoverable wrong timestamps.
+
+The metadata block written before `buildSyncCommands` is the *only* place a
+timestamp is provided to your WASM module by the engine — `parseSession` receives
+none. Do not confuse the two.
+
+**Rules:**
+
+1. If the device expects UTC epoch seconds:
+
+   ```
+   currentTimeS = readI64(memory, 0) / 1000
+   ```
+
+   Write `currentTimeS` as i32 or i64 little-endian as the device requires.
+
+2. If the device expects local wall-clock time (BLE DateTime characteristic or
+   vendor-packed format):
+
+   ```
+   currentUtcMs = readI64(memory, 0)
+   utcOffsetMs  = readI16(memory, 8) * 60_000
+   localTimeMs  = currentUtcMs + utcOffsetMs
+   ```
+
+   Decompose `localTimeMs` into year/month/day/hour/min/sec fields for the device.
+
+3. Never hardcode `ZoneOffset.UTC` or assume UTC = local. A device in India (UTC+5:30)
+   receiving a UTC time when it expects local time will have its clock set 5 hours
+   30 minutes behind reality. Every reading it takes after this will be wrong.
+
+4. Only ever use the metadata block's `currentTimeMs`/`utcOffsetMinutes` (or, if
+   declared, `SyncContext.epochMs`/`utcOffsetMinutes`) for a time write — both are
+   captured freshly at `buildSyncCommands` call time, at connection.
+
+---
+
+### The `parsing` Block
 
 ```json
-"exports": {
-  "parseMetrics": "parseMetrics",
-  "parseSleep": "parseSleep",
-  "parseActivity": null,
-  "buildSyncCommands": "buildSyncCommands"
+"parsing": {
+  "mode": "WASM",
+  "wasmBase64": "AGFzbQEAAAA...",
+  "exports": {
+    "parseSession": "parseSession"
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `mode` | string | yes | Must be `"WASM"`. Drivers using any other mode are rejected. |
+| `wasmBase64` | string | yes | The compiled `.wasm` binary encoded as Base64. |
+| `exports.parseSession` | string | yes* | Name of the exported WASM function that bulk-parses a whole buffered sync session. This is the only functional parsing export — see [Parsing](#4-parsing). |
+| `exports.buildSyncCommands` | string | no | Name of the exported WASM function that builds dynamic sync commands. Omit if all sync commands are static. See [Dynamic Sync Commands](#dynamic-sync-commands-buildSyncCommands). |
+
+\* The manifest validator will also accept a driver that declares `exports.parseMetrics`
+instead of `exports.parseSession` (for historical-format compatibility), but nothing in
+the app actually calls a `parseMetrics`/`parseSleep`/`parseActivity` export — write new
+drivers against `parseSession` only.
+
+---
+
+## Writing a WASM Driver Module
+
+### Requirements
+
+Your WASM module must:
+
+- Export a `memory` with at least 1 page (65,536 bytes)
+- Export `parseSession` (and, if used, `buildSyncCommands`)
+- Use the memory layout and JSON output schema described below
+
+You can write the module in any language that compiles to WASM: Rust, C,
+AssemblyScript, Kotlin (via kotlin-wasm), or raw WAT. The compiled output must be a
+valid `.wasm` binary encoded as Base64 for the manifest.
+
+### Memory Layout
+
+The app and your WASM module share a single linear memory region. For `parseSession`,
+two fixed areas are used — there is **no metadata header** before this call (contrast
+with `buildSyncCommands`, which does get one — see
+[Dynamic Sync Commands](#dynamic-sync-commands-buildSyncCommands)):
+
+```
+Offset 0x0010 (   16) — INPUT REGION — up to ~50,000 bytes per call
+  The app writes the buffered session frames here as a single UTF-8 JSON array
+  (see Call Sequence below) before every parseSession call. The app zeroes any
+  bytes beyond the current call's input length, so reads past byteLength return
+  0x00, not stale data from a previous call.
+
+Offset 0x1000 (4,096) — OUTPUT REGION — max 61,440 bytes
+  Your module writes a UTF-8 JSON array of readings here and returns the byte count.
+```
+
+These offsets are fixed. Do not change them. Do not write beyond
+`0x1000 + 61440 = 0xF000`. Writing past this boundary will corrupt memory or trap.
+
+If your parser needs a time reference (current wall-clock time or UTC offset at
+connection), it is *not* available at offset 0 during `parseSession`. Capture it
+during `buildSyncCommands` instead (called separately, once, at connection time)
+and cache it in your module's own global/memory state — see
+[Sourcing Timestamps](#sourcing-timestamps-a-decision-tree).
+
+### Function Signature
+
+```
+(func (param i32 i32) (result i32))
+  param 1 — memory offset of the input JSON (16 / 0x0010)
+  param 2 — length of the input JSON
+  result  — byte length of the output JSON written at offset 4096
+```
+
+Return `0` to signal "no readings for this call". The app will not read the output
+region.
+
+### Call Sequence (per sync, or per chunk of a large sync)
+
+1. During the sync, the app buffers every reassembled BLE notification as a
+   `SessionFrame` — it does **not** call your module yet.
+2. When the sync completes, the app serialises all buffered frames (or, for very
+   large sessions, one size-bounded chunk of them — see [Parsing](#4-parsing)) into
+   a single JSON array: `[{"characteristic": "...", "opcode": "0xNN", "bytes": "<base64>"}, ...]`.
+3. The app writes that JSON to memory offset `16`, zeroing any bytes left over from
+   a previous call at that offset.
+4. The app calls `parseSession` with `(16, byteLength)`.
+5. Your function parses every frame in the input, writes a single JSON array of
+   readings at offset `4096`, and returns its byte count.
+6. The app reads `byteCount` bytes from offset `4096` and deserialises the JSON.
+7. If the session was chunked, steps 3–6 repeat once per chunk and the app
+   concatenates the readings from every chunk.
+8. If a call's return value is `0`, the app skips reading the output region for
+   that call — this does not stop later chunks (if any) from still being parsed.
+
+### JSON Output Schema
+
+`parseSession` must write valid UTF-8 JSON at offset 4096 conforming to this
+schema — a single JSON array covering every reading produced from the input
+frames, regardless of metric type. Unknown keys are ignored by the app — you can
+include extra fields for debugging.
+
+```json
+[
+  {
+    "metricType": "HR",
+    "value": 72.0,
+    "unit": "bpm",
+    "recordedAtMs": 1234567890000,
+    "confidence": null,
+    "metaJson": null
+  }
+]
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `metricType` | string | yes | MetricType name. Must be a value from the supported list. |
+| `value` | float | yes | The parsed sensor value. |
+| `unit` | string | yes | Unit string matching the metric type. |
+| `recordedAtMs` | int64 | yes | UTC epoch milliseconds when the sensor recorded this value. |
+| `confidence` | float | no | Signal quality 0.0–1.0 if available. Null otherwise. |
+| `metaJson` | string | no | Any device-specific extra data as a JSON string. Null otherwise. |
+
+> **Deduplication:** `recordedAtMs` is part of the deduplication key for
+> point-in-time metrics. Use the exact timestamp from the device — do not round or
+> normalise. For accumulator metrics, `recordedAtMs` must be UTC midnight of the
+> accumulation day — this is what makes re-syncs idempotent.
+
+An empty array `[]` is valid and equivalent to returning `0`.
+
+**Sleep** is emitted as ordinary array entries with `metricType = "SLEEP_STAGE"` —
+there is no separate sleep schema or export. See "Sleep: reported stage-by-stage
+via `parseSession`" under [Supported Metric Types](#supported-metric-types) for the
+`metaJson` shape and how `SleepStagePromoter` assembles sessions from these
+readings.
+
+> **Activities are not currently supported by the live pipeline.** The domain model
+> (`Activity`) and a legacy `ActivityWasmDto`/`parseActivity` export declaration
+> still exist in the codebase, but no code path decodes activity data out of
+> `parseSession`'s output today. Do not build a driver around activity ingestion —
+> it will not reach the database. If your device reports workout/activity data,
+> file it as a feature request rather than emitting it; there is currently no
+> schema for the app to receive it through.
+
+---
+
+### Per-Metric Output Requirements
+
+For each MetricType your driver emits, the `value`, `unit`, and any constraints must
+conform to the table below. Readings that violate these contracts are not rejected by
+the validator (which only checks for NaN, infinite, and out-of-range timestamps) but
+will display incorrectly or be misfiled.
+
+| MetricType | `value` semantics | Required `unit` string | Notes |
+|---|---|---|---|
+| `HR` | Heart rate in beats per minute | `"bpm"` | Integer or float; values outside 20–300 are unusual but not rejected |
+| `HRV` | RMSSD in milliseconds | `"ms"` | Must be positive |
+| `RHR` | Resting heart rate in bpm | `"bpm"` | Same constraints as HR |
+| `SPO2` | Blood oxygen saturation as a percentage (0–100) | `"%"` | Typically 85–100 for valid readings |
+| `STEPS` | Step count for the interval (delta mode) or running daily total (absolute mode) | `"steps"` | Non-negative integer; see `stepsMode` |
+| `ACTIVE_CALORIES` | Active calories burned in kcal | `"kcal"` | Non-negative; see `caloriesMode` |
+| `TOTAL_CALORIES` | Full-day calorie expenditure in kcal | `"kcal"` | Non-negative; see `caloriesMode` |
+| `BATTERY` | Battery level as a percentage (0–100) | `"%"` | Routed to device metadata — not written to any metric table |
+| `SKIN_TEMP` | Skin surface temperature in degrees Celsius | `"°C"` | Typically 30–38 °C; the unit string must be the UTF-8 degree symbol followed by `C` |
+| `BODY_TEMP` | Core body temperature in degrees Celsius | `"°C"` | Same unit string as SKIN_TEMP |
+| `TEMP_DEVIATION` | Deviation from the user's baseline temperature in degrees Celsius | `"°C"` | May be negative |
+| `VO2_MAX` | Aerobic capacity in ml/kg/min | `"ml/kg/min"` | Typically 20–90 |
+| `DISTANCE` | Distance covered in metres (daily total only, one reading per day) | `"m"` | Must be in metres, not km |
+| `ELEVATION_GAIN` | Cumulative ascent in metres (daily total) | `"m"` | Non-negative |
+| `ELEVATION_LOSS` | Cumulative descent in metres (daily total) | `"m"` | Non-negative |
+| `RESPIRATION` | Breaths per minute | `"brpm"` | Typically 8–30 |
+| `BLOOD_PRESSURE` | Systolic pressure in mmHg | `"mmHg"` | Diastolic must be in `metaJson` as `{"diastolic": <int>}` — reading falls back to staging if absent |
+| `GLUCOSE` | Blood glucose level | `"mmol"` or `"mg_dl"` | Use the unit the device natively reports |
+| `SLEEP_STAGE` | Not a meaningful numeric value — `value` is ignored; the stage lives in `metaJson` | — | Emit via `parseSession` like any other metric type, with `metaJson = {"stage": ..., "start_ms": ..., "end_ms": ...}` — see [Sleep sessions](#date-attribution-rules) |
+
+> **`DISTANCE` unit is metres, not kilometres.** Devices commonly report distance in
+> km or miles. Your driver must convert before emitting. Example: 0.03 km → 30 m.
+
+> **`SKIN_TEMP` unit is the UTF-8 string `"°C"`** (U+00B0 DEGREE SIGN followed by
+> capital C). Drivers written in plain ASCII must use the correct multi-byte encoding
+> — not `"C"`, not `"degC"`, not `"oC"`.
+
+---
+
+## Complete Example
+
+This example shows a device that supports metrics and sleep (sleep is reported as
+`SLEEP_STAGE` metric readings, not through a separate export — see
+[Supported Metric Types](#supported-metric-types)).
+
+```json
+{
+  "id": "example_complex_v1",
+  "displayName": "Example Complex Device",
+  "version": "1.0.0",
+  "author": "example-author",
+  "supportedMetrics": ["HR", "HRV", "SPO2", "STEPS", "SLEEP_STAGE", "BATTERY"],
+  "ble": {
+    "matchByName": "ComplexDevice",
+    "matchByServiceUuid": "0000abcd-0000-1000-8000-00805f9b34fb",
+    "matchConfidence": "CERTAIN",
+    "services": ["0000abcd-0000-1000-8000-00805f9b34fb"],
+    "characteristics": {
+      "notify": "0000abce-0000-1000-8000-00805f9b34fb",
+      "write":  "0000abcf-0000-1000-8000-00805f9b34fb"
+    }
+  },
+  "syncCommands": [
+    { "type": "WRITE", "characteristic": "write", "bytes": "0xAA 0x01" },
+    { "type": "DELAY", "millis": 500 },
+    { "type": "WRITE", "characteristic": "write", "bytes": "0xAA 0x02" }
+  ],
+  "parsing": {
+    "mode": "WASM",
+    "wasmBase64": "AGFzbQEAAAA...",
+    "exports": {
+      "parseSession": "parseSession"
+    }
+  }
 }
 ```
 
 ---
 
-### Complete specVersion 3 Manifest Example
+### Complete Manifest Example with `buildSyncCommands`
 
 A minimal manifest that declares datetime and three user profile fields, exports
-`buildSyncCommands` alongside `parseMetrics`, and has two static sync commands.
+`buildSyncCommands` alongside `parseSession`, and has no static sync commands (all
+of them are generated dynamically).
 
 ```json
 {
-  "id": "example_device_v3",
-  "displayName": "Example Device (v3)",
+  "id": "example_device_dynamic_v1",
+  "displayName": "Example Device (dynamic commands)",
   "version": "1.0.0",
-  "specVersion": "3",
   "author": "your-name",
   "supportedMetrics": ["HR", "STEPS", "BATTERY"],
   "ble": {
@@ -1484,17 +1385,11 @@ A minimal manifest that declares datetime and three user profile fields, exports
     "datetime": true,
     "userProfile": ["weight_kg", "height_cm", "max_hr"]
   },
-  "syncCommands": [
-    { "type": "ENABLE_NOTIFY", "characteristic": "notify" },
-    { "type": "WRITE", "characteristic": "write", "bytes": "0xAA 0x01" }
-  ],
   "parsing": {
     "mode": "WASM",
     "wasmBase64": "AGFzbQEAAAA...",
     "exports": {
-      "parseMetrics": "parseMetrics",
-      "parseSleep": null,
-      "parseActivity": null,
+      "parseSession": "parseSession",
       "buildSyncCommands": "buildSyncCommands"
     }
   }
@@ -1628,7 +1523,7 @@ following, with a matching `params` object, instead of the default offset/value 
 |---|---|---|
 | `"FIXED_OFFSET_BYTE"` | — (uses `endByte`) | Same as omitting `strategy`; explicit form. |
 | `"SENTINEL_PACKET"` | `{"terminatorByte": int, "matchOpcode": bool}` | Completes on a standalone short sentinel packet, not a byte inside a normal data packet. `matchOpcode: true` requires the sentinel to be `[echoedOpcode, terminatorByte]`; `false` requires it to be a single `terminatorByte` byte. |
-| `"IN_STREAM_TERMINATOR"` | `{"terminatorBytes": "0xAA 0xBB"}` **or** `{"matchOpcode": bool, "terminatorSuffix": "0xBB"}` | Completes when a notification's trailing bytes equal a terminator sequence. Static form: the tail must equal the literal `terminatorBytes` hex string. `matchOpcode: true` form: the tail must equal `[echoedOpcode] + terminatorSuffix`, where `echoedOpcode` is the write's own first byte — lets one shared `params` block serve every command that shares the same trailing-terminator shape without a literal opcode baked into each command's JSON. |
+| `"IN_STREAM_TERMINATOR"` | `{"terminatorBytes": "0xAA 0xBB"}` **or** `{"matchOpcode": bool, "terminatorSuffix": "0xBB"}`, plus optional `"shortPacketRecordSize": int` | Completes when a notification's trailing bytes equal a terminator sequence. Static form: the tail must equal the literal `terminatorBytes` hex string. `matchOpcode: true` form: the tail must equal `[echoedOpcode] + terminatorSuffix`, where `echoedOpcode` is the write's own first byte — lets one shared `params` block serve every command that shares the same trailing-terminator shape without a literal opcode baked into each command's JSON. `shortPacketRecordSize` is an independent, opt-in completion signal: if declared, a notification shorter than that many bytes is itself treated as end-of-stream, regardless of the terminator-tail check. Absent by default — no completion behavior is assumed unless a command's `params` explicitly declares it. Useful for devices whose last data-bearing notification of a stream is a truncated record rather than (or in addition to) a distinct terminator sequence. |
 | `"RECORD_COUNT"` | `{"source": "fixed", "count": int}` | Completes after `count` notifications on the armed characteristic. (`"source": "fromField"` is schema-recognized but not yet supported — falls back to timeout-only.) |
 | `"EXPLICIT_EVENT"` | `{"eventOpcode": int, "characteristicUuid": string (optional)}` | Completes when a notification's first byte equals `eventOpcode`. `characteristicUuid` is accepted but not currently enforced — `BleEngine` still only ever listens on the single characteristic named in `awaitEndOfStream.characteristic`. |
 | `"QUIET_PERIOD"` | `{"quietMs": long}` | Completes after `quietMs` of silence since the last notification, with no explicit terminal signal required. |
@@ -1658,8 +1553,8 @@ is logged) — it is never guessed as a different strategy.
 - **Timeout:** if no matching packet arrives within `timeoutMs`, the engine logs a warning
   and advances to the next command anyway. Sync is never aborted due to a timeout.
 - **Pass-through guarantee:** the matched packet still flows to the normal notification
-  channel and will be parsed by `parseMetrics` / `parseSleep` as usual. `awaitEndOfStream`
-  does not consume the packet. **Exception:** `"SENTINEL_PACKET"`'s matched packet is a
+  channel, is buffered into `sessionCache`, and will be parsed by `parseSession` as usual.
+  `awaitEndOfStream` does not consume the packet. **Exception:** `"SENTINEL_PACKET"`'s matched packet is a
   standalone protocol-control signal, not a data record, and is excluded from the
   notification channel — it never reaches reassembly, `sessionCache`, or `parseSession`.
 - **Mutual exclusion:** `awaitEndOfStream` and `awaitReply` are mutually exclusive on a
@@ -1725,8 +1620,8 @@ packet distinct from the data itself.
 The engine waits for a notification whose *trailing* two bytes equal `[0x55, 0xFF]`
 (`matchOpcode: true` echoes the write's own opcode) — matching regardless of how much
 real payload precedes them in that same notification. Every notification in the
-stream, including the one that completes it, flows through to `parseMetrics` /
-`parseSleep` normally: unlike `SENTINEL_PACKET`, `IN_STREAM_TERMINATOR` has no
+stream, including the one that completes it, flows through to `parseSession`
+normally: unlike `SENTINEL_PACKET`, `IN_STREAM_TERMINATOR` has no
 pass-through exception (see Behaviour above). Because the opcode is derived
 dynamically from the write's own first byte rather than baked into `params`, this
 same `params` block is reused unchanged across all of Hume Band's six fetch commands
@@ -1765,7 +1660,7 @@ The named export must implement this ABI:
 - Return `1` to signal the stream has ended, any other value to keep waiting.
 
 **Pass-through note:** unlike `SENTINEL_PACKET`, `CUSTOM`'s completing notification is *not*
-excluded from the data path — it still flows to `parseSession`/`parseMetrics` like any other
+excluded from the data path — it still flows to `parseSession` like any other
 notification (see the Pass-through guarantee above). If your predicate's completing packet is
 a standalone control/signal packet rather than a real data record, give it a shape the parser
 will not recognize as valid data, so it degrades safely to "no reading" instead of a phantom
@@ -1802,9 +1697,10 @@ is rejected entirely with an error message shown to the user.
 | `ble.services` not empty | Must list at least one service UUID |
 | `parsing.mode` | Must be `"WASM"` |
 | `parsing.wasmBase64` | Must decode to a valid WASM binary (magic header check: first 4 bytes must be `0x00 0x61 0x73 0x6D`) |
-| `exports.parseMetrics` | Must not be blank |
-| `specVersion` | Only `"1"`, `"2"`, and `"3"` produce defined behaviour. Other values fall back silently to spec v1 layout. No rejection. |
+| `exports.parseSession` | At least one of `exports.parseSession` or `exports.parseMetrics` must be non-blank. Write new drivers against `parseSession` — nothing in the app calls `parseMetrics`. |
+| `specVersion` | Accepted as any string; has no effect on `parseSession` or `buildSyncCommands` behaviour today. It only matters to a dead legacy per-packet code path that nothing in the app invokes. Safe to omit. |
 | `awaitEndOfStream` `CUSTOM` strategy | Any statically-declared `syncCommands` entry using `"strategy": "CUSTOM"` must name a `wasmExport` that the WASM module actually exports. Only covers static `syncCommands` — a `CUSTOM` command returned by `buildSyncCommands` at runtime isn't declared in the manifest and can't be checked here. |
+| `sessionGapThresholdMs` | Must be positive if declared. |
 
 > **Advisory (not enforced by the validator):** At least one of `matchByName` or
 > `matchByServiceUuid` should be present so the scanner can identify candidate
@@ -1818,43 +1714,39 @@ is rejected entirely with an error message shown to the user.
 **Structure**
 - [ ] `id` is unique and will not change in future versions
 - [ ] `version` follows semver (`X.Y.Z`)
-- [ ] `specVersion: "2"` is present in the manifest (required for the new memory layout)
-- [ ] If upgrading an existing specVersion 1 driver: `specVersion` updated to `"2"` and module reads `syncStartMs` from offset 0 and BLE bytes from offset 16 (not offset 0)
 - [ ] All UUIDs are full 128-bit format
 - [ ] `matchByName` matches the exact advertised device name (check with a BLE scanner app)
 - [ ] `matchConfidence` is `CERTAIN` only if name + UUID uniquely identify this device
 - [ ] All `syncCommands` use role names that exist in `ble.characteristics`
 - [ ] No proprietary score metrics included in `supportedMetrics`
 - [ ] WASM binary starts with `0x00 0x61 0x73 0x6D` (valid WASM magic header)
-- [ ] `parse_metrics` (or your chosen export name) is exported from the module
-- [ ] Output JSON conforms to the schemas in this document
+- [ ] `parseSession` (or your chosen export name) is exported from the module and declared in `parsing.exports`
+- [ ] Output JSON conforms to the schema in this document
 
 **Timestamps and date attribution**
 - [ ] All emitted timestamps are UTC epoch milliseconds (13-digit integers)
-- [ ] `recordedAtMs` is sourced from device data, not from sync time, for all historical records
+- [ ] `recordedAtMs` is sourced from device data, not from connection time, for all historical records
 - [ ] If device timestamps are in local time, conversion to UTC is documented and tested
 - [ ] DST is not a problem — the driver does not use today's UTC offset for historical records
 - [ ] Accumulator metrics (STEPS, CALORIES, DISTANCE, etc.) emit one reading per calendar day with `recordedAtMs` set to UTC midnight of that day
-- [ ] Sleep `dateIso` is the UTC calendar date of `sleepEndMs` (YYYY-MM-DD in UTC)
-- [ ] Sleep `sleepStartMs` and `sleepEndMs` cover the full session including AWAKE periods at the boundaries
-- [ ] In-progress sleep sessions (sleepEndMs = 0 or ≤ sleepStartMs) return 0, not a corrupt record
-- [ ] `SLEEP_STAGE` is not in `supportedMetrics` — sleep capability is declared via `parseSleep` in exports
-- [ ] If the driver uses `syncStartMs` for relative timestamp reconstruction, it reads it from offset 0 as i64
-- [ ] If the driver uses `utcOffsetMinutes` for any local-time conversion, it reads it from offset 8 as i16
+- [ ] Sleep is emitted as `SLEEP_STAGE` readings with `metaJson = {"stage", "start_ms", "end_ms"}`, not a separate session object
+- [ ] Stage readings with an invalid `end_ms` (0, or ≤ `start_ms`) are omitted from the output array, not emitted as a corrupt record
+- [ ] `SLEEP_STAGE` **is** included in `supportedMetrics` if the driver reports sleep
+- [ ] If the driver needs a connection-time reference for relative-timestamp reconstruction, it captures `epochMs`/`utcOffsetMinutes` during `buildSyncCommands` (not during `parseSession`, which receives no time metadata) and caches it itself
 
 **Data integrity**
 - [ ] No unrecognised or proprietary metric types are emitted
 - [ ] STEPS and other accumulators are daily totals, not per-interval values
-- [ ] Activity `steps` field contains activity-only steps, not the daily total
-- [ ] Parser handles unknown packet types by returning 0, not crashing
+- [ ] No activity data is emitted — there is currently no live path for it (see [JSON Output Schema](#json-output-schema))
+- [ ] Parser handles unknown frames by omitting them from the output array, not crashing
 
 **WASM correctness**
 - [ ] All timestamp variables are declared as i64 (or equivalent 64-bit type) — no i32 for any timestamp
 - [ ] All timestamp arithmetic uses 64-bit operations throughout — no i32 intermediates
-- [ ] Parser uses `byteLength` (param 2) as the authoritative packet boundary — does not rely on zero-padding for framing
-- [ ] Parser is stateless per-packet, or accumulator state loss mid-sync produces silence not corruption
+- [ ] Parser uses `byteLength` (param 2) as the authoritative input boundary — does not rely on zero-padding for framing
+- [ ] Parser handles being called once per chunk for large sessions, not just once for the whole sync (see [Parsing](#4-parsing))
 - [ ] WASM output never exceeds 61,440 bytes (offset 0xF000)
-- [ ] Parser returns 0 (not a partial result) for any packet it does not fully recognise
+- [ ] Parser omits (does not emit a partial/corrupt entry for) any frame it does not fully recognise, and returns 0 only when the whole call produces no readings
 
 **End-to-end verification**
 - [ ] Driver file loads without validation errors in the app
@@ -1866,8 +1758,8 @@ is rejected entirely with an error message shown to the user.
 - [ ] Timestamp reconstruction method is documented if the device does not provide native UTC timestamps
 
 **Correctness under failure conditions**
-- [ ] Parser does not emit a sleep session when sleepEndMs is 0, missing, or ≤ sleepStartMs
-- [ ] If the device sends complete stage arrays in multiple packets, stages are not doubled in the merge
+- [ ] Parser does not emit a `SLEEP_STAGE` reading when its `end_ms` is 0, missing, or ≤ `start_ms`
+- [ ] If the device sends overlapping or repeated stage data across multiple packets/syncs, stages are not doubled by `SleepStagePromoter`'s grouping
 - [ ] BATTERY readings are not expected in `metric_readings_staging` — battery is routed to device metadata automatically
 - [ ] Driver changelog documents any version that changes recordedAtMs values, so users know to use Reprocess
 

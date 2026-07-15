@@ -80,5 +80,14 @@ class RoomBaselineRepository @Inject constructor(
         BaselineMetric.SLEEP -> summary.sleepMinutes?.toDouble()
         BaselineMetric.SPO2  -> summary.avgSpo2Pct
         BaselineMetric.STEPS -> summary.steps?.toDouble()
+        // Sleep-detail metrics are plain-average display values computed by
+        // SleepAverageCalculator, not part of the mean±SD baseline-band system — no band
+        // should ever exist for these, so recalculate() always no-ops (insufficient-data path).
+        BaselineMetric.SLEEP_DEEP,
+        BaselineMetric.SLEEP_LIGHT,
+        BaselineMetric.SLEEP_REM,
+        BaselineMetric.SLEEP_AWAKE,
+        BaselineMetric.SLEEP_ONSET,
+        BaselineMetric.SLEEP_WAKE -> null
     }
 }

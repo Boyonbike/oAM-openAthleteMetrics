@@ -91,15 +91,18 @@ sealed interface EndOfStreamStrategy {
      * call site in `BleEngine.executeNextSyncCommand`, which is never cached/reused
      * across commands.
      *
-     * Also completes on a short-packet signal for a fixed set of Hume Band opcodes
-     * (0x52/0x66/0x55): a notification too short to hold one full record for that
-     * opcode is itself treated as end-of-stream, independent of the terminator tail
-     * check above. See [HUME_BAND_SHORT_PACKET_RECORD_SIZE].
+     * Optionally also completes on a short-packet signal: if the driver declares
+     * [shortPacketRecordSize] in `params`, a notification shorter than that many bytes is
+     * itself treated as end-of-stream, independent of the terminator tail check above.
+     * Opt-in per command — absent by default, so no completion behavior is assumed unless
+     * a driver's manifest explicitly declares it.
      */
+    // CHANGED: constructor gains shortPacketRecordSize, replacing the deleted hardcoded map
     class InStreamTerminator(
         private val terminatorBytes: ByteArray? = null,
         private val matchOpcode: Boolean = false,
         private val terminatorSuffix: ByteArray = ByteArray(0),
+        private val shortPacketRecordSize: Int? = null,
     ) : EndOfStreamStrategy {
         @Volatile private var opcode: Int = 0
         override fun onStreamStart(opcode: Int) {
@@ -111,14 +114,11 @@ sealed interface EndOfStreamStrategy {
             val term = effectiveTerminator()
             val terminatorMatch = term.isNotEmpty() && bytes.size >= term.size &&
                 bytes.copyOfRange(bytes.size - term.size, bytes.size).contentEquals(term)
-            // Short-packet completion only applies to the opcode-independent terminatorBytes
-            // mode (matchOpcode=false) — that's the corrected Hume Band config this rule is
-            // for. Scoping out matchOpcode=true keeps that separate, legacy [echoedOpcode,
-            // suffix] mechanism (still exercised by its own tests/other configs) from picking
-            // up this Hume-specific behavior just because it happens to reuse the same opcode
-            // values.
-            val recordSize = if (!matchOpcode) HUME_BAND_SHORT_PACKET_RECORD_SIZE[opcode] else null
-            val shortPacketMatch = recordSize != null && bytes.size < recordSize
+            // CHANGED: shortPacketRecordSize is now a manifest-declared params field (see
+            // EndOfStreamStrategyFactory.from) instead of a hardcoded per-opcode lookup — a
+            // notification shorter than the declared record size is end-of-stream, opt-in per
+            // command, with no fallback default when absent.
+            val shortPacketMatch = shortPacketRecordSize != null && bytes.size < shortPacketRecordSize
             return terminatorMatch || shortPacketMatch
         }
         override fun equals(other: Any?): Boolean {
@@ -126,27 +126,15 @@ sealed interface EndOfStreamStrategy {
             if (other !is InStreamTerminator) return false
             return matchOpcode == other.matchOpcode &&
                 terminatorSuffix.contentEquals(other.terminatorSuffix) &&
+                shortPacketRecordSize == other.shortPacketRecordSize && // CHANGED
                 (terminatorBytes?.contentEquals(other.terminatorBytes ?: ByteArray(0)) ?: (other.terminatorBytes == null))
         }
         override fun hashCode(): Int {
             var result = matchOpcode.hashCode()
             result = 31 * result + terminatorSuffix.contentHashCode()
             result = 31 * result + (terminatorBytes?.contentHashCode() ?: 0)
+            result = 31 * result + (shortPacketRecordSize ?: 0) // CHANGED
             return result
-        }
-
-        private companion object {
-            // Hume Band decompile (ResolveUtil.java): getDetailData (Steps)/getBloodoxygen
-            // (SpO2)/getOnceHeartData (HR) additionally treat a notification too short to
-            // hold one full record (length/recordSize == 0) as end-of-stream on its own.
-            // Sleep/Temp/HRV's decompiled parse functions do not apply this rule, so they're
-            // deliberately absent here. Record sizes mirror the do_steps/do_spo2/do_hr rawlen
-            // guards in hume_band.wat.
-            val HUME_BAND_SHORT_PACKET_RECORD_SIZE = mapOf(
-                0x52 to 15, // GetSteps
-                0x66 to 10, // GetSpO2
-                0x55 to 10, // GetHR
-            )
         }
     }
 
@@ -297,6 +285,10 @@ object EndOfStreamStrategyFactory {
             }
 
             "IN_STREAM_TERMINATOR" -> {
+                // CHANGED: shortPacketRecordSize is a generic, driver-declared params field —
+                // applies in either matchOpcode mode, absent means the short-packet completion
+                // check never fires (no hardcoded fallback for any opcode/driver).
+                val shortPacketRecordSize = params?.get("shortPacketRecordSize")?.jsonPrimitive?.intOrNull
                 val matchOpcode = params?.get("matchOpcode")?.jsonPrimitive?.booleanOrNull ?: false
                 if (matchOpcode) {
                     val suffixHex = params?.get("terminatorSuffix")?.jsonPrimitive?.contentOrNull
@@ -305,7 +297,7 @@ object EndOfStreamStrategyFactory {
                         Timber.w("EndOfStreamStrategyFactory: IN_STREAM_TERMINATOR matchOpcode=true missing/invalid terminatorSuffix — falling back to TimeoutOnly")
                         EndOfStreamStrategy.TimeoutOnly
                     } else {
-                        EndOfStreamStrategy.InStreamTerminator(matchOpcode = true, terminatorSuffix = suffix)
+                        EndOfStreamStrategy.InStreamTerminator(matchOpcode = true, terminatorSuffix = suffix, shortPacketRecordSize = shortPacketRecordSize) // CHANGED
                     }
                 } else {
                     val hex = params?.get("terminatorBytes")?.jsonPrimitive?.contentOrNull
@@ -314,7 +306,7 @@ object EndOfStreamStrategyFactory {
                         Timber.w("EndOfStreamStrategyFactory: IN_STREAM_TERMINATOR missing/invalid terminatorBytes — falling back to TimeoutOnly")
                         EndOfStreamStrategy.TimeoutOnly
                     } else {
-                        EndOfStreamStrategy.InStreamTerminator(terminatorBytes = bytes)
+                        EndOfStreamStrategy.InStreamTerminator(terminatorBytes = bytes, shortPacketRecordSize = shortPacketRecordSize) // CHANGED
                     }
                 }
             }

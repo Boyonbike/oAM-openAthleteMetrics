@@ -2,8 +2,6 @@ package com.athletedata.openAthleteMetrics.ui.dailydetail
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,8 +14,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -51,10 +47,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -64,7 +57,6 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.athletedata.openAthleteMetrics.data.model.QuestionCategory
-import com.athletedata.openAthleteMetrics.data.model.SleepStage
 import com.athletedata.openAthleteMetrics.data.model.UserCategory
 import com.athletedata.openAthleteMetrics.ui.components.DataPageDatePickerDialog
 import com.athletedata.openAthleteMetrics.ui.components.DataPageTopBar
@@ -347,7 +339,7 @@ private fun CategoryTileFor(
 // ── Generic tile shell ────────────────────────────────────────────────────────
 
 @Composable
-private fun CategoryTile(
+internal fun CategoryTile(
     title: String,
     isExpanded: Boolean,
     onToggle: () -> Unit,
@@ -532,81 +524,6 @@ private fun CardiovascularTile(
                         isReadingsExpanded = "SPO2" in openReadingTables,
                         onToggleReadings = { onToggleReadings("SPO2") },
                     )
-                }
-            }
-        },
-    )
-}
-
-// ── Sleep tile ────────────────────────────────────────────────────────────────
-
-@Composable
-private fun SleepTile(
-    state: DailyDetailUiState.Success,
-    isExpanded: Boolean,
-    openReadingTables: Set<String>,
-    onToggle: () -> Unit,
-    onToggleReadings: (String) -> Unit,
-) {
-    val data = state.sleep
-    CategoryTile(
-        title = "Sleep",
-        isExpanded = isExpanded,
-        onToggle = onToggle,
-        collapsedSummary = {
-            if (data == null) {
-                EmptyStateText("No sleep data")
-            } else {
-                val stageParts = buildList {
-                    data.deepMinutes?.let { add("D ${formatDurationShort(it)}") }
-                    data.lightMinutes?.let { add("L ${formatDurationShort(it)}") }
-                    data.remMinutes?.let { add("R ${formatDurationShort(it)}") }
-                }
-                Text(
-                    text = if (stageParts.isEmpty()) data.formattedDuration
-                           else "${data.formattedDuration} · ${stageParts.joinToString(" ")}",
-                    style = TypographyMeta,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        },
-        expandedContent = {
-            if (data == null) {
-                EmptyStateText("No sleep data")
-            } else {
-                MetricSubsection(
-                    title = "Sleep Duration",
-                    valueLine = data.formattedDuration,
-                    readings = emptyList(),
-                    isReadingsExpanded = false,
-                    onToggleReadings = {},
-                )
-                val hasStages = data.deepMinutes != null || data.lightMinutes != null || data.remMinutes != null
-                if (hasStages) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("Sleep Stages", style = TypographyTitle)
-                        val stageParts = buildList {
-                            data.deepMinutes?.let { add("Deep: ${formatDurationShort(it)}") }
-                            data.lightMinutes?.let { add("Light: ${formatDurationShort(it)}") }
-                            data.remMinutes?.let { add("REM: ${formatDurationShort(it)}") }
-                            data.awakeMinutes?.let { add("Awake: ${formatDurationShort(it)}") }
-                        }
-                        stageParts.forEach { part ->
-                            Text(part, style = TypographyMeta, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-                if (data.hypnogramSegments.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("Hypnogram", style = TypographyTitle)
-                        Hypnogram(
-                            segments = data.hypnogramSegments,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(40.dp),
-                        )
-                        HypnogramLegend()
-                    }
                 }
             }
         },
@@ -988,7 +905,7 @@ private fun HrvReadingsBody(
 // ── Vico line chart for intra-day readings ────────────────────────────────────
 
 @Composable
-private fun ReadingsLineChart(
+internal fun ReadingsLineChart(
     readings: List<TimestampedReading>,
     modifier: Modifier = Modifier,
 ) {
@@ -1037,66 +954,6 @@ private fun ReadingsLineChart(
             exclusionZones?.set(chartKey, coordinates.boundsInWindow())
         },
     )
-}
-
-// ── Hypnogram ─────────────────────────────────────────────────────────────────
-
-private val STAGE_COLORS = mapOf(
-    SleepStage.DEEP  to Color(0xFF1A237E),
-    SleepStage.LIGHT to Color(0xFF5C6BC0),
-    SleepStage.REM   to Color(0xFF9C27B0),
-    SleepStage.AWAKE to Color(0xFFB0BEC5),
-)
-
-@Composable
-private fun Hypnogram(
-    segments: List<HypnogramSegment>,
-    modifier: Modifier = Modifier,
-) {
-    if (segments.isEmpty()) return
-    val startMs = segments.minOf { it.startMs }
-    val endMs = segments.maxOf { it.endMs }
-    val totalMs = (endMs - startMs).toFloat()
-    if (totalMs <= 0f) return
-
-    Canvas(modifier = modifier) {
-        segments.forEach { seg ->
-            val startFrac = (seg.startMs - startMs) / totalMs
-            val widthFrac = (seg.endMs - seg.startMs) / totalMs
-            drawRect(
-                color = STAGE_COLORS[seg.stage] ?: Color.Gray,
-                topLeft = Offset(startFrac * size.width, 0f),
-                size = Size(widthFrac * size.width, size.height),
-            )
-        }
-    }
-}
-
-@Composable
-private fun HypnogramLegend() {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        listOf(
-            SleepStage.DEEP  to "Deep",
-            SleepStage.LIGHT to "Light",
-            SleepStage.REM   to "REM",
-            SleepStage.AWAKE to "Awake",
-        ).forEach { (stage, label) ->
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Box(
-                    Modifier
-                        .size(10.dp)
-                        .background(STAGE_COLORS[stage] ?: Color.Gray, shape = MaterialTheme.shapes.extraSmall),
-                )
-                Text(label, style = TypographyMeta, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-    }
 }
 
 // ── Collapsible readings table ────────────────────────────────────────────────
@@ -1247,7 +1104,7 @@ private fun CategoryChip(category: UserCategory) {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 @Composable
-private fun EmptyStateText(text: String) {
+internal fun EmptyStateText(text: String) {
     Text(
         text = text,
         style = TypographyMeta,
@@ -1262,7 +1119,7 @@ private fun UserCategory.toDisplayLabel(): String = when (this) {
     UserCategory.RACE     -> "Race"
 }
 
-private fun formatDurationShort(minutes: Int): String {
+internal fun formatDurationShort(minutes: Int): String {
     val h = minutes / 60
     val m = minutes % 60
     return when {
@@ -1274,4 +1131,4 @@ private fun formatDurationShort(minutes: Int): String {
 
 
 // Extension needed for ColumnScope reference in tile content lambdas
-private typealias ColumnScope = androidx.compose.foundation.layout.ColumnScope
+internal typealias ColumnScope = androidx.compose.foundation.layout.ColumnScope

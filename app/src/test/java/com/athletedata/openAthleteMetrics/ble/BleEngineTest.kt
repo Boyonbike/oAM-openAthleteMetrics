@@ -2,17 +2,20 @@ package com.athletedata.openAthleteMetrics.ble
 
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattService
 import android.content.Context
 import android.os.SystemClock
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequest
 import androidx.work.WorkManager
+import com.athletedata.openAthleteMetrics.ble.driver.AwaitEndOfStream
 import com.athletedata.openAthleteMetrics.ble.driver.BleConfig
 import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
 import com.athletedata.openAthleteMetrics.ble.driver.EndOfStreamStrategy
 import com.athletedata.openAthleteMetrics.ble.driver.MatchConfidence
 import com.athletedata.openAthleteMetrics.ble.driver.ParsingConfig
 import com.athletedata.openAthleteMetrics.ble.driver.StepsMode
+import com.athletedata.openAthleteMetrics.ble.driver.SyncCommand
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
 import com.athletedata.openAthleteMetrics.ble.driver.WasmExports
 import com.athletedata.openAthleteMetrics.ble.sync.DeviceSyncProcessor
@@ -33,10 +36,14 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkStatic
 import io.mockk.unmockkStatic
+import io.mockk.verify
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -62,12 +69,16 @@ class BleEngineTest {
     private lateinit var metricRouter: MetricRouter
     private lateinit var workManager: WorkManager
     private lateinit var engine: BleEngine
+    // CHANGED: named (not anonymous) so tests can drive its virtual clock directly via
+    // testDispatcher.scheduler.advanceTimeBy(...) + runCurrent().
+    private lateinit var testDispatcher: TestDispatcher
 
     @Before
     fun setUp() {
         // BleEngine's `scope` field captures Dispatchers.Main.immediate at construction
         // time, so the Main dispatcher must be installed before the engine is built.
-        Dispatchers.setMain(UnconfinedTestDispatcher())
+        testDispatcher = UnconfinedTestDispatcher()
+        Dispatchers.setMain(testDispatcher)
 
         driverRegistry = mockk(relaxed = true)
         syncContextFactory = mockk(relaxed = true)
@@ -121,6 +132,35 @@ class BleEngineTest {
         val field = BleEngine::class.java.getDeclaredField(name)
         field.isAccessible = true
         field.set(engine, value)
+    }
+
+    // CHANGED: reflection getter, symmetric to setPrivateField — used by the timer-gating
+    // regression tests below to read back quiescenceJob/silentSyncTimeoutJob/isQuiescent.
+    private fun getPrivateField(name: String): Any? {
+        val field = BleEngine::class.java.getDeclaredField(name)
+        field.isAccessible = true
+        return field.get(engine)
+    }
+
+    // CHANGED: reads the real STREAM_QUIESCENCE_MS companion constant so tests can't
+    // silently drift from the production delay value.
+    private fun streamQuiescenceMs(): Long {
+        val field = BleEngine::class.java.getDeclaredField("STREAM_QUIESCENCE_MS")
+        field.isAccessible = true
+        return field.get(null) as Long
+    }
+
+    // CHANGED: polls a private field until it satisfies [predicate] — handleNotification's
+    // job assignments happen on the real Dispatchers.IO consumer coroutine (BleEngine.kt:204-210),
+    // not the test thread, so reading a job field back after invokeOnCharacteristicChanged
+    // requires polling rather than a synchronous read (same rationale as awaitSessionFrameCount).
+    private fun awaitPrivateField(name: String, timeoutMs: Long = 2_000, predicate: (Any?) -> Boolean): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (predicate(getPrivateField(name))) return true
+            Thread.sleep(10)
+        }
+        return predicate(getPrivateField(name))
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -217,6 +257,9 @@ class BleEngineTest {
             syncProcessor.process(any(), any())
             workManager.enqueueUniqueWork(any(), any(), any<OneTimeWorkRequest>())
         }
+        // CHANGED: downstream effects must fire exactly once via the EOS path — no
+        // double-enqueue from a legacy timer that should never have been running alongside it.
+        verify(exactly = 1) { workManager.enqueueUniqueWork(any(), any(), any<OneTimeWorkRequest>()) }
     }
 
     // notify characteristic UUID from testManifest()'s BleConfig.
@@ -378,5 +421,188 @@ class BleEngineTest {
         } finally {
             unmockkStatic(SystemClock::class)
         }
+    }
+
+    // CHANGED: regression tests for gating STREAM_QUIESCENCE_MS / SILENT_SYNC_TIMEOUT_MS
+    // behind EOS-armed state — the legacy timers must be inert while an EOS strategy is
+    // armed and must behave exactly as before when no EOS strategy is declared.
+
+    // CHANGED: pre-fix, both legacy timers get cancelled/restarted unconditionally in
+    // handleNotification regardless of EOS-armed state — this test would fail against
+    // that code (verify(exactly = 0) would observe cancel() having been called).
+    @Test
+    fun `handleNotification leaves legacy timers untouched while an EOS strategy is armed`() {
+        mockkStatic(SystemClock::class)
+        try {
+            every { SystemClock.elapsedRealtime() } returns 1_000L
+
+            // Non-matching strategy shape (see "still forwards normal records" test above) —
+            // the record must still flow through to handleNotification without resolving EOS.
+            val strategy = EndOfStreamStrategy.SentinelPacket(terminatorByte = 255, matchOpcode = true)
+            strategy.onStreamStart(0x66)
+            setPrivateField("awaitEndOfStreamStrategy", strategy)
+            setPrivateField("awaitEndOfStreamCharUuid", notifyCharacteristicUuid)
+            setPrivateField("awaitEndOfStreamArmedAtMs", 0L)
+            setPrivateField("awaitEndOfStreamDeferred", CompletableDeferred<Unit>())
+            setPrivateField("activeManifest", testManifest())
+            setPrivateField("activeDeviceAddress", "AA:BB:CC:DD:EE:FF")
+
+            val quiescenceMock = mockk<Job>(relaxed = true)
+            val silentTimeoutMock = mockk<Job>(relaxed = true)
+            setPrivateField("quiescenceJob", quiescenceMock)
+            setPrivateField("silentSyncTimeoutJob", silentTimeoutMock)
+            setPrivateField("isQuiescent", true)
+
+            val record = byteArrayOf(0x66, 0x01, 0x00, 0x50, 0x02, 0x03)
+            invokeOnCharacteristicChanged(notifyCharacteristicUuid, record)
+
+            assertTrue("handleNotification must have run", awaitSessionFrameCount(1))
+            // handleNotification's job-touching code is a few synchronous statements past
+            // the sessionCache append on the same IO-consumer coroutine; give it a brief
+            // moment to finish before asserting absence of a mutation (same rationale as
+            // awaitSessionFrameCount's own polling above).
+            Thread.sleep(50)
+
+            assertTrue(
+                "quiescenceJob must remain the pre-seeded instance while EOS is armed",
+                getPrivateField("quiescenceJob") === quiescenceMock,
+            )
+            assertTrue(
+                "silentSyncTimeoutJob must remain the pre-seeded instance while EOS is armed",
+                getPrivateField("silentSyncTimeoutJob") === silentTimeoutMock,
+            )
+            assertTrue(
+                "isQuiescent must not be reset while EOS is armed",
+                getPrivateField("isQuiescent") as Boolean,
+            )
+            verify(exactly = 0) { quiescenceMock.cancel() }
+            verify(exactly = 0) { silentTimeoutMock.cancel() }
+        } finally {
+            unmockkStatic(SystemClock::class)
+        }
+    }
+
+    // CHANGED: proves the fallback path for commands with no EOS strategy is unchanged —
+    // both legacy timers must still be cancelled/restarted exactly as before.
+    @Test
+    fun `handleNotification restarts legacy timers unchanged when no EOS strategy is armed`() {
+        setPrivateField("activeManifest", testManifest())
+        setPrivateField("activeDeviceAddress", "AA:BB:CC:DD:EE:FF")
+        setPrivateField("awaitEndOfStreamStrategy", null)
+
+        @Suppress("UNCHECKED_CAST")
+        val connectionStateFlow = getPrivateField("_connectionState") as MutableStateFlow<BleConnectionState>
+        connectionStateFlow.value = BleConnectionState.Connected("AA:BB:CC:DD:EE:FF", "Test", 0, false)
+
+        val oldQuiescenceJob = mockk<Job>(relaxed = true)
+        val oldSilentTimeoutJob = mockk<Job>(relaxed = true)
+        setPrivateField("quiescenceJob", oldQuiescenceJob)
+        setPrivateField("silentSyncTimeoutJob", oldSilentTimeoutJob)
+
+        invokeOnCharacteristicChanged(notifyCharacteristicUuid, byteArrayOf(0x01, 0x02, 0x03))
+
+        assertTrue("handleNotification must have run", awaitSessionFrameCount(1))
+        Thread.sleep(50)
+
+        verify(exactly = 1) { oldQuiescenceJob.cancel() }
+        verify(exactly = 1) { oldSilentTimeoutJob.cancel() }
+        val newQuiescenceJob = getPrivateField("quiescenceJob")
+        assertTrue(
+            "a fresh quiescenceJob must be scheduled for a non-EOS command, exactly as before",
+            newQuiescenceJob != null && newQuiescenceJob !== oldQuiescenceJob,
+        )
+        assertNull(
+            "silentSyncTimeoutJob must be nulled (not restarted) on real packet arrival, exactly as before",
+            getPrivateField("silentSyncTimeoutJob"),
+        )
+    }
+
+    // CHANGED: closes the stale-timer race — a quiescenceJob left running by an earlier
+    // non-EOS command must be flushed the instant the next command arms its own EOS
+    // strategy, since connectionState stays Connected throughout automatic sync execution
+    // and would otherwise let the stale job fire mid-EOS-stream.
+    @Test
+    fun `executeNextSyncCommand cancels a stale quiescenceJob when arming awaitEndOfStream`() {
+        mockkStatic(SystemClock::class)
+        try {
+            every { SystemClock.elapsedRealtime() } returns 1_000L
+
+            val manifest = testManifest()
+            setPrivateField("activeManifest", manifest)
+            setPrivateField("activeDeviceAddress", "AA:BB:CC:DD:EE:FF")
+
+            val writeCommand = SyncCommand.Write(
+                characteristic = "write",
+                bytes = "0x01",
+                awaitEndOfStream = AwaitEndOfStream(characteristic = "notify"),
+            )
+            setPrivateField("effectiveSyncCommands", listOf(writeCommand))
+            setPrivateField("commandIndex", 0)
+
+            val writeCharUuid = manifest.ble.characteristics.getValue("write")
+            val gattCharacteristic = mockk<BluetoothGattCharacteristic>(relaxed = true)
+            every { gattCharacteristic.uuid } returns UUID.fromString(writeCharUuid)
+            val service = mockk<BluetoothGattService>(relaxed = true)
+            every { service.characteristics } returns listOf(gattCharacteristic)
+            val gatt = mockk<BluetoothGatt>(relaxed = true)
+            every { gatt.services } returns listOf(service)
+            setPrivateField("activeGatt", gatt)
+
+            val staleQuiescenceJob = mockk<Job>(relaxed = true)
+            setPrivateField("quiescenceJob", staleQuiescenceJob)
+
+            val method = BleEngine::class.java.getDeclaredMethod("executeNextSyncCommand")
+            method.isAccessible = true
+            method.invoke(engine)
+
+            verify(exactly = 1) { staleQuiescenceJob.cancel() }
+            assertNull(
+                "quiescenceJob must be flushed the moment awaitEndOfStream is armed",
+                getPrivateField("quiescenceJob"),
+            )
+        } finally {
+            unmockkStatic(SystemClock::class)
+        }
+    }
+
+    // CHANGED: proves the legacy fallback path still fires its downstream effect exactly
+    // once for a non-EOS command, using virtual time to let the real 3s quiescence delay
+    // elapse deterministically instead of a real Thread.sleep.
+    @Test
+    fun `legacy quiescenceJob still enqueues the summary worker exactly once for a non-EOS command`() {
+        setPrivateField("activeManifest", testManifest())
+        setPrivateField("activeDeviceAddress", "AA:BB:CC:DD:EE:FF")
+        setPrivateField("awaitEndOfStreamStrategy", null)
+
+        @Suppress("UNCHECKED_CAST")
+        val connectionStateFlow = getPrivateField("_connectionState") as MutableStateFlow<BleConnectionState>
+        connectionStateFlow.value = BleConnectionState.Connected("AA:BB:CC:DD:EE:FF", "Test", 0, false)
+
+        val today = java.time.LocalDate.now()
+        @Suppress("UNCHECKED_CAST")
+        val affectedDates = getPrivateField("affectedDates") as MutableSet<java.time.LocalDate>
+        synchronized(affectedDates) { affectedDates.add(today) }
+
+        val enqueueLatch = CountDownLatch(1)
+        every {
+            workManager.enqueueUniqueWork(any(), any<ExistingWorkPolicy>(), any<OneTimeWorkRequest>())
+        } answers {
+            enqueueLatch.countDown()
+            mockk(relaxed = true)
+        }
+
+        invokeOnCharacteristicChanged(notifyCharacteristicUuid, byteArrayOf(0x01, 0x02, 0x03))
+
+        assertTrue(
+            "quiescenceJob must be scheduled for a non-EOS command",
+            awaitPrivateField("quiescenceJob") { it != null },
+        )
+
+        testDispatcher.scheduler.advanceTimeBy(streamQuiescenceMs() + 1)
+        testDispatcher.scheduler.runCurrent()
+
+        assertTrue("enqueueUniqueWork was not called", enqueueLatch.await(5, TimeUnit.SECONDS))
+        assertTrue("isQuiescent must be set once the legacy timer fires", getPrivateField("isQuiescent") as Boolean)
+        verify(exactly = 1) { workManager.enqueueUniqueWork(any(), any(), any<OneTimeWorkRequest>()) }
     }
 }

@@ -101,6 +101,8 @@ fun DevicesScreen(
     val blePermissionState = rememberBlePermissionState()
 
     var errorMessages by remember { mutableStateOf<List<String>?>(null) }
+    // CHANGED: non-blocking collision-warning dialog state (see DriverEvent.CollisionWarning)
+    var warningMessages by remember { mutableStateOf<List<String>?>(null) }
     var driverToDelete by remember { mutableStateOf<WasmDriverManifest?>(null) }
     var deviceToRemove by remember { mutableStateOf<Device?>(null) }
     var deviceToShowActions by remember { mutableStateOf<Device?>(null) }
@@ -120,6 +122,7 @@ fun DevicesScreen(
             when (event) {
                 is DriverEvent.ValidationError -> errorMessages = event.errors
                 is DriverEvent.Error -> errorMessages = listOf(event.message)
+                is DriverEvent.CollisionWarning -> warningMessages = event.warnings // CHANGED
             }
         }
     }
@@ -141,6 +144,23 @@ fun DevicesScreen(
             },
             confirmButton = {
                 TextButton(onClick = { errorMessages = null }) { Text("OK") }
+            },
+        )
+    }
+
+    // CHANGED: non-blocking collision-warning dialog — driver is already registered by the
+    // time this shows; dismissing just clears the dialog.
+    warningMessages?.let { warnings ->
+        AlertDialog(
+            onDismissRequest = { warningMessages = null },
+            title = { Text("Driver Compatibility Warning") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    warnings.forEach { Text(it, style = TypographyMeta) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { warningMessages = null }) { Text("OK") }
             },
         )
     }

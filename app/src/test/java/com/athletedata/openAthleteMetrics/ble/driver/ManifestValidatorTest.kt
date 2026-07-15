@@ -127,4 +127,90 @@ class ManifestValidatorTest {
             errors[0].contains("magic header"),
         )
     }
+
+    // CHANGED: sessionGapThresholdMs positivity check
+    @Test
+    fun `validate reports an error when sessionGapThresholdMs is zero or negative`() {
+        val manifest = manifest(validWasmBytes, customWasmExport = null).copy(sessionGapThresholdMs = 0L)
+
+        val errors = ManifestValidator().validate(manifest)
+
+        assertTrue(
+            "expected an error naming sessionGapThresholdMs, got: $errors",
+            errors.any { it.contains("sessionGapThresholdMs") },
+        )
+    }
+
+    @Test
+    fun `validate reports no error when sessionGapThresholdMs is a positive value`() {
+        val manifest = manifest(validWasmBytes, customWasmExport = null).copy(sessionGapThresholdMs = 1_800_000L)
+
+        val errors = ManifestValidator().validate(manifest)
+
+        assertTrue(
+            "did not expect a sessionGapThresholdMs error, got: $errors",
+            errors.none { it.contains("sessionGapThresholdMs") },
+        )
+    }
+
+    // CHANGED: intra-driver signature collision check
+    @Test
+    fun `validate reports a conflicting-strategy error when the same characteristic and opcode declare two different EOS strategies`() {
+        val manifest = manifest(validWasmBytes, customWasmExport = null).copy(
+            syncCommands = listOf(
+                SyncCommand.Write(
+                    characteristic = "write",
+                    bytes = "0x10",
+                    awaitEndOfStream = AwaitEndOfStream(
+                        characteristic = "notify",
+                        strategy = "SENTINEL_PACKET",
+                        params = buildJsonObject { put("terminatorByte", JsonPrimitive(255)) },
+                    ),
+                ),
+                SyncCommand.Write(
+                    characteristic = "write",
+                    bytes = "0x10",
+                    awaitEndOfStream = AwaitEndOfStream(
+                        characteristic = "notify",
+                        strategy = "IN_STREAM_TERMINATOR",
+                        params = buildJsonObject { put("terminatorBytes", JsonPrimitive("0xFF")) },
+                    ),
+                ),
+            ),
+        )
+
+        val errors = ManifestValidator().validate(manifest)
+
+        assertTrue(
+            "expected a conflicting-strategy error naming the characteristic and opcode, got: $errors",
+            errors.any {
+                it.contains("conflicting") &&
+                    it.contains("00002a37-0000-1000-8000-00805f9b34fb") &&
+                    it.contains("0x10")
+            },
+        )
+    }
+
+    // CHANGED: intra-driver signature collision check — same characteristic+opcode+strategy
+    // repeated across commands is not a conflict (no distinct strategies to disagree).
+    @Test
+    fun `validate reports no conflicting-strategy error when repeated commands share the same characteristic, opcode and strategy`() {
+        val write = SyncCommand.Write(
+            characteristic = "write",
+            bytes = "0x10",
+            awaitEndOfStream = AwaitEndOfStream(
+                characteristic = "notify",
+                strategy = "SENTINEL_PACKET",
+                params = buildJsonObject { put("terminatorByte", JsonPrimitive(255)) },
+            ),
+        )
+        val manifest = manifest(validWasmBytes, customWasmExport = null).copy(syncCommands = listOf(write, write))
+
+        val errors = ManifestValidator().validate(manifest)
+
+        assertTrue(
+            "did not expect a conflicting-strategy error, got: $errors",
+            errors.none { it.contains("conflicting") },
+        )
+    }
 }

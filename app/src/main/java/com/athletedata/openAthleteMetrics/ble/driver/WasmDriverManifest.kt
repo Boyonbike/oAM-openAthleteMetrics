@@ -56,6 +56,15 @@ data class WasmDriverManifest(
     val syncRequirements: SyncRequirements? = null,
     val stepsMode: StepsMode = StepsMode.DELTA,     // STEPS-MODE: JSON "delta"/"absolute"; absent → DELTA
     val caloriesMode: CaloriesMode = CaloriesMode.DELTA, // CALORIES-MODE: JSON "delta"/"absolute"; absent → DELTA
+    // CHANGED: optional; declares this driver's expected sync cadence so MetricRouter can
+    // scale its plausibility ceiling. Omitted → MetricRouter falls back to its default
+    // (currently 5 minutes, matching the original hardcoded default before this field existed).
+    val syncIntervalMs: Long? = null,
+    // CHANGED: optional override for SleepStagePromoter's session-grouping gap. Omitted →
+    // the app-level default applies (see SleepStagePromoter.SESSION_GAP_THRESHOLD_MS). Only
+    // set this if this driver's own protocol genuinely requires a different grouping window
+    // for SLEEP_STAGE records than the app's default "same sleep session" policy.
+    val sessionGapThresholdMs: Long? = null,
 )
 
 /**

@@ -1,268 +1,498 @@
-╭─── Claude Code v2.1.201 ─────────────────────────────────────────────────────╮
+╭─── Claude Code v2.1.207 ─────────────────────────────────────────────────────╮
 │                                                    │ Tips for getting        │
 │                  Welcome back bob!                 │ started                 │
 │                                                    │ Run /init to create a … │
 │                       ▐▛███▜▌                      │ ─────────────────────── │
 │                      ▝▜█████▛▘                     │ What's new              │
-│                        ▘▘ ▝▝                       │ Claude Sonnet 5 sessio… │
-│   Sonnet 5 · Claude Pro ·                          │ Changed `AskUserQuesti… │
-│   innesmcdonaldracing@outlook.com's Organization   │ Changed the "default" … │
+│                        ▘▘ ▝▝                       │ Auto mode is now avail… │
+│   Sonnet 5 · Claude Pro ·                          │ Fixed the terminal fre… │
+│   innesmcdonaldracing@outlook.com's Organization   │ Fixed remote managed s… │
 │                ~/StudioProjects/OAM                │ /release-notes for more │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
 
-❯ CONTEXT                                                                       
-  I am building a local-first athlete performance tracking Android app.         
-  Package: com.athletedata.app                                                  
-  Stack: Kotlin, Jetpack Compose, MVVM, Room, Hilt, Coroutines, Flow, Chicory   
-  (WASM).                                                                       
-  Paste the Master Plan and MVP Build Spec, plus the "Issue 0 — End-of-Stream   
-  Detection" design doc, and the diff from the last session (the one that       
-  migrated Hume Band's six fetch commands from SENTINEL_PACKET to a shared      
-  IN_STREAM_TERMINATOR template with matchOpcode/terminatorSuffix), before this 
-  prompt.                                                                       
+❯ # Driver Authoring Guide Audit (Read-Only)                                    
                                                                                 
-  THIS IS AN INVESTIGATION ONLY. Do not fix anything, do not edit any file, do  
-  not recompile. Read and report only. If you find the root cause and it's a    
-  one-line fix, describe it precisely but do not apply it — a separate prompt   
-  will handle the fix once I've reviewed your findings.                         
+  This is a diagnostic session. Produce findings only — do not edit the guide   
+  or any code.                                                                  
                                                                                 
-  BACKGROUND — a fresh real-device capture shows the fix partially landed       
+  ## Context                                                                    
                                                                                 
-  The prior session's plan claimed the new shared IN_STREAM_TERMINATOR template 
-  (matchOpcode:true) was wired into all six fetch opcodes (0x55 GetHR, 0x52     
-  GetSteps, 0x53 GetSleep, 0x66 GetSpO2, 0x56 GetHRV, 0x65 GetTemp) identically 
-  via each opcode's third $wmem call in $buildSyncCommands.                     
+  oAM's BLE device driver system: drivers are JSON manifests with embedded      
+  base64-compiled WASM modules, executed via Chicory (pure-Java WASM            
+  interpreter). No built-in Kotlin drivers — plugin-only. Reference device:     
+  Hume Band J2208. Drivers are hand-authored in WAT (WebAssembly Text);         
+  AssemblyScript is the noted fallback if WAT becomes unwieldy.                 
                                                                                 
-  A real-device logcat taken after that session shows otherwise. Measured gaps  
-  between each command's last data notification and the next command write:     
+  ## Task                                                                       
                                                                                 
-    0x55 (GetHR)   -> 0x52 (GetSteps): ~30.1s  (unchanged — old timeout         
-  behavior)                                                                     
-    0x52 (GetSteps)-> 0x53 (GetSleep): ~30.4s  (unchanged — old timeout         
-  behavior)                                                                     
-    0x53 (GetSleep)-> 0x66 (GetSpO2):  ~30.4s  (unchanged — old timeout         
-  behavior)                                                                     
-    0x66 (GetSpO2) -> 0x56 (GetHRV):   3ms     (FIXED — terminator detected)    
-    0x56 (GetHRV)  -> 0x65 (GetTemp):  1ms     (FIXED — terminator detected)    
-    0x65 (GetTemp) -> (stream unfinished)      (capture cut off, unknown)       
+  Locate the driver authoring guide in this repo (search docs/, README files,   
+  and any `*driver*guide*` or `*authoring*` filenames) and locate the actual    
+  driver runtime code (manifest schema/parser, Chicory host bindings, WASM      
+  invocation layer, and any existing driver implementations, including the Hume 
+  Band J2208 reference driver).                                                 
                                                                                 
-  So the fix demonstrably works for 0x66 and 0x56, but 0x55, 0x52, and 0x53     
-  still exhibit the exact pre-fix ~30s stall. This directly contradicts the     
-  claim that the change was applied "identical in all six" opcode blocks.       
-  0x65's status is unconfirmed — the capture ends mid-stream before its         
-  resolution or timeout would show.                                             
+  Compare the guide against the current code and report every place they've     
+  drifted. Specifically check:                                                  
                                                                                 
-  This project has already shipped the "source edited, compiled artifact never  
-  fully rebuilt/embedded" bug twice. Treat that as the leading hypothesis, not  
-  a design gap, until ruled out by reading the actual current code/artifact —   
-  not by re-reading the plan or trusting comments.                              
+  1. **Manifest schema** — do the fields, types, and structure the guide        
+  documents match what the manifest parser actually reads/validates?            
+  2. **Host function interface** — do the function names, parameter             
+  order/types, and return types the guide lists match what's actually exposed   
+  to WASM modules in the Chicory bindings?                                      
+  3. **Required lifecycle functions** — does the guide correctly list every     
+  function a driver must export (e.g. init, parse/record handlers,              
+  `buildSyncCommands`), and match their actual required signatures?             
+  4. **Command sequencing** — does the guide correctly explain that the driver  
+  owns command sequencing via `buildSyncCommands`, and that `awaitEndOfStream`  
+  (not fixed delays) is the correct mechanism for pacing? Flag if the guide is  
+  silent on this or describes it differently.                                   
+  5. **Multi-record packet handling** — does the guide warn authors that        
+  handlers like `$do_hrv` (and structurally similar ones) must stride across    
+  all concatenated records in a packet, not just read a fixed offset? This has  
+  been a real bug source — confirm the guide documents it.                      
+  6. **WASM memory layout constraints** — does the guide document the linear    
+  memory layout risk (large input data at offset 16 can overwrite static        
+  string/table regions, e.g. around `0xD800`) and the `WASM_SAFE_INPUT_BYTES`   
+  chunking requirement for large sessions?                                      
+  7. **Example/reference driver accuracy** — if the guide includes a worked     
+  example or references the Hume Band J2208 driver, confirm the example still   
+  compiles/matches the current manifest schema and host interface.              
+  8. **Anything else** — flag any other guide claim (API name, opcode format,   
+  build/compile step for WAT→WASM, testing instructions) that no longer matches 
+  the code.                                                                     
                                                                                 
-  TASK — answer these, in order, with evidence (line numbers, byte offsets,     
-  hex dumps, hash outputs) for each, not assertions                             
+  ## Output format                                                              
                                                                                 
-  1. Open the CURRENT $buildSyncCommands function in hume_band.wat as it exists 
-     on disk right now. For each of the six fetch opcode blocks (0x55, 0x52,    
-     0x53, 0x66, 0x56, 0x65), report the exact address and length arguments     
-     passed to that block's third $wmem call (the one that writes the           
-     awaitEndOfStream/strategy descriptor). Do this for all six — do not sample 
-     two and extrapolate.                                                       
-                                                                                
-  2. Compare those six addresses against the address of the new shared          
-     IN_STREAM_TERMINATOR template (the ~157-byte segment from the last         
-     session). State plainly, per opcode, whether it points at:                 
-       a. the new shared template address, or                                   
-       b. the old dead SENTINEL_PACKET address, or                              
-       c. some other/third address (report what's there if so).                 
-     I expect this will show 0x66 and 0x56 pointing at (a) and some or all of   
-     0x55/0x52/0x53 pointing at (b) or something stale — confirm or refute this 
-     with the actual addresses, don't assume the expected answer.               
-                                                                                
-  3. If HumeBandDriver.json (or another manifest/JSON layer) independently      
-     encodes each command's strategy/terminator config (rather than everything  
-     being derived at runtime from the WASM template), check the same six       
-     opcodes there too. Report whether the JSON-level config is uniform across  
-     all six or also shows a 2-vs-4 split.                                      
-                                                                                
-  4. Re-run the artifact-provenance check: sha256 + mtime for                   
-     Driver Builds/Hume Band 1/hume_band.wasm, app/src/test/resources/wasm/     
-     hume_band.wasm, and the decoded wasmBase64 currently embedded in           
-     HumeBandDriver.json. Confirm all three are byte-identical and reflect the  
-     .wat as it exists on disk right now, not a stale pre-fix or partially-     
-     rebuilt artifact. If they're NOT identical, that alone may explain the     
-     split (e.g. only some opcode blocks' changes made it into whichever        
-     .wasm actually got embedded).                                              
-                                                                                
-  5. Check EndOfStreamStrategyFactory.from() (or wherever the manifest strategy 
-     field is parsed into a Kotlin EndOfStreamStrategy at runtime) for all six  
-     opcodes' actual resolved strategy type and parameters at the point         
-  BleEngine                                                                     
-     uses them for this connection — i.e. confirm what strategy object 0x55,    
-     0x52, and 0x53 are actually being armed with today, not what the plan says 
-     they should be armed with.                                                 
-                                                                                
-  6. If tasks 1-5 all show the six opcode blocks ARE uniformly wired to the new 
-     template/strategy, and the WASM/JSON artifacts ARE consistent — then the   
-     divergence is NOT a wiring bug, and the next hypothesis is a real per-     
-     command difference in device behavior (e.g. GetHR/GetSteps/GetSleep might  
-     not actually append [opcode, 0xFF] to their last notification the same way 
-     SpO2/HRV do). In that case, report what evidence would be needed from a    
-     real capture to confirm or refute that (e.g. "capture the exact last N     
-     bytes of the final 0x55 notification and check whether it ends in          
-     55 FF") — but do not guess an answer without that byte-level evidence in   
-     hand.                                                                      
-                                                                                
-  7. Summarize with a single clear verdict: is this a wiring/build-artifact gap 
-     (fixable by re-pointing/rebuilding), or an open question requiring another 
-     targeted real-device byte capture of 0x55/0x52/0x53's actual final         
-     notification tails? State which evidence from tasks 1-5 supports your      
-     verdict.                                                                   
-                                                                                
-  Do not modify any file. Do not recompile. Do not touch                        
-  quick_cleanup_and_verify_prompt.md's separate track. This is read-only        
-  diagnosis — report findings only, and I'll direct the fix in a follow-up      
-  prompt once I've reviewed them.                                               
+  A findings list. For each mismatch: what the guide says, what the code        
+  actually does, file:line for the code, and severity (breaking — guide would   
+  produce a non-working driver — vs. stale but harmless). No fixes, no doc      
+  edits — this is audit only.                                                   
 
-  Searched for 1 pattern, read 4 files, listed 1 directory, ran 12 shell commands (ctrl+o to expand)
+● I'll start by reading the driver authoring guide and identifying the relevant
+  runtime code files.
 
-● Documentation is consistent with the code — no per-opcode divergence is
-  described anywhere. I have enough evidence now to write the report.
+  Searched for 2 patterns, read 4 files (ctrl+o to expand)
 
-  Read 1 file (ctrl+o to expand)
+● This reveals something major: the guide documents a per-notification
+  parseMetrics/parseSleep/parseActivity model, but WasmDriverEngine.kt has a
+  parseSession(frames: List<SessionFrame>) buffered/batched architecture that
+  doesn't appear anywhere in what I've read. I need to check which is actually
+  used and read the remaining driver runtime files.
 
-● All findings confirm the same conclusion. Here is the full report.
+  Searched for 2 patterns, read 9 files (ctrl+o to expand)
 
-● Code review(review · 0 findings)
+● This confirms a fundamental architecture mismatch. Let me verify against the
+  actual Hume Band reference driver and the new architecture tests to nail down
+  exact details.
 
-● Investigation Report — Hume Band awaitEndOfStream wiring, real-device gap
+  Searched for 6 patterns, read 2 files, ran 4 shell commands (ctrl+o to expand)
 
-  Verdict up front: this is NOT a wiring/build-artifact gap. Every layer I 
-  checked — .wat source, both compiled .wasm binaries, the JSON manifest, and 
-  the Kotlin strategy factory/arming code — is uniform across all six opcodes. 
-  The ~30s stalls on 0x55/0x52/0x53 point to an open question about real-device 
-  behavior, not a code defect.
+● Driver Authoring Guide Audit — Findings
 
-  1. Third $wmem call per opcode block (current hume_band.wat, 
-  $buildSyncCommands)
+  I compared docs/DRIVER_AUTHORING_GUIDE.md (1880 lines) against the live
+  runtime (WasmDriverEngine.kt, BleEngine.kt, DriverRegistry.kt,
+  ManifestValidator.kt, ParsingConfig.kt, DeviceSyncProcessor.kt,
+  DeviceReprocessor.kt, MetricRouter.kt, EndOfStreamStrategy.kt) and the actual
+  reference driver (Driver Builds/Hume Band 1/HumeBandDriver.json +
+  hume_band.wat). The drift is severe: the guide documents an architecture that 
+  has been superseded, and the reference driver itself doesn't conform to what
+  the guide teaches.
 
-  ┌───────────────┬──────┬─────────┬────────┐
-  │    Opcode     │ Line │ Address │ Length │
-  ├───────────────┼──────┼─────────┼────────┤
-  │ 0x55 GetHR    │ 1177 │ 0x40D00 │ 157    │
-  ├───────────────┼──────┼─────────┼────────┤
-  │ 0x52 GetSteps │ 1181 │ 0x40D00 │ 157    │
-  ├───────────────┼──────┼─────────┼────────┤
-  │ 0x53 GetSleep │ 1185 │ 0x40D00 │ 157    │
-  ├───────────────┼──────┼─────────┼────────┤
-  │ 0x66 GetSpO2  │ 1189 │ 0x40D00 │ 157    │
-  ├───────────────┼──────┼─────────┼────────┤
-  │ 0x56 GetHRV   │ 1193 │ 0x40D00 │ 157    │
-  ├───────────────┼──────┼─────────┼────────┤
-  │ 0x65 GetTemp  │ 1197 │ 0x40D00 │ 157    │
-  └───────────────┴──────┴─────────┴────────┘
+  ---
+  BREAKING
 
-  All six identical — checked every block, not sampled.
+  1. The guide's entire per-notification parsing model 
+  (parseMetrics/parseSleep/parseActivity) is dead code — never invoked by the 
+  live engine.
+  - Guide: "4. Parsing" (L69-86), "Memory Layout" (L1029-1066), "Function
+  Signature" (L1068-1078), "Call Sequence (per notification)" (L1083-1093), all
+  of "JSON Output Schemas" (L1095-1204) — describes the app calling these three
+  exports once per BLE notification.
+  - Code: WasmDriverEngine.callParse() (ble/wasm/WasmDriverEngine.kt:403)
+  implements this exactly, but is never called anywhere in app/src/main/java
+  (verified by grep). BleEngine.handleNotification() (ble/BleEngine.kt:376-445)
+  only buffers each packet into sessionCache; all parsing happens in
+  BleEngine.triggerSync() (:479-507) via DriverRegistry.parseSession() →
+  WasmDriverEngine.parseSession() (ble/wasm/WasmDriverEngine.kt:116), one bulk
+  call with every buffered frame. A driver that follows the guide's documented
+  contract (exports only parseMetrics/parseSleep/parseActivity, no parseSession)
+  loads successfully but produces zero data, silently.
 
-  2. Address vs. template
+  2. parseSession — the mechanism every real code path and the reference driver 
+  actually use — is undocumented.
+  - WasmExports (ble/driver/ParsingConfig.kt:53-64) has a parseSession: String?
+  field whose doc comment says it "Replaces per-notification exports when
+  present." ManifestValidator (ManifestValidator.kt:90) accepts parseMetrics or
+  parseSession, not parseMetrics alone as the guide's schema table states
+  (L1004-1011, no parseSession row).
+  - HumeBandDriver.json declares "exports": {"parseSession": "parseSession", 
+  "buildSyncCommands": "buildSyncCommands"} — no parseMetrics. Its compiled
+  hume_band.wat exports only parseSession/buildSyncCommands (lines 957, 1272).
+  - parseSession's actual input isn't raw bytes at a fixed offset — it's a JSON
+  array [{"characteristic","opcode","bytes":"<base64>"}...]
+  (WasmDriverEngine.buildFramesJson, :571-581), one entry per reassembled packet
+  across the whole session. This schema appears nowhere in the guide.
 
-  The shared IN_STREAM_TERMINATOR template lives at (data (i32.const 0x40D00) 
-  ...) (line 230), 157 bytes, content ","awaitEndOfStream":{...,"strategy":"IN_S
-  TREAM_TERMINATOR","params":{"matchOpcode":true,"terminatorSuffix":"0xFF"}...}.
-  The dead SENTINEL_PACKET block is at 0x409F5ish inside the 0x40900 segment
-  (comment-labeled [DDF5], 147 bytes), unreferenced anywhere in
-  $buildSyncCommands.
+  3. The guide's "specVersion 2 buildSyncCommands" zero-argument signature would
+  trap if implemented — the engine always calls the two-argument form.
+  - Guide (L860-919) documents (func (result i32)), no parameters, reading a
+  metadata block the host pre-writes.
+  - Code: callBuildSyncCommandsWithContext() (WasmDriverEngine.kt:517-568)
+  always calls exportFn.apply(offset, len) — the two-i32-argument signature the
+  guide separately documents under "specVersion 3" (L1338+). There is no code
+  path that ever calls a zero-arg buildSyncCommands. Following the guide's "spec
+  v2" section produces a WASM function with the wrong export arity.
 
-  All six opcodes point at (a), the new shared template — none point at the dead
-  SENTINEL_PACKET address or anything else. This refutes the hypothesized
-  2-vs-4 split at the source level.
+  4. "Raw replay" / processFromRaw() describes a deleted method; the real 
+  implementation is a different class with different semantics.
+  - Guide (L133-149, and L553-610 "Driver Versioning...") states
+  DeviceSyncProcessor.processFromRaw() re-parses raw_device_data for a session
+  and calls MetricRouter.routeAll().
+  - DeviceSyncProcessor.kt:244: // REMOVED: interrupted-sync-recovery — 
+  processFromRaw() deleted. The feature now lives in
+  DeviceReprocessor.reprocess(device, since, onProgress)
+  (ble/sync/DeviceReprocessor.kt:51), windowed by time (since: Instant) not
+  session ID, uses parseSession (not per-packet parsing), and writes via
+  MetricRouter.routeAllForceReplace() (MetricRouter.kt:188) —
+  MetricRouter.routeAll() does not exist anywhere in the codebase.
 
-  3. JSON manifest independent encoding
+  5. specVersion guidance is meaningless for the one code path that's actually 
+  live, and the reference driver uses an undocumented value.
+  - Guide (L1808): "Only \"1\", \"2\", and \"3\" produce defined behaviour.
+  Other values fall back silently to spec v1 layout." HumeBandDriver.json
+  declares "specVersion": 4 — by the guide's own rule this should mean broken
+  spec-v1 fallback, but parseSession's input writer (callParseSessionBytes,
+  WasmDriverEngine.kt:451-483) never checks specVersion at all; it
+  unconditionally writes to offset 16. specVersion only gates the dead
+  callParse() path (finding 1) — it's vestigial for every real driver today.
 
-  HumeBandDriver.json's parsing block contains only mode: "WASM", wasmBase64,
-  and two export names (parseSession, buildSyncCommands). There is no static 
-  syncCommands array and no per-opcode strategy/terminator config — the entire
-  command list, including every awaitEndOfStream block, is generated at runtime
-  purely by the WASM export. So there's nothing at the JSON layer that could
-  diverge; it's necessarily as uniform as the WASM output.
+  6. HumeBandDriver.json's specVersion is an unquoted JSON number (4), while the
+  schema type is String — likely fails to parse.
+  - WasmDriverManifest.specVersion: String (WasmDriverManifest.kt:54), decoded
+  via Json { ignoreUnknownKeys = true } (DriverStorage.kt:18, isLenient defaults
+  to false). kotlinx.serialization's default (non-lenient) Json rejects an
+  unquoted numeric literal where a String is expected. I could not execute the
+  toolchain in this sandbox to get a 100%-certain repro, but this is standard,
+  well-documented kotlinx.serialization behavior — worth confirming with a quick
+  unit test loading the actual file, since if correct, the shipped reference 
+  driver fails to load in the app at all, silently caught and logged by
+  DriverStorage.loadAllDrivers()'s catch block.
 
-  4. Artifact provenance
+  ---
+  Stale / misleading (not immediately fatal, but wrong)
 
-  sha256 068144681564446f8ee7a91eaf8990d0ab39c7d5150498c505c49991c0abec51
-  - Driver Builds/Hume Band 1/hume_band.wasm ✅ matches
-  - app/src/test/resources/wasm/hume_band.wasm ✅ matches
-  - decoded wasmBase64 from HumeBandDriver.json ✅ matches (7491 bytes decoded)
-  - Recompiling the current .wat on disk with wat2wasm reproduces the exact same
-  sha256.
+  7. Live-sync description of MetricRouter.route() timing is inaccurate.
+  Guide (L110-124): routing happens "on each incoming notification as packets
+  arrive." Code: routing (routeReading) only runs inside triggerSync()
+  (BleEngine.kt:484-497), after the whole session's parseSession call completes
+  — handleNotification() does no routing.
 
-  All three artifacts are byte-identical and demonstrably reflect the current
-  .wat. This is clean — the "edited source, stale binary" bug class that's
-  bitten this project twice did not recur here.
+  8. Undocumented plausibility filter silently drops readings.
+  Guide's reading-validation rules (L157-162) list only NaN/Infinite, timestamp
+  bounds, blank unit, unknown type. Code (MetricRouter.implausibleDeltaReason(),
+  MetricRouter.kt:202-226) additionally drops DELTA-mode STEPS (>400/min,
+  scaled by syncIntervalMs) and ACTIVE_CALORIES (>30 kcal/min) deltas, and any
+  negative delta — logged only via Timber.w, never surfaced. Not mentioned
+  anywhere in Validation Rules, Deduplication, or the Steps/Calories
+  Accumulation Mode sections.
 
-  5. Runtime strategy resolution
+  9. Multi-record striding is implemented correctly but undocumented as a 
+  required pattern.
+  hume_band.wat:590-631 ($do_hrv) correctly loops in fixed 15-byte strides
+  across the whole decoded buffer, bounded by $rawlen. The guide never mentions
+  record striding, concatenated multi-record packets, or $do_hrv — despite this
+  being called out as a real historical bug source. Current implementation is
+  correct; the guide gives a new-driver author no way to know this pattern is
+  required.
 
-  - EndOfStreamStrategyFactory.from() (EndOfStreamStrategy.kt:272-293) parses
-  "IN_STREAM_TERMINATOR" + matchOpcode:true + terminatorSuffix:"0xFF" into
-  EndOfStreamStrategy.InStreamTerminator(matchOpcode=true, 
-  terminatorSuffix=[0xFF]) — pure function of the JSON, no opcode-specific
-  branching exists.
-  - BleEngine.executeNextSyncCommand() (BleEngine.kt:1077-1096) arms a fresh
-  strategy instance per command, deriving opcode = bytes.firstOrNull() from
-  cmd.bytes — i.e. the current command's own write payload, freshly computed
-  each iteration (BleEngine.kt:1062,1086-1087). No shared/stale state across
-  commands.
-  - onCharacteristicChanged (BleEngine.kt:743-763, 786-806) calls
-  strategy.onNotification(bytes, elapsedMs) on raw, per-callback notification
-  bytes, before any app-level reassembly — identical code path regardless of
-  characteristic/opcode.
+  10. 0xD800 memory-collision risk and WASM_SAFE_INPUT_BYTES chunking are absent
+  from the guide — but the underlying risk is actually resolved, not live.
+  WasmDriverEngine.kt:603-607: static WASM data "previously started at 0xD800...
+  they've since moved to their own page (0x40000+)," so large input "no longer
+  risks corrupting them." WASM_SAFE_INPUT_BYTES = 50_000 is now just a
+  conservative JSON-payload chunk size for parseSession (splitFrameChunks,
+  :177-184). Low severity — nothing in the guide is actively wrong here, but
+  it's silent on the fact that a large session may be split across multiple
+  parseSession calls.
 
-  Today, 0x55/0x52/0x53 are armed with the exact same
-  InStreamTerminator(matchOpcode=true, "0xFF") object type and parameters as
-  0x66/0x56/0x65. There is no special-casing anywhere in this path.
+  ---
+  Not drifted (verified consistent, for completeness)
 
-  Additionally, WasmHumeBandBuildSyncCommandsTest.kt (already present in the
-  working tree, added last session) drives the real compiled hume_band.wasm
-  end-to-end and asserts all six opcodes emit
-  IN_STREAM_TERMINATOR/matchOpcode:true/terminatorSuffix:"0xFF"/timeoutMs:30000
-  identically. I could not execute it here (JAVA_HOME/java unavailable in this
-  environment, so ./gradlew failed before touching any file), so I'm not
-  claiming its pass/fail status — but its assertions match exactly what I
-  independently derived from the raw bytes.
+  - The syncCommands static command types (WRITE/ENABLE_NOTIFY/DELAY),
+  awaitReply, and all seven awaitEndOfStream strategies (FIXED_OFFSET_BYTE,
+  SENTINEL_PACKET, IN_STREAM_TERMINATOR, RECORD_COUNT, EXPLICIT_EVENT,
+  QUIET_PERIOD, CUSTOM) match EndOfStreamStrategy.kt/EndOfStreamStrategyFactory
+  field-for-field, including fallback-to-TimeoutOnly behavior and the
+  SentinelPacket pass-through exclusion.
+  - ManifestValidator's CUSTOM-strategy wasmExport check and intra-/cross-driver
+  signature-collision checks match the guide's Validation Rules table.
 
-  6. What would confirm/refute the remaining hypothesis
+  ---
+  Bottom line: the guide's core "Writing a WASM Driver Module" chapter and its
+  worked example describe a parsing contract
+  (parseMetrics/parseSleep/parseActivity, per-notification calls, spec-v2
+  zero-arg buildSyncCommands) that the engine no longer executes, while omitting
+  the parseSession-based contract that the reference driver, DriverRegistry,
+  BleEngine, and DeviceReprocessor all actually use. An author (human or AI)
+  following this guide today would build a driver that loads but silently never
+  parses data. The parseSession schema, its base64 frame format, and the correct
+  buildSyncCommands two-argument signature need to be documented as the primary
+  (only) path.
 
-  Since source, artifacts, manifest, and runtime code are all uniform, the only
-  place left for a real 2-vs-4 split is device-side behavior. What's needed: a
-  capture of the last N raw bytes of the final notification for 0x55, 0x52, and 
-  0x53 on the actual notify characteristic, at the same fidelity as whatever
-  showed 0x66/0x56 ending in [opcode, 0xFF]. Specifically check:
-  - Does the final 0x55 notification's tail equal 55 FF? Same for 52 FF (0x52)
-  and 53 FF (0x53)?
-  - If not, what does it actually end in — e.g. extra trailing bytes after
-  [opcode, 0xFF] (a checksum, a record count, padding), or is the terminator
-  split across two separate BLE notification callbacks (last fragment
-  smaller/larger than expected), or is a completely different byte value used
-  for the trailing marker for these three opcodes?
+✻ Baked for 5m 21s
 
-  docs/core-systems.md:176-180 documents a separate reassembly mechanism
-  ("Short-Packet Terminal": a notification < negotiatedMtu - 3 bytes is treated
-  as buffer-complete for parseSession purposes) — this operates independently of
-  and after the awaitEndOfStream strategy check, so it can't explain a stall in
-  awaitEndOfStream itself, but it's worth keeping in mind if 0x55/0x52/0x53's
-  payloads are large enough to span many MTU-sized fragments: it raises the
-  possibility the device paces/terminates those longer multi-record streams
-  differently than the short single-fragment 0x66/0x56/0x65 responses.
+❯ please plan an update                                                         
 
-  7. Summary verdict
+● Explore(Verify remaining open questions for guide rewrite)
+  ⎿  Done (12 tool uses · 36.9k tokens · 58s)
+  (ctrl+o to expand)
 
-  Not a wiring or build-artifact gap. Tasks 1–5 all show full uniformity:
-  identical $wmem addresses/lengths in the current .wat for all six opcodes
-  (task 1–2), no independent JSON-level config to diverge (task 3),
-  byte-identical artifacts across all three locations that reproduce exactly
-  from the current source via wat2wasm (task 4), and identical,
-  non-special-cased Kotlin parsing/arming/detection code (task 5). The next step
-  is a targeted real-device capture of the exact final-notification tail bytes
-  for 0x55, 0x52, and 0x53 (per task 6) — that byte-level evidence, not another
-  code read, is what will settle whether those three opcodes actually append
-  [opcode, 0xFF] the same way SpO2/HRV/Temp do.
+● User answered Claude's questions:
+  ⎿  · The old, dead per-notification architecture 
+     (parseMetrics/parseSleep/parseActivity) isn't just in 
+     DRIVER_AUTHORING_GUIDE.md — it's also documented in docs/core-systems.md, 
+     docs/Data-Pipelines.md, docs/DATE_TIME_ARCHITECTURE.md, and is baked into 
+     the shipped example asset app/src/main/assets/drivers/example_wasm.json 
+     (which WasmDriverManifest.kt's kdoc calls the canonical schema example). 
+     What should this update cover? → Guide + example asset (Recommended)
+     · The guide currently presents parseMetrics/parseSleep/parseActivity 
+     per-notification exports as the primary, required contract. In reality 
+     parseSession has fully replaced it in every live code path (no test or code
+     invokes the per-notification path). How should the rewritten guide treat 
+     the old model? → Remove entirely (Recommended)
+     · Is this update strictly documentation (the .md guide and/or the JSON 
+     example asset), or should the plan also include code changes — e.g. 
+     removing the now-confirmed-dead WasmDriverEngine.callParse() and 
+     per-notification exports from the Kotlin runtime to match the docs? → 
+     Docs/asset only (Recommended)
 
-✻ Crunched for 3m 36s
+● Plan(Design driver guide rewrite plan)
+  ⎿  Done (40 tool uses · 142.7k tokens · 6m 32s)
+  (ctrl+o to expand)
+
+  Searched for 1 pattern, read 2 files, ran 1 shell command (ctrl+o to expand)
+
+● Updated plan  ⎿  /plan to preview
+
+● User approved Claude's plan
+  ⎿  Plan saved to: ~/.claude/plans/please-plan-an-update-vivid-koala.md · /plan
+     to edit
+     Rewrite DRIVER_AUTHORING_GUIDE.md + example_wasm.json to match the real 
+     runtime
+
+     Context
+
+     A full audit (this session, prior turn) compared
+     docs/DRIVER_AUTHORING_GUIDE.md against the actual BLE driver runtime and
+     found the guide describes an architecture that no longer runs. The guide
+     documents a per-notification WASM contract — exports
+     parseMetrics/parseSleep/parseActivity, each called once per BLE
+     notification with raw bytes at a fixed memory offset. Repo-wide grep
+     confirms zero callers of that path anywhere in app/src (production or
+     test): WasmDriverEngine.callParse() is dead code, and
+     .parseMetrics(/.parseSleep(/.parseActivity( are never invoked, only checked
+     for presence by ManifestValidator.
+
+     Every live code path — BleEngine, DriverRegistry, DeviceReprocessor —
+     instead uses a parseSession export: BLE notifications are buffered all sync
+     long into SessionFrames, then parsed in one bulk call (or a few chunked
+     calls) at end-of-sync via a JSON array of frames. This is undocumented in
+     the guide entirely. The real reference driver (Driver Builds/Hume Band 
+     1/HumeBandDriver.json) only exports parseSession/buildSyncCommands — an
+     author who followed the current guide's documented contract would produce a
+     driver that loads successfully but silently never parses any data.
+
+     Beyond the parsing model, the guide also has several smaller factual drifts
+     (dead DeviceSyncProcessor.processFromRaw() method, a buildSyncCommands
+     zero-arg signature that would trap if implemented, an undocumented
+     silent-drop plausibility filter in MetricRouter, and misleading specVersion
+     guidance).
+
+     Goal: rewrite the guide (and the in-app canonical example asset) so a
+     driver author — human or AI — following it produces a WASM module that
+     actually gets called by the app today.
+
+     Two additional facts surfaced during planning (not just doc drift — real,
+     current product behavior worth being aware of before/while writing):
+     - parseSession receives no metadata header. Unlike the dead callParse()
+     path, WasmDriverEngine.callParseSessionBytes()
+     (ble/wasm/WasmDriverEngine.kt:451-483) never writes
+     syncStartMs/utcOffsetMinutes to memory offset 0. A parseSession driver has
+     no way to reconstruct "relative to sync time" timestamps — it must rely
+     entirely on absolute or day-indexed timestamps the device itself embeds in
+     the packet bytes. The guide's "Sourcing Timestamps" decision tree currently
+     offers sync-relative reconstruction as a valid strategy; that branch is
+     unreachable for real drivers today and must be corrected.
+     - Activity ingestion has no live path at all. Both
+     BleEngine.dispatchPostStreamParse() (ble/BleEngine.kt:1328) and
+     BleEngine.triggerSync() and DeviceReprocessor.reprocess()
+     (ble/sync/DeviceReprocessor.kt:95) hardcode activities = emptyList(), with
+     a comment claiming "activities arrive as MetricReading via parseSession" —
+     but no MetricType or router path exists to turn a MetricReading into an
+     Activity row. This is a genuine product gap, not just a doc gap. Per the
+     docs-only scope of this change, the plan is to state this limitation
+     plainly rather than invent guide content for a path that doesn't exist —
+     and to mention it to the user as a candidate follow-up engineering ticket,
+     separate from this doc change.
+
+     Scope (confirmed with user)
+
+     - Files touched: docs/DRIVER_AUTHORING_GUIDE.md and
+     app/src/main/assets/drivers/example_wasm.json only. docs/core-systems.md,
+     docs/Data-Pipelines.md, docs/DATE_TIME_ARCHITECTURE.md also describe the
+     dead architecture but are explicitly deferred to a follow-up.
+     - Legacy model: remove parseMetrics/parseSleep/parseActivity documentation
+     entirely rather than keeping a "legacy" appendix. parseSession +
+     buildSyncCommands become the only documented contract.
+     - No Kotlin code changes. This is a docs/asset-only pass.
+     WasmDriverEngine.callParse() and the validator's
+     parseMetrics-as-alternate-to-parseSession acceptance stay in the code
+     untouched.
+
+     Section-by-section plan for DRIVER_AUTHORING_GUIDE.md
+
+     Delete outright:
+     - ### Call Sequence (per notification), all of ### JSON Output Schemas's
+     parseSleep/parseActivity subsections, and the pre-specVersion-3 ### Dynamic
+     Sync Commands (buildSyncCommands) section (the zero-arg (func (result 
+     i32)) variant — never called; callBuildSyncCommandsWithContext always uses
+     the two-arg form regardless of specVersion).
+     - The "Path A — end-of-night summary (parseSleep export)" callout under
+     Supported Metric Types (keep "Path B — stage-by-stage," it's confirmed live
+     and correct).
+
+     Rewrite:
+     - "4. Parsing" and "Memory Layout": replace with the real flow —
+     notifications buffer into SessionFrames during the sync; parsing happens
+     once (or per-chunk) at end-of-sync via parseSession. Document that
+     parseSession gets no metadata header at offset 0 (see Context above) — only
+     the frames JSON at offset 16. Keep the output region (offset 4096,
+     MetricWasmDto schema) as-is; it's unchanged.
+     - ### Function Signature: same (param i32 i32) (result i32)) signature, but
+     param 1 is always 16 for parseSession, param 2 is the length of the JSON
+     frames array (not one BLE packet).
+     - New input schema: document the frames JSON array
+     [{"characteristic","opcode":"0xNN","bytes":"<base64>"}, ...] built by
+     buildFramesJson(), and that a driver must base64-decode bytes itself
+     (reference the pattern in hume_band.wat's $b64_decode/$parseSession).
+     - New multi-record striding requirement: document that a single frame's
+     decoded payload may contain multiple concatenated fixed-size records (e.g.
+     Hume Band's $do_hrv, 15-byte stride, hume_band.wat:590-631) and a handler
+     must loop across the full decoded length, not read one fixed offset — this
+     was a real past bug source.
+     - New chunking note under ### Output Region Size: large sessions are split
+     across multiple parseSession calls by input JSON size
+     (WASM_SAFE_INPUT_BYTES = 50_000, WasmDriverEngine.kt:177-184,607) — a
+     driver should not assume one call sees every frame from the sync. Drop the
+     old, now-resolved 0xD800 static-table-collision framing (not present in the
+     guide today, don't add it — it no longer applies since static tables moved
+     to page 0x40000+).
+     - ### Sourcing Timestamps: A Decision Tree: correct the "relative to sync
+     time" and "no timestamp at all" branches to state this strategy isn't
+     available to parseSession drivers (no metadata header); devices must supply
+     absolute or day-indexed timestamps in-band. Leave the rest of the tree
+     (absolute UTC / local-time / non-standard epoch / day-boundary) untouched.
+     - #### Live BLE sync (Sync Processing): fix the false "MetricRouter.route()
+     runs on each incoming notification" claim — routing happens once, after
+     parseSession completes for the whole buffered session.
+     - #### Raw replay: replace DeviceSyncProcessor.processFromRaw() /
+     MetricRouter.routeAll() (both nonexistent) with the real mechanism: UI
+     label "Reprocess synced data" (DevicesScreen.kt:212,230) →
+     DevicesViewModel.onReprocessConfirmed() →
+     DeviceReprocessor.reprocess(device, since, onProgress)
+     (DeviceReprocessor.kt:51), where since = Instant.now().minus(7, DAYS) is
+     hardcoded (DevicesViewModel.kt:193) — a time-window reprocess, not a
+     session replay — writing via MetricRouter.routeAllForceReplace()
+     (MetricRouter.kt:188). Keep the existing "what Reprocess can/cannot fix"
+     analysis; it's still accurate.
+     - ## Validation Rules: add the undocumented MetricRouter plausibility
+     filter as a new stage — silently drops DELTA-mode STEPS (>400/min, scaled
+     by syncIntervalMs) and ACTIVE_CALORIES (>30 kcal/min) readings, and any
+     negative delta (MetricRouter.kt:36-67,202-226). Correct the specVersion row
+     (see below).
+     - specVersion narrative (Top-Level Fields table + validation row + the
+     "specVersion 3" intro callout): state plainly that specVersion only ever
+     affected the now-dead per-notification path and has no runtime effect on
+     parseSession drivers regardless of value — the reference driver uses "4",
+     which has no special meaning. Recommend authors treat it as a free-text
+     bookkeeping field. Keep the ## specVersion 3 heading text as-is (anchor
+     stability, other deferred docs may link it) but add a callout clarifying
+     vestigial status; relocate the "Canonical Rules for Time Writes" /
+     "buildSyncCommands — time write rules" content (currently anchored under
+     the deleted zero-arg section) to live under this heading instead, since
+     it's still accurate for the one live buildSyncCommands variant.
+     - ### Complete Example and ### Complete specVersion 3 Manifest Example:
+     swap parseMetrics/parseSleep/parseActivity exports for
+     parseSession/buildSyncCommands, matching the real Hume Band manifest shape.
+     - ### Per-Metric Output Requirements: fix the SLEEP_STAGE row — it
+     currently says "use parseSleep instead, do not emit via parseMetrics,"
+     which is backwards; SLEEP_STAGE is the only live sleep path and is emitted
+     as a normal MetricReading via parseSession.
+     - ### Steps and Activity Steps: remove the per-activity-steps comparison
+     (no live Activity path — see Context) or reduce to STEPS-only guidance.
+     State plainly, once, in this vicinity that activity/workout ingestion has
+     no supported driver-facing mechanism today.
+     - ## Checklist Before Submitting a Driver: fix bullets referencing
+     parse_metrics export name, specVersion: "2" as "required," and the
+     parseSleep-exports-declares-sleep-capability claim.
+
+     Small terminology-only edits (find/replace, not rewrites): the
+     awaitReply/awaitEndOfStream sections' 3-4 stray mentions of
+     "parseMetrics/parseSleep" describing pass-through behavior →
+     "parseSession". ### Steps/Calories Accumulation Mode's "returned by
+     parseMetrics" → "emitted by your driver."
+
+     Leave completely untouched (confirmed accurate): Loading/Device
+     Matching/Connection sections, Deduplication, Date Attribution Rules (incl.
+     Sleep date assignment), Metric Classification, Use i64 for Timestamps, the
+     ble block, static syncCommands (WRITE/ENABLE_NOTIFY/DELAY,
+     DELAY-deprecation warning), syncRequirements, ### Error Behaviour,
+     awaitReply/awaitEndOfStream mechanics (all 7 strategies),
+     BLOOD_PRESSURE/BATTERY/computed_by_version callouts, Supported Metric Types
+     list.
+
+     example_wasm.json plan
+
+     Current file uses the dead schema (specVersion: "2", exports: 
+     {parseMetrics: "parse_metrics", parseSleep: null, parseActivity: null}) and
+     its wasmBase64 value is already an illustrative placeholder, not a real
+     decodable binary (57 chars, invalid base64 padding) — this precedent is
+     fine to keep, just note it's illustrative.
+
+     - parsing.exports → {"parseSession": "parseSession", "buildSyncCommands": 
+     null}, matching the real Hume Band manifest shape.
+     - specVersion → drop the field (defaults to "1", harmless now that it's
+     vestigial) or keep a value with the guide's new "bookkeeping only" framing
+     — either is fine, keep it simple and drop it.
+     - id/ble/syncCommands/stepsMode/caloriesMode/supportedMetrics → unaffected,
+     keep as-is (Polar H10 example).
+     - WasmDriverManifest.kt's kdoc already points at this file as the canonical
+     example — no code change needed, it stays accurate once the asset is
+     updated.
+
+     Verification
+
+     No build/tests needed (docs/asset only, no Kotlin touched). To confirm the
+     rewrite is internally consistent:
+     1. grep -n 
+     "parseMetrics\|parseSleep\|parseActivity\|processFromRaw\|routeAll(" 
+     docs/DRIVER_AUTHORING_GUIDE.md → should return no matches (all
+     removed/renamed).
+     2. python3 -m json.tool app/src/main/assets/drivers/example_wasm.json →
+     confirms the updated asset is still valid JSON.
+     3. Spot-check the rewritten guide's buildSyncCommands section shows only
+     the two-arg (param i32 i32) (result i32) signature (no remaining zero-arg
+     mentions).
+     4. Re-read the finished guide once against Driver Builds/Hume Band 
+     1/HumeBandDriver.json + hume_band.wat (the real reference driver) to
+     confirm every export name, memory offset, and JSON schema the guide now
+     documents matches what that driver actually does.
+
+● The plan is approved. I'll now execute the rewrite of
+  docs/DRIVER_AUTHORING_GUIDE.md and
+  app/src/main/assets/drivers/example_wasm.json.
+
+● Tool schemas loaded and ready to use.
+
+✻ Worked for 11m 37s

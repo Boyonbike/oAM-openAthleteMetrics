@@ -20,10 +20,12 @@ import javax.inject.Singleton
 /**
  * Minimum gap, in milliseconds, between the end of one stage record and the start of the
  * next for them to be treated as two separate sleep periods rather than one continuous
- * night. Matches the Hume Band 1 BLE protocol's own session-grouping convention (see
- * "Driver Builds/Hume Band 1/Hume Band 1 BLE Protocol.md": a gap >= 3600 seconds between
- * items ends one sleep period and starts the next).
+ * night. This is a deliberate app-level policy decision about what counts as "the same
+ * sleep session" — independent of any specific device or protocol — applied uniformly
+ * across drivers unless a driver overrides it via its manifest's sessionGapThresholdMs
+ * field (see WasmDriverManifest).
  */
+// CHANGED: comment rewritten as app policy; no longer attributes the value to a device protocol doc.
 private const val SESSION_GAP_THRESHOLD_MS = 60 * 60 * 1000L
 
 data class SleepPromotionResult(
@@ -43,8 +45,10 @@ class SleepStagePromoter @Inject constructor(
         driverId: String,
         syncWindowStartMs: Long,
         syncWindowEndMs: Long,
+        sessionGapThresholdMs: Long? = null, // CHANGED: per-driver override; null -> app default
     ): SleepPromotionResult = withContext(Dispatchers.IO) {
         val errors = mutableListOf<String>()
+        val effectiveThresholdMs = sessionGapThresholdMs ?: SESSION_GAP_THRESHOLD_MS // CHANGED
 
         val pendingRows = stagingRepository.getPendingSleepStages(
             source = DataSource.DEVICE,
@@ -91,7 +95,7 @@ class SleepStagePromoter @Inject constructor(
         val sessionGroups = mutableListOf<MutableList<ParsedStage>>()
         for (stage in parsedStages.sortedBy { it.startMs }) {
             val previousStage = sessionGroups.lastOrNull()?.last()
-            if (previousStage != null && stage.startMs - previousStage.endMs < SESSION_GAP_THRESHOLD_MS) {
+            if (previousStage != null && stage.startMs - previousStage.endMs < effectiveThresholdMs) { // CHANGED
                 sessionGroups.last().add(stage)
             } else {
                 sessionGroups.add(mutableListOf(stage))
@@ -114,6 +118,23 @@ class SleepStagePromoter @Inject constructor(
             val sessionId = runCatching {
                 val existing = sleepRepository.getByDriverAndDate(driverId, date)
                 if (existing != null) {
+                    // A prior promote() call may have created this session from only part of
+                    // the night's stages — extend its recorded span (not just insert new stage
+                    // rows under its id) so duration_minutes doesn't go stale relative to the
+                    // fuller, accumulated stage total DailySummaryWorker will later sum.
+                    val mergedStartMs = minOf(existing.sleepStartMs.toEpochMilli(), startMs)
+                    val mergedEndMs = maxOf(existing.sleepEndMs.toEpochMilli(), endMs)
+                    if (mergedStartMs != existing.sleepStartMs.toEpochMilli() ||
+                        mergedEndMs != existing.sleepEndMs.toEpochMilli()
+                    ) {
+                        sleepRepository.updateSessionSpan(
+                            id = existing.id,
+                            date = date,
+                            sleepStartMs = Instant.ofEpochMilli(mergedStartMs),
+                            sleepEndMs = Instant.ofEpochMilli(mergedEndMs),
+                            durationMinutes = ((mergedEndMs - mergedStartMs) / 60_000L).toInt(),
+                        )
+                    }
                     existing.id
                 } else {
                     sleepRepository.insert(

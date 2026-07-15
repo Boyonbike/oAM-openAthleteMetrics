@@ -115,21 +115,27 @@ The reading vanishes from both daily summaries.
 
 The system uses WASM-based drivers exclusively. JSON-only manifest drivers are not yet
 implemented. All timestamp conversion logic lives inside the WASM module written by the driver
-author. The Android host passes a **sync-time metadata block** at offset 0 in WASM memory
-(spec version 2):
+author.
 
-```
-Bytes 0–7:   syncStartMs        — i64 LE — UTC epoch ms captured at startSync()
-Bytes 8–9:   utcOffsetMinutes   — i16 LE — device timezone offset in minutes
-Bytes 10–15: reserved (zeroed)
-Offset 16+:  raw BLE characteristic bytes
-```
+**Parsing (`parseSession`) receives no time metadata from the host at all.** The app buffers
+every BLE notification for the whole sync and calls the driver's `parseSession` export once (or
+once per chunk, for a large session) with only the buffered frames as JSON — no metadata block is
+written before this call. This is a change from the retired per-notification contract, which used
+to write a 16-byte header (`syncStartMs`/`utcOffsetMinutes`) before every parse call; that header
+no longer exists for `parseSession`. See `DRIVER_AUTHORING_GUIDE.md`'s
+[Sourcing Timestamps](DRIVER_AUTHORING_GUIDE.md#sourcing-timestamps-a-decision-tree) section.
 
 The contract (from `DRIVER_AUTHORING_GUIDE.md`): every timestamp emitted by a driver must be
 UTC epoch milliseconds. The app trusts what the driver gives it. If the device sends timestamps
 in local time, the driver is responsible for converting to UTC before writing to the output JSON.
 
-### Device clock formats and how to handle each inside parse()
+If a driver genuinely needs a connection-time reference (for the relative-offset formats below),
+the *only* host-provided time value is delivered separately, once, before `buildSyncCommands` —
+not before `parseSession`. See [§3b](#3b-device-time-write-path) below. A driver that needs this
+must capture it during `buildSyncCommands` and cache it in its own WASM state for `parseSession`
+to read later in the same connection.
+
+### Device clock formats and how to handle each inside `parseSession`
 
 **Format 1 — Seconds since a device-specific epoch (e.g. Jan 1 2000)**
 ```
@@ -145,31 +151,36 @@ recordedAtMs = deviceSeconds * 1000
 This is UTC by definition — no offset needed.
 
 **Format 3 — Packed BLE Date-Time characteristic (year/month/day/hour/min/sec fields)**
-The device encodes local wall-clock time with no UTC offset. The WASM module receives
-`utcOffsetMinutes` in the metadata block and must apply it:
+The device encodes local wall-clock time with no UTC offset. If the driver has cached a
+connection-time `utcOffsetMinutes` (captured during `buildSyncCommands` — see above), it can apply it:
 ```
 localEpochMs  = parseLocalFields(year, month, day, hour, min, sec) * 1000
 recordedAtMs  = localEpochMs - (utcOffsetMinutes * 60_000)
 ```
 
 **Format 4 — Relative offset from sync time**
-Some devices report "N seconds before sync":
+Some devices report "N seconds before sync". This requires a cached connection-time reference,
+since `parseSession` is not given one by the host (see Architecture overview above):
 ```
-recordedAtMs = syncStartMs - (offsetSeconds * 1000)
+recordedAtMs = cachedEpochMs - (offsetSeconds * 1000)
 ```
 
 ### Device timezone assumption
 
-Low-cost wearables encode local wall-clock time with no UTC offset. The WASM module converts
-to UTC using `utcOffsetMinutes` from the metadata block.
+Low-cost wearables encode local wall-clock time with no UTC offset. A driver that needs to
+convert to UTC must have cached a `utcOffsetMinutes` value from `buildSyncCommands` — `parseSession`
+does not receive one directly.
 
-`utcOffsetMinutes` is captured in `WasmDriverEngine.utcOffsetMinutes()` at sync start:
+The value a driver would cache comes from `SyncContextFactory.build()` (only if the manifest
+declares `syncRequirements.datetime: true`) or from the raw metadata header
+`buildSyncCommands` always receives regardless of `syncRequirements`:
 ```kotlin
-(TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60_000).toShort()
+zone.rules.getOffset(instant).totalSeconds / 60   // SyncContextFactory
+(TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60_000).toShort()   // buildSyncCommands metadata header
 ```
-This is the Android system timezone at the moment the BLE connection is established — the
-correct proxy for the user's local timezone at sync time. DST transitions are handled correctly
-because `getOffset(currentTimeMillis)` returns the current DST-aware offset.
+Both are the Android system timezone at the moment `buildSyncCommands` is called (connection
+time) — the correct proxy for the user's local timezone at that moment. DST transitions are
+handled correctly because both read the current DST-aware offset at call time, not a fixed value.
 
 ### Clock drift and desync
 
@@ -180,9 +191,11 @@ window. For most metrics this is inconsequential.
 - **Morning HRV** (first reading ≥ 05:00 local): the highest-impact case — a drifted clock at
 04:56 device time = 05:00 true time may cause the first morning reading to be excluded.
 
-If the device exposes its current time at connection, the WASM module should compute and apply:
+If the device exposes its current time at connection, the WASM module should cache the
+connection-time reference captured during `buildSyncCommands` (see [§3](#3-device-timestamp-communication)
+above) and compute:
 ```
-clockDriftMs = syncStartMs - deviceCurrentTimeAsUtcMs
+clockDriftMs = cachedEpochMs - deviceCurrentTimeAsUtcMs
 recordedAtMs += clockDriftMs    // corrects all timestamps in the session
 ```
 If the device does not expose current time, drift is undetectable. Document as a known
@@ -216,15 +229,16 @@ The 1-hour future ceiling catches devices whose clocks are set significantly ahe
 
 ### Sync-time anchor
 
-`WasmDriverEngine.startSync()` captures:
-```kotlin
-syncStartMs = System.currentTimeMillis()
-capturedUtcOffsetMinutes = utcOffsetMinutes()
-```
+`WasmDriverEngine.startSync()` still captures a `syncStartMs`/`capturedUtcOffsetMinutes` pair,
+but this is now dead state — it is only ever read by the retired per-packet `callParse()` path,
+which nothing calls. It is **not** written into WASM memory before `parseSession`.
 
-These are written into WASM memory on every `callParse()` invocation. The anchor is a
-per-sync singleton, captured once when the BLE connection is established — correct because
-the timezone and wall-clock reference should be stable across the entire sync session.
+The live per-connection time anchor is the metadata header `buildSyncCommands` receives (see
+[§3](#3-device-timestamp-communication) and [§3b](#3b-device-time-write-path)): `currentTimeMs`/
+`utcOffsetMinutes`, captured fresh at the moment `buildSyncCommands` is called (once, at
+connection, before any BLE data is exchanged) — correct because the timezone and wall-clock
+reference should be stable across the entire sync session. A driver that needs this reference
+during `parseSession` must read it during `buildSyncCommands` and cache it itself.
 
 ### JSON manifest drivers (future feature — not yet implemented)
 
@@ -249,95 +263,50 @@ to produce UTC epoch ms.
 
 ## 3b. Device Time Write Path
 
-### Current state: the write path is entirely static
+### Current state: implemented via `buildSyncCommands`
 
-The audit of `SyncCommand.kt`, `BleEngine.kt`, `WasmDriverEngine.kt`, and all manifest files
-confirms that **no code path dynamically constructs time or date values to write to a device**.
-The `SyncCommand` sealed class has three subtypes:
+This section previously described a design gap and proposed future options; that gap has since
+been closed. `WasmExports` includes an optional `buildSyncCommands` export
+(`ble/driver/ParsingConfig.kt`), and `BleEngine` calls it once at connection time, before any
+static `syncCommands` would otherwise run (`BleEngine.kt` — gated solely on
+`wasm.exports.buildSyncCommands != null`, independent of `manifest.specVersion`).
 
-```kotlin
-sealed class SyncCommand {
-data class Write(val characteristic: String, val bytes: String)  // static hex only
-data class EnableNotify(val characteristic: String)
-data class Delay(val millis: Long)
-}
-```
+`SyncCommand.Write.bytes` is still a fixed hex string when it comes from the manifest's static
+`syncCommands` array — there is no token-substitution mechanism there (Option A below was never
+built). But when `buildSyncCommands` is exported, its return value **is** the complete command
+sequence, generated by the WASM module itself at connection time with a fresh time reference — see
+the next paragraph — so a driver can construct exactly the byte sequence its device's
+time-synchronisation handshake requires. The static `syncCommands` list is not executed at all in
+that case.
 
-`SyncCommand.Write.bytes` is a fixed hex string embedded in the manifest JSON at driver-authoring
-time (e.g. `"0x55 0x00 0x00 ..."`). The executor in `BleEngine` (`~line 750`) passes this
-directly to `parseHexBytes()` and writes it verbatim to the BLE characteristic. No token
-substitution, no timestamp injection.
+`buildSyncCommands` receives a 16-byte metadata header (`currentTimeMs` i64 LE at offset 0,
+`utcOffsetMinutes` i16 LE at offset 8, both captured fresh — via `Instant.now()` /
+`TimeZone.getDefault().getOffset(...)` — immediately before the call) followed by a `SyncContext`
+JSON string (populated per the manifest's `syncRequirements`) at offset 16. Full details, including
+the JSON schemas, live in `DRIVER_AUTHORING_GUIDE.md`'s
+[Dynamic Sync Commands](DRIVER_AUTHORING_GUIDE.md#dynamic-sync-commands-buildSyncCommands)
+section — this document covers only the timezone-correctness implications.
 
-`WasmExports` declares only three function names — `parseMetrics`, `parseSleep`,
-`parseActivity` — all of which are called by the engine in the receive direction only. There is
-no write/command-building export in the WASM contract.
-
-The metadata block (`syncStartMs`, `utcOffsetMinutes`) is written to WASM memory inside
-`callParse()` only — it is not available at sync-command execution time.
-
-### The design gap
+### Why this matters
 
 Some BLE wearables use a time-synchronisation protocol as part of their data-download handshake:
 the device exposes a Current Time characteristic (Bluetooth CTS, UUID 0x1805 / 0x2A2B) or a
-vendor-specific equivalent. The host is expected to write the current local time to that
-characteristic before the device will release stored readings. Without a correct time write:
-
-1. The device may refuse to initiate the data dump.
-2. All readings in the dump carry timestamps from the device's uncorrected internal clock,
-producing UTC errors that cannot be recovered after the fact.
-3. The device may respond with an error notification rather than data.
-
-The current system cannot support such devices. A driver author cannot express "write the
-current time to this characteristic" in a manifest `syncCommands` array because all bytes are
-static.
-
-### What would be needed (future design)
-
-**Option A — Template variables in SyncCommand.Write**
-
-Extend the manifest with runtime substitution tokens:
-
-```json
-{ "type": "WRITE", "characteristic": "currentTime", "bytes": "{{BLE_DATETIME_LOCAL}}" }
-```
-
-The host replaces the token at command execution time by calling
-`ZoneId.systemDefault().rules.getOffset(Instant.now())` and constructing the BLE DateTime
-byte sequence. This is simple and sufficient for standard Bluetooth CTS format, but cannot
-express arbitrary vendor-specific time encodings.
-
-**Option B — WASM `buildSyncCommands` export (recommended)**
-
-Extend `WasmExports` with an optional command-builder function:
-
-```json
-"exports": {
-"parseMetrics": "parse_metrics",
-"buildSyncCommands": "build_sync_commands"
-}
-```
-
-At the start of a sync session, after `startSync()` has captured the anchor, the engine would
-call `buildSyncCommands()` with the same spec-v2 metadata block (syncStartMs + utcOffsetMinutes
-at offset 0). The WASM function returns a JSON array of `{"characteristic": "...", "bytes": "..."}` objects that replace or prepend the manifest's static `syncCommands`. The driver author
-encodes the current time using the anchor data and produces the exact byte sequence the device
-expects.
-
-This follows the established pattern — host provides metadata, WASM has full control over byte
-construction — and handles arbitrary vendor time encodings, device-specific epochs, and any
-other protocol idiosyncrasy. It is the architecturally correct choice.
+vendor-specific equivalent, and refuses to release stored readings (or tags them with an
+uncorrected internal clock) until the host writes the current time. `buildSyncCommands` is what
+lets a driver author express "write the current time to this characteristic" — the driver encodes
+the metadata header's `currentTimeMs`/`utcOffsetMinutes` into whatever byte format the device
+expects and includes that as a `Write` command in its returned array.
 
 ### Canonical rule for time writes
 
-When write support is implemented, the construction must follow these rules:
-
-- **Device expects UTC epoch seconds**: `Instant.now().epochSecond` encoded as i32 or i64
-little-endian. Do not use `syncStartMs` — that was captured at connection time. Call
-`Instant.now()` at command execution time.
-- **Device expects local wall-clock (BLE DateTime or vendor-packed bytes)**: use
-`ZoneId.systemDefault().rules.getOffset(Instant.now())` at command execution time.
-Do **not** use `capturedUtcOffsetMinutes` — that was captured at sync start and may predate
-a DST transition that occurred during a long sync session.
+- **Device expects UTC epoch seconds**: `currentTimeMs / 1000` from the metadata header, encoded
+as i32 or i64 little-endian.
+- **Device expects local wall-clock (BLE DateTime or vendor-packed bytes)**: derive local time
+from `currentTimeMs + utcOffsetMinutes * 60_000`, both from the same metadata header.
+- **Never substitute a value cached earlier in the connection** (e.g. the retired
+`syncStartMs`/`capturedUtcOffsetMinutes` `WasmDriverEngine` fields, which are dead — see
+[§3](#3-device-timestamp-communication)) — always use the metadata header `buildSyncCommands`
+was just given; it is captured fresh, synchronously, immediately before each call.
 - **Do not use `ZoneOffset.UTC` for local-wall-clock devices under any circumstances.** The
 failure mode is that the device clock is set to a time off by the full UTC offset (e.g.
 5 hours 30 minutes in India, 8 hours in Beijing). Every reading the device takes after this
@@ -349,18 +318,19 @@ write will carry a permanently wrong timestamp with no recovery path.
 UTC offset including the DST component. For a device in UTC+1 (winter) / UTC+2 (summer), it
 returns 60 minutes or 120 minutes respectively — correct in both cases.
 
-The danger is using the **cached** `capturedUtcOffsetMinutes` from the sync anchor for a write
-command that executes later in the session. If a DST transition occurs between `startSync()` and
-command execution (extremely rare but possible for long or retried syncs), the cached value is
-stale by 60 minutes. The fix is to call `utcOffsetMinutes()` freshly at command execution time
-for any command that embeds the current time.
+Because `buildSyncCommands` runs once, synchronously, and the metadata header is captured
+immediately before that single call, there is no window during command *generation* for a DST
+transition to make the value stale — unlike the old per-command execution-time model this section
+used to describe. The residual risk is only across separate connection attempts (handled by the
+next subsection) or if a driver mistakenly caches and reuses an older value instead of what it was
+just given.
 
 ### Device re-sync after timezone change between sessions
 
-If the user changes timezone between two separate sync sessions, the next `startSync()` will
-capture the new `utcOffsetMinutes` from `ZoneId.systemDefault()`. Any write commands in the
-new session will use the updated offset. No special handling is required — the per-session
-anchor design already handles this correctly.
+If the user changes timezone between two separate sync sessions, the next connection's
+`buildSyncCommands` call will capture the new offset fresh (`TimeZone.getDefault()` /
+`ZoneId.systemDefault()` at that moment). Any write commands in the new session will use the
+updated offset. No special handling is required.
 
 ### Failure modes summary
 
@@ -369,7 +339,7 @@ anchor design already handles this correctly.
 | Send UTC epoch ms where device expects epoch seconds | Device clock set to ~51,000 years in the future |
 | Send local wall-clock time to a UTC-expecting device | Device clock off by UTC offset permanently |
 | Send `ZoneOffset.UTC` to a local-wall-clock-expecting device | Device clock off by UTC offset permanently; all future readings unrecoverable |
-| Use `capturedUtcOffsetMinutes` for a write command after a DST boundary | Device clock off by 60 minutes for the remainder of the session |
+| Cache and reuse an offset from earlier in the connection instead of the metadata header's fresh value | Device clock off by 60 minutes if a DST boundary was crossed since the cached value was captured |
 | Use raw integer offset instead of `ZoneId.systemDefault()` | Correct most of the year; wrong by 60 minutes for the hours immediately after a DST transition |
 
 The most dangerous failure is writing UTC to a local-wall-clock device. The errors it produces
@@ -575,10 +545,10 @@ intervention.
 |---------|---------|---------|
 | §1 Storage Layer | ✅ Correct | TypeConverters are correct; raw-Long tables are an abstraction inconsistency but not a correctness bug. |
 | §2 Date String Keys | ❌ Bug risk | `BleEngine.affectedDates` and `DeviceReprocessor` use UTC for date attribution but the rest of the system expects local-timezone date keys. Readings near midnight in non-UTC timezones vanish from both daily summaries. |
-| §3 Device Timestamp Communication | ✅ Correct | WASM contract, sync anchor, and floor/ceiling checks are sound. JSON manifest drivers need a specified timestamp format when implemented. Clock drift is undetectable without device cooperation. |
-| §3b Write Path — timezone handling | ✅ No current bug / ⚠️ Design gap | No dynamic time writes exist; the write path is entirely static hex bytes from manifest JSON. Device clock corruption is therefore impossible with the current driver set. However, devices that require a time-set command before releasing data cannot be supported until Option B (WASM `buildSyncCommands` export) is implemented. |
+| §3 Device Timestamp Communication | ✅ Correct (revised) | `parseSession` receives no time metadata from the host at all — the old per-notification metadata header is dead. A driver needing a connection-time reference must capture and cache it itself during `buildSyncCommands`. Floor/ceiling checks are sound. JSON manifest drivers need a specified timestamp format when implemented. Clock drift is undetectable without device cooperation. |
+| §3b Write Path — timezone handling | ✅ Implemented | `buildSyncCommands` is implemented and is the mechanism this section used to describe as a future gap. Its metadata header is captured fresh, synchronously, immediately before each call, so a driver can construct a correct time write for CTS-style handshakes. |
 | §3b Write Path — half-hour UTC offsets | ✅ Correct | `utcOffsetMinutes` is stored as `i16` (range ±32767 min), which correctly represents UTC+5:30 (330 min), UTC+5:45 (345 min), and UTC+9:30 (570 min). `getOffset(ms) / 60_000` is lossless for all real-world timezone offsets — all are exact multiples of whole minutes. |
-| §3b Write Path — device re-sync after timezone change | ✅ Correct | `utcOffsetMinutes` is re-captured from `ZoneId.systemDefault()` at the start of each new sync session via `startSync()`. Stale offsets from a prior session cannot carry forward. No mechanism needed. |
+| §3b Write Path — device re-sync after timezone change | ✅ Correct | `utcOffsetMinutes` is re-captured from `TimeZone.getDefault()`/`ZoneId.systemDefault()` fresh on every `buildSyncCommands` call, i.e. at the start of each new connection. Stale offsets from a prior session cannot carry forward. No mechanism needed. |
 | §4 Sleep Sessions | ❌ Bug risk | `SyncValidator` assigns sleep date using UTC `atZone(ZoneOffset.UTC)`. Users in positive UTC offsets (UTC+1 through UTC+14) get sleep sessions filed under the wrong (previous) date. |
 | §5 HRV Morning Reading | ✅ Correct | Uses `ZoneId.systemDefault()` for the 05:00 boundary. Historical timezone drift is a device-layer limitation. |
 | §6 Resting HR Window | ✅ Correct | Uses `ZoneId.systemDefault()` for both 00:00 and 06:00 boundaries. |
@@ -600,7 +570,7 @@ intervention.
 | P2 | `SeederService.kt` (all `toUtcStartMs()` + `toInstant(ZoneOffset.UTC)`) | Use `ZoneId.systemDefault()` |
 | P3 | App startup | Detect timezone change, re-enqueue summary workers for recent N days |
 | P3 | `WasmDriverEngine.kt:287` | Replace `/ 60_000` with `/ 1000 / 60` to make integer-then-integer division explicit and immune to any future sub-millisecond offset values |
-| P3 (future) | `SyncCommand.kt`, `WasmExports`, `WasmDriverEngine`, manifest spec | Implement WASM `buildSyncCommands` export (Option B) before adding any driver that requires a dynamic time-set write — do not attempt Option A (hex templates) as it cannot express non-standard vendor time encodings |
+| ~~P3 (future)~~ Done | `ParsingConfig.kt`, `WasmDriverEngine.kt`, `BleEngine.kt` | WASM `buildSyncCommands` export is implemented — see [§3b](#3b-device-time-write-path) |
 
 ### Verification checklist
 

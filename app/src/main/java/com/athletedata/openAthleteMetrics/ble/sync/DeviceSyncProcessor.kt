@@ -172,10 +172,12 @@ class DeviceSyncProcessor @Inject constructor(
                 )
             )
 
+            val driverManifest = driverRegistry.allDrivers().find { it.id == result.driverId } // CHANGED
             sleepStagePromoter.promote(
                 driverId = result.driverId,
                 syncWindowStartMs = result.syncStartedAt.toEpochMilli(),
                 syncWindowEndMs = result.syncEndedAt.toEpochMilli(),
+                sessionGapThresholdMs = driverManifest?.sessionGapThresholdMs, // CHANGED
             )
 
             schedulePrune()

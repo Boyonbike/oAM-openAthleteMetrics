@@ -2,6 +2,7 @@ package com.athletedata.openAthleteMetrics.ui.dailydetail
 
 import com.athletedata.openAthleteMetrics.data.model.BaselineRange
 import com.athletedata.openAthleteMetrics.data.model.QuestionCategory
+import com.athletedata.openAthleteMetrics.data.model.SleepAverages
 import com.athletedata.openAthleteMetrics.data.model.SleepStage
 import com.athletedata.openAthleteMetrics.data.model.UserCategory
 import java.time.LocalDate
@@ -68,9 +69,17 @@ data class SleepData(
     val lightMinutes: Int?,
     val remMinutes: Int?,
     val awakeMinutes: Int?,
+    val deepPct: Double?,
+    val lightPct: Double?,
+    val remPct: Double?,
+    val awakePct: Double?,
     val sleepStartMs: Long?,
     val sleepEndMs: Long?,
+    val onsetTimeLabel: String?,
+    val wakeTimeLabel: String?,
     val hypnogramSegments: List<HypnogramSegment>,
+    val averages: SleepAverages,
+    val durationHistory: List<TimestampedReading>,
 )
 
 data class HypnogramSegment(

@@ -27,7 +27,10 @@ class DriverRegistry @Inject constructor(
         Timber.d("DriverRegistry: loaded ${_drivers.size} driver(s)")
     }
 
-    suspend fun register(manifest: WasmDriverManifest) {
+    // CHANGED: returns cross-driver signature collision warnings (empty = no collision).
+    // Non-blocking — a colliding manifest is still registered — but no longer silent.
+    suspend fun register(manifest: WasmDriverManifest): List<String> {
+        val warnings = collisionWarnings(manifest) // CHANGED
         _drivers.removeIf { it.id == manifest.id }
         _drivers.add(manifest)
         _failedDriverIds.remove(manifest.id)
@@ -35,6 +38,34 @@ class DriverRegistry @Inject constructor(
             if (wasmLoadedId == manifest.id) {
                 wasmEngine.unload()
                 wasmLoadedId = null
+            }
+        }
+        // CHANGED: log even on the bootstrap path (initialiseDrivers), which has no UI
+        // listener — surfaced via Timber there, and via the returned list for callers
+        // (e.g. DevicesViewModel) that can forward it to the Devices UI.
+        warnings.forEach { Timber.w("DriverRegistry: $it") }
+        return warnings
+    }
+
+    // CHANGED: cross-driver check — compares manifest's signature set against every other
+    // currently registered driver's signature set. See DriverCommandSignature/
+    // commandSignatures() in ManifestValidator.kt for the shared signature model. Overlap is
+    // keyed on (characteristicUuid, opcode) rather than full-tuple equality: two drivers
+    // arming the *same* physical characteristic+opcode is the actual collision risk,
+    // regardless of whether they happen to declare the same or different strategy types —
+    // mirroring ManifestValidator's own intra-driver check, which flags this same slot when
+    // it sees differing strategies within a single manifest.
+    private fun collisionWarnings(manifest: WasmDriverManifest): List<String> {
+        val incomingByKey = manifest.commandSignatures().groupBy { it.characteristicUuid to it.opcode }
+        if (incomingByKey.isEmpty()) return emptyList()
+        return _drivers.filter { it.id != manifest.id }.flatMap { existing ->
+            val existingByKey = existing.commandSignatures().groupBy { it.characteristicUuid to it.opcode }
+            incomingByKey.keys.intersect(existingByKey.keys).map { (charUuid, opcode) ->
+                val incomingStrategies = incomingByKey.getValue(charUuid to opcode).map { it.strategyType }.distinct()
+                val existingStrategies = existingByKey.getValue(charUuid to opcode).map { it.strategyType }.distinct()
+                "Driver '${manifest.id}' collides with already-registered driver '${existing.id}': " +
+                    "characteristic '$charUuid' opcode 0x${opcode.toString(16).padStart(2, '0')} " +
+                    "(strategies $incomingStrategies vs $existingStrategies)"
             }
         }
     }

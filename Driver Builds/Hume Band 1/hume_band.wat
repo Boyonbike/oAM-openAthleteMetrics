@@ -14,6 +14,13 @@
 ;;   0x40400-0x404AF  sleep stage metaJson prefix strings + shared suffixes
 ;;   0x40900-0x40C62  newer sync-command templates (ENABLE_NOTIFY/handshake/fetch strings)
 ;;   0x40800-0x4089F  scratch (int-to-string, YMD buf, raw command bytes)
+;;   0x40D00-0x40D9D  IN_STREAM_TERMINATOR awaitEndOfStream tail, no shortPacketRecordSize
+;;                    (Sleep/HRV/Temp: 0x53/0x56/0x65)
+;;   0x40E00-0x40EB7  IN_STREAM_TERMINATOR awaitEndOfStream tail, shortPacketRecordSize=15
+;;                    (Steps: 0x52) -- CHANGED: added for the shortPacketRecordSize split,
+;;                    see EndOfStreamStrategy.kt (engine no longer hardcodes this map)
+;;   0x40EC0-0x40F77  IN_STREAM_TERMINATOR awaitEndOfStream tail, shortPacketRecordSize=10
+;;                    (SpO2/HR: 0x66/0x55) -- CHANGED, same reason as above
 ;;   CHANGED: this block was at 0x40500-0x40862 (base 0x40500) until the SENTINEL_PACKET
 ;;   awaitEndOfStream growth (+45 bytes) pushed its tail from 0x407E6 to 0x40862 -- past
 ;;   0x40800, into the middle of the scratch region above. epoch_s_to_ymd's $y write at
@@ -226,13 +233,69 @@
 ;; identical across all six parse functions and with NO dependency on the opcode or
 ;; the byte preceding it. matchOpcode:false + terminatorBytes:"0xFF" (1 byte) already
 ;; produces exactly this via InStreamTerminator's existing tail-match logic (see
-;; EndOfStreamStrategy.kt) -- so this ONE template still serves all six Hume Band
-;; fetch opcodes uniformly, just without the opcode-tail constraint that was silently
-;; preventing HR/Steps/Sleep from ever matching on real hardware.
+;; EndOfStreamStrategy.kt).
 ;;
-;; [40D00] 157  ","awaitEndOfStream":{"characteristic":"notify","strategy":"IN_STREAM_TERMINATOR","params":{"matchOpcode":false,"terminatorBytes":"0xFF"},"timeoutMs":30000}}
+;; CHANGED AGAIN: per-opcode [EOS-RESOLVED] captures across multiple real syncs show
+;; 0x55/0x52/0x53/0x65 NEVER resolve via a genuine terminator match (device never sends
+;; a terminal 0xFF for those streams) -- they always burn the full configured timeout,
+;; so 60000 was pure waste; 8000 is ample margin over the observed non-match behavior.
+;; 0x66/0x56 DO resolve via a genuine match, observed up to ~3.3s -- 10000 is ample
+;; margin there without waiting anywhere near 60s. Since these two groups now need
+;; different values, the templates below split into five (was three): 0x40D00 and
+;; 0x40E00/0x40EC0 are narrowed to serve fewer opcodes each, and two new templates
+;; (0x40F80, 0x41020) are added in the free region past 0x40F78 for the 10000-value
+;; opcodes that used to share a template with an 8000-value opcode.
+;;
+;; [40D00] 156  ","awaitEndOfStream":{"characteristic":"notify","strategy":"IN_STREAM_TERMINATOR","params":{"matchOpcode":false,"terminatorBytes":"0xFF"},"timeoutMs":8000}}
+;; Serves only Sleep/Temp (0x53/0x65) -- both never-resolve-by-match, timeoutMs=8000.
+;; HRV (0x56) used to share this template but needs timeoutMs=10000, so it now uses
+;; its own template at 0x40F80 instead (see below).
 (data (i32.const 0x40D00)
-"\22\2c\22\61\77\61\69\74\45\6e\64\4f\66\53\74\72\65\61\6d\22\3a\7b\22\63\68\61\72\61\63\74\65\72\69\73\74\69\63\22\3a\22\6e\6f\74\69\66\79\22\2c\22\73\74\72\61\74\65\67\79\22\3a\22\49\4e\5f\53\54\52\45\41\4d\5f\54\45\52\4d\49\4e\41\54\4f\52\22\2c\22\70\61\72\61\6d\73\22\3a\7b\22\6d\61\74\63\68\4f\70\63\6f\64\65\22\3a\66\61\6c\73\65\2c\22\74\65\72\6d\69\6e\61\74\6f\72\42\79\74\65\73\22\3a\22\30\78\46\46\22\7d\2c\22\74\69\6d\65\6f\75\74\4d\73\22\3a\33\30\30\30\30\7d\7d"
+"\22\2c\22\61\77\61\69\74\45\6e\64\4f\66\53\74\72\65\61\6d\22\3a\7b\22\63\68\61\72\61\63\74\65\72\69\73\74\69\63\22\3a\22\6e\6f\74\69\66\79\22\2c\22\73\74\72\61\74\65\67\79\22\3a\22\49\4e\5f\53\54\52\45\41\4d\5f\54\45\52\4d\49\4e\41\54\4f\52\22\2c\22\70\61\72\61\6d\73\22\3a\7b\22\6d\61\74\63\68\4f\70\63\6f\64\65\22\3a\66\61\6c\73\65\2c\22\74\65\72\6d\69\6e\61\74\6f\72\42\79\74\65\73\22\3a\22\30\78\46\46\22\7d\2c\22\74\69\6d\65\6f\75\74\4d\73\22\3a\38\30\30\30\7d\7d"
+)
+
+;; New IN_STREAM_TERMINATOR awaitEndOfStream tail at 0x40E00 -- same as the 0x40D00
+;; template above plus a trailing "shortPacketRecordSize":15 inside params. Used only by
+;; the Steps fetch (0x52): a notification shorter than 15 bytes is end-of-stream on its
+;; own, mirroring the do_steps rawlen guard elsewhere in this file.
+;;
+;; [40E00] 183  ","awaitEndOfStream":{"characteristic":"notify","strategy":"IN_STREAM_TERMINATOR","params":{"matchOpcode":false,"terminatorBytes":"0xFF","shortPacketRecordSize":15},"timeoutMs":8000}}
+;; Steps (0x52) never resolves by match either, so timeoutMs=8000 (was 60000).
+(data (i32.const 0x40E00)
+"\22\2c\22\61\77\61\69\74\45\6e\64\4f\66\53\74\72\65\61\6d\22\3a\7b\22\63\68\61\72\61\63\74\65\72\69\73\74\69\63\22\3a\22\6e\6f\74\69\66\79\22\2c\22\73\74\72\61\74\65\67\79\22\3a\22\49\4e\5f\53\54\52\45\41\4d\5f\54\45\52\4d\49\4e\41\54\4f\52\22\2c\22\70\61\72\61\6d\73\22\3a\7b\22\6d\61\74\63\68\4f\70\63\6f\64\65\22\3a\66\61\6c\73\65\2c\22\74\65\72\6d\69\6e\61\74\6f\72\42\79\74\65\73\22\3a\22\30\78\46\46\22\2c\22\73\68\6f\72\74\50\61\63\6b\65\74\52\65\63\6f\72\64\53\69\7a\65\22\3a\31\35\7d\2c\22\74\69\6d\65\6f\75\74\4d\73\22\3a\38\30\30\30\7d\7d"
+)
+
+;; New IN_STREAM_TERMINATOR awaitEndOfStream tail at 0x40EC0 -- same shape as 0x40E00 but
+;; "shortPacketRecordSize":10.
+;;
+;; [40EC0] 183  ","awaitEndOfStream":{"characteristic":"notify","strategy":"IN_STREAM_TERMINATOR","params":{"matchOpcode":false,"terminatorBytes":"0xFF","shortPacketRecordSize":10},"timeoutMs":8000}}
+;; Serves only HR (0x55) -- never resolves by match, timeoutMs=8000. SpO2 (0x66) used to
+;; share this template but DOES resolve by genuine match and needs timeoutMs=10000, so
+;; it now uses its own template at 0x41020 instead (see below).
+(data (i32.const 0x40EC0)
+"\22\2c\22\61\77\61\69\74\45\6e\64\4f\66\53\74\72\65\61\6d\22\3a\7b\22\63\68\61\72\61\63\74\65\72\69\73\74\69\63\22\3a\22\6e\6f\74\69\66\79\22\2c\22\73\74\72\61\74\65\67\79\22\3a\22\49\4e\5f\53\54\52\45\41\4d\5f\54\45\52\4d\49\4e\41\54\4f\52\22\2c\22\70\61\72\61\6d\73\22\3a\7b\22\6d\61\74\63\68\4f\70\63\6f\64\65\22\3a\66\61\6c\73\65\2c\22\74\65\72\6d\69\6e\61\74\6f\72\42\79\74\65\73\22\3a\22\30\78\46\46\22\2c\22\73\68\6f\72\74\50\61\63\6b\65\74\52\65\63\6f\72\64\53\69\7a\65\22\3a\31\30\7d\2c\22\74\69\6d\65\6f\75\74\4d\73\22\3a\38\30\30\30\7d\7d"
+)
+
+;; New IN_STREAM_TERMINATOR awaitEndOfStream tail at 0x40F80 -- same shape as 0x40D00
+;; (no shortPacketRecordSize) but timeoutMs=10000. 0x40EC0 (last existing segment) ends
+;; at 0x40F78; memory is 5 pages (0x50000 total) and this range is otherwise unused, so
+;; 0x40F80 is placed here as a fresh address rather than resizing anything above.
+;;
+;; [40F80] 157  ","awaitEndOfStream":{"characteristic":"notify","strategy":"IN_STREAM_TERMINATOR","params":{"matchOpcode":false,"terminatorBytes":"0xFF"},"timeoutMs":10000}}
+;; Serves only HRV (0x56) -- resolves by genuine match (observed up to ~3.3s), so
+;; timeoutMs=10000 gives comfortable margin without waiting near 60s.
+(data (i32.const 0x40F80)
+"\22\2c\22\61\77\61\69\74\45\6e\64\4f\66\53\74\72\65\61\6d\22\3a\7b\22\63\68\61\72\61\63\74\65\72\69\73\74\69\63\22\3a\22\6e\6f\74\69\66\79\22\2c\22\73\74\72\61\74\65\67\79\22\3a\22\49\4e\5f\53\54\52\45\41\4d\5f\54\45\52\4d\49\4e\41\54\4f\52\22\2c\22\70\61\72\61\6d\73\22\3a\7b\22\6d\61\74\63\68\4f\70\63\6f\64\65\22\3a\66\61\6c\73\65\2c\22\74\65\72\6d\69\6e\61\74\6f\72\42\79\74\65\73\22\3a\22\30\78\46\46\22\7d\2c\22\74\69\6d\65\6f\75\74\4d\73\22\3a\31\30\30\30\30\7d\7d"
+)
+
+;; New IN_STREAM_TERMINATOR awaitEndOfStream tail at 0x41020 -- same shape as 0x40EC0
+;; ("shortPacketRecordSize":10) but timeoutMs=10000. 0x40F80 ends at 0x41019, so 0x41020
+;; is a fresh, non-overlapping address, still well inside the 0x50000 page limit.
+;;
+;; [41020] 184  ","awaitEndOfStream":{"characteristic":"notify","strategy":"IN_STREAM_TERMINATOR","params":{"matchOpcode":false,"terminatorBytes":"0xFF","shortPacketRecordSize":10},"timeoutMs":10000}}
+;; Serves only SpO2 (0x66) -- resolves by genuine match, timeoutMs=10000.
+(data (i32.const 0x41020)
+"\22\2c\22\61\77\61\69\74\45\6e\64\4f\66\53\74\72\65\61\6d\22\3a\7b\22\63\68\61\72\61\63\74\65\72\69\73\74\69\63\22\3a\22\6e\6f\74\69\66\79\22\2c\22\73\74\72\61\74\65\67\79\22\3a\22\49\4e\5f\53\54\52\45\41\4d\5f\54\45\52\4d\49\4e\41\54\4f\52\22\2c\22\70\61\72\61\6d\73\22\3a\7b\22\6d\61\74\63\68\4f\70\63\6f\64\65\22\3a\66\61\6c\73\65\2c\22\74\65\72\6d\69\6e\61\74\6f\72\42\79\74\65\73\22\3a\22\30\78\46\46\22\2c\22\73\68\6f\72\74\50\61\63\6b\65\74\52\65\63\6f\72\64\53\69\7a\65\22\3a\31\30\7d\2c\22\74\69\6d\65\6f\75\74\4d\73\22\3a\31\30\30\30\30\7d\7d"
 )
 
 ;; ── GLOBALS ──────────────────────────────────────────────────────────────────
@@ -1178,27 +1241,29 @@
 ;; 0x55 HR fetch
 (local.set $p (call $wmem (local.get $p) (i32.const 0x40373) (i32.const 51)))
 (local.set $p (call $wmem (local.get $p) (i32.const 0x40A88) (i32.const 79))) ;; CHANGED: was 0x40A28, padded +0x60 off scratch's end
-(local.set $p (call $wmem (local.get $p) (i32.const 0x40D00) (i32.const 157))) ;; CHANGED: was 0x409F5,147 (SENTINEL_PACKET), then matchOpcode:true [opcode,0xFF] -- Hume decompile shows the real rule is last-byte==0xFF only, opcode-independent; see IN_STREAM_TERMINATOR block above
-;; 0x52 HR/SpO2 fetch
+(local.set $p (call $wmem (local.get $p) (i32.const 0x40EC0) (i32.const 183))) ;; CHANGED: was 184 -- timeoutMs 60000->8000, HR never resolves by terminator match on real hardware (see 0x40EC0 above)
+;; 0x52 Steps fetch -- CHANGED: fixed stale comment ("HR/SpO2 fetch"); this block's
+;; "bytes" template at 0x40AD7 is the 0x52 (Steps) string (see [DED7] label above)
 (local.set $p (call $wmem (local.get $p) (i32.const 0x40373) (i32.const 51)))
 (local.set $p (call $wmem (local.get $p) (i32.const 0x40AD7) (i32.const 79))) ;; CHANGED: was 0x40A77, padded +0x60 off scratch's end
-(local.set $p (call $wmem (local.get $p) (i32.const 0x40D00) (i32.const 157))) ;; CHANGED: was 0x409F5,147 (SENTINEL_PACKET), then matchOpcode:true [opcode,0xFF] -- Hume decompile shows the real rule is last-byte==0xFF only, opcode-independent; see IN_STREAM_TERMINATOR block above
-;; 0x53 Steps fetch
+(local.set $p (call $wmem (local.get $p) (i32.const 0x40E00) (i32.const 183))) ;; CHANGED: was 184 -- timeoutMs 60000->8000, Steps never resolves by terminator match on real hardware (see 0x40E00 above)
+;; 0x53 Sleep fetch -- CHANGED: fixed stale comment ("Steps fetch"); this block's
+;; "bytes" template at 0x40B26 is the 0x53 (Sleep) string (see [DF26] label above)
 (local.set $p (call $wmem (local.get $p) (i32.const 0x40373) (i32.const 51)))
 (local.set $p (call $wmem (local.get $p) (i32.const 0x40B26) (i32.const 79))) ;; CHANGED: was 0x40AC6, padded +0x60 off scratch's end
-(local.set $p (call $wmem (local.get $p) (i32.const 0x40D00) (i32.const 157))) ;; CHANGED: was 0x409F5,147 (SENTINEL_PACKET), then matchOpcode:true [opcode,0xFF] -- Hume decompile shows the real rule is last-byte==0xFF only, opcode-independent; see IN_STREAM_TERMINATOR block above
+(local.set $p (call $wmem (local.get $p) (i32.const 0x40D00) (i32.const 156))) ;; CHANGED: was 157 -- timeoutMs 60000->8000, Sleep never resolves by terminator match on real hardware (see 0x40D00 above)
 ;; 0x66 SpO2 fetch
 (local.set $p (call $wmem (local.get $p) (i32.const 0x40373) (i32.const 51)))
 (local.set $p (call $wmem (local.get $p) (i32.const 0x40B75) (i32.const 79))) ;; CHANGED: was 0x40B15, padded +0x60 off scratch's end
-(local.set $p (call $wmem (local.get $p) (i32.const 0x40D00) (i32.const 157))) ;; CHANGED: was 0x409F5,147 (SENTINEL_PACKET), then matchOpcode:true [opcode,0xFF] -- Hume decompile shows the real rule is last-byte==0xFF only, opcode-independent; see IN_STREAM_TERMINATOR block above
+(local.set $p (call $wmem (local.get $p) (i32.const 0x41020) (i32.const 184))) ;; CHANGED: was 0x40EC0,184 -- SpO2 resolves by genuine terminator match, needs its own timeoutMs=10000 template now that it no longer shares with HR (0x55, timeoutMs=8000); see 0x41020 above
 ;; 0x56 HRV/BP fetch
 (local.set $p (call $wmem (local.get $p) (i32.const 0x40373) (i32.const 51)))
 (local.set $p (call $wmem (local.get $p) (i32.const 0x40BC4) (i32.const 79))) ;; CHANGED: was 0x40B64, padded +0x60 off scratch's end
-(local.set $p (call $wmem (local.get $p) (i32.const 0x40D00) (i32.const 157))) ;; CHANGED: was 0x409F5,147 (SENTINEL_PACKET), then matchOpcode:true [opcode,0xFF] -- Hume decompile shows the real rule is last-byte==0xFF only, opcode-independent; see IN_STREAM_TERMINATOR block above
+(local.set $p (call $wmem (local.get $p) (i32.const 0x40F80) (i32.const 157))) ;; CHANGED: was 0x40D00,157 -- HRV resolves by genuine terminator match, needs its own timeoutMs=10000 template now that it no longer shares with Sleep/Temp (0x53/0x65, timeoutMs=8000); see 0x40F80 above
 ;; 0x65 Skin temp fetch
 (local.set $p (call $wmem (local.get $p) (i32.const 0x40373) (i32.const 51)))
 (local.set $p (call $wmem (local.get $p) (i32.const 0x40C13) (i32.const 79))) ;; CHANGED: was 0x40BB3, padded +0x60 off scratch's end (originally the corrupted one)
-(local.set $p (call $wmem (local.get $p) (i32.const 0x40D00) (i32.const 157))) ;; CHANGED: was 0x409F5,147 (SENTINEL_PACKET), then matchOpcode:true [opcode,0xFF] -- Hume decompile shows the real rule is last-byte==0xFF only, opcode-independent; see IN_STREAM_TERMINATOR block above
+(local.set $p (call $wmem (local.get $p) (i32.const 0x40D00) (i32.const 156))) ;; CHANGED: was 157 -- timeoutMs 60000->8000, Temp never resolves by terminator match on real hardware (see 0x40D00 above)
 ;; ']'
 (local.set $p (call $wc (local.get $p) (i32.const 93)))
 

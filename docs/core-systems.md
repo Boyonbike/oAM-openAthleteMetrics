@@ -37,15 +37,24 @@ IO coroutine consumer: handleNotification(uuid, bytes)
 RawDeviceDataRepository.insertAll()          ← persist raw bytes before parsing
     │
     ▼
-DriverRegistry.parseMetrics(manifest, uuid, assembledBytes)
-    │  WasmDriverEngine: write 16-byte metadata header + payload to WASM memory
-    │  → call exported parseMetrics(offset, length) → read UTF-8 JSON from output region
+sessionCache.add(SessionFrame(characteristic, opcode, assembledBytes))
+    │  buffered only — nothing is parsed yet. Repeats for every notification
+    │  until the sync completes (quiescence, manual trigger, or the device's
+    │  own awaitEndOfStream signal).
+    ▼
+── sync completion ──────────────────────────────────────────────────────
+    ▼
+DriverRegistry.parseSession(manifest, frames)
+    │  WasmDriverEngine: serialise all buffered frames to one JSON array
+    │  (chunked above ~50,000 bytes) → write to WASM memory (no metadata
+    │  header for this call) → call exported parseSession(offset, length)
+    │  once per chunk → read UTF-8 JSON from output region
     │  → deserialize to List<MetricWasmDto> → map to List<MetricReading>
     ▼
 SyncValidator.validateReadings(readings)     ← bounds check, timestamp sanity
     │
     ▼
-MetricRouter.route(reading) per reading:
+BleEngine.routeReading(reading) → MetricRouter.route(reading), once per reading:
     ├── HR             → HrReadingRepository          → hr_readings
     ├── HRV            → HrvReadingRepository         → hrv_readings
     ├── SPO2           → SpO2ReadingRepository        → spo2_readings
@@ -58,7 +67,9 @@ MetricRouter.route(reading) per reading:
     │   (requires diastolic in metaJson["diastolic"]; falls through to staging if absent)
     ├── GLUCOSE        → GlucoseRepository            → glucose_readings
     ├── SLEEP_STAGE    → MetricReadingStagingRepository (with pending_sleep_stage flag)
-    ├── BATTERY        → DeviceSyncProcessor.updateLastBatteryPct() (device metadata only)
+    ├── BATTERY        → discarded by MetricRouter; DeviceSyncProcessor.process()
+    │                     later reads it from the driver-sync result and calls
+    │                     deviceRepository.updateLastBatteryPct() (device metadata only)
     └── all others     → MetricReadingStagingRepository → metric_readings_staging
     │
     ▼
@@ -69,6 +80,13 @@ DailySummaryWorker enqueued for that date (ExistingWorkPolicy.REPLACE)
     ▼
 daily_summary row upserted
 ```
+
+The identical `sessionCache` → `parseSession` → `SyncValidator` → `MetricRouter.route()`
+sequence also runs for the "Reprocess from raw data" action, via `DeviceReprocessor`
+(see [Driver System](#driver-system) below) — the only differences are that frames come
+from stored `raw_device_data` rows instead of a live GATT connection, and routing uses
+`MetricRouter.routeAllForceReplace()` (REPLACE-on-conflict) instead of `route()`
+(insert-or-ignore / value-guarded).
 
 ---
 
@@ -250,7 +268,8 @@ Retry is also triggered by `GATT_ERROR` status on `onServicesDiscovered`, `onDes
 | `connectionState` | Direct pass-through of `BleEngine.connectionState` |
 | `devices` | All known devices from `DeviceRepository` |
 | `discoveredCandidates` | Devices found during an active scan |
-| `recoverySessions` | Sync sessions with `IN_PROGRESS` status from the last 24 h |
+| `reprocessState` | `ReprocessState` (`Idle`/`Running(progress)`/`Done`/`Failed`) for the "Reprocess from raw data" action |
+| `reprocessingDeviceId` | ID of the device currently being reprocessed, or `null` |
 
 **User actions and their engine calls:**
 
@@ -262,7 +281,7 @@ Retry is also triggered by `GATT_ERROR` status on `onServicesDiscovered`, `onDes
 | Tap "Sync" | `onSyncTapped()` | `bleEngine.triggerSync()` |
 | Tap "Disconnect" | `onDisconnectTapped()` | `bleEngine.disconnect()` |
 | Dismiss sync summary | `onSyncAcknowledged()` | `bleEngine.acknowledgeSyncComplete()` |
-| Tap "Recover session" | `onRecoverSessionTapped(sessionId)` | `syncProcessor.processFromRaw(sessionId)` |
+| Confirm "Reprocess from raw data" | `onReprocessConfirmed(device)` | `deviceReprocessor.reprocess(device, since, onProgress)` |
 | Load manifest file | `onManifestFilePicked(uri)` | `DriverRegistry.register(manifest)` → `DriverStorage.save()` |
 | Delete a driver | `onDeleteDriverTapped(driverId)` | `DriverStorage.delete()` → `DriverRegistry.unregister()` |
 
@@ -292,7 +311,7 @@ The only supported driver format is a JSON manifest file with an embedded WebAss
 | `ble` | `BleConfig` | yes | BLE discovery and GATT configuration |
 | `syncCommands` | `List<SyncCommand>` | no | Ordered BLE operations executed after CCCD setup; default empty |
 | `parsing` | `ParsingConfig` | yes | Parsing mode and WASM binary |
-| `specVersion` | `String` | no | WASM memory layout version: `"1"` or `"2"`; default `"1"` |
+| `specVersion` | `String` | no | Free-form string, default `"1"` (Hume Band uses `"4"`). Only read by a dead legacy per-packet code path — has no effect on `parseSession` or `buildSyncCommands`. |
 
 **`BleConfig` fields:**
 
@@ -320,10 +339,14 @@ Only one variant exists:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `parseMetrics` | `String` | yes | Name of the WASM export that parses point-in-time metric readings |
-| `parseSleep` | `String?` | no | Name of the WASM export that parses sleep session data |
-| `parseActivity` | `String?` | no | Name of the WASM export that parses activity/workout data |
+| `parseSession` | `String?` | yes* | Name of the WASM export that bulk-parses an entire buffered sync session at once. This is the only export the engine actually calls to produce readings. |
 | `buildSyncCommands` | `String?` | no | Name of the WASM export that dynamically builds sync commands at connection time; `null` means static list only |
+| `parseMetrics` | `String?` | no | Legacy. `ManifestValidator` accepts a manifest with `parseMetrics` set instead of `parseSession`, but no engine code path ever calls a `parseMetrics` export. |
+| `parseSleep` | `String?` | no | Legacy, declared for schema compatibility only. Never called — sleep is reported via `SLEEP_STAGE` readings inside `parseSession`'s output. |
+| `parseActivity` | `String?` | no | Legacy, declared for schema compatibility only. Never called — there is currently no live path for activity data at all. |
+
+\* Either `parseSession` or `parseMetrics` must be present per `ManifestValidator`; in
+practice write new drivers against `parseSession`.
 
 ---
 
@@ -343,35 +366,50 @@ sealed class SyncCommand {
 
 ### WASM Memory Layout and Runtime Contract
 
-The WASM module receives raw BLE bytes and writes parsed JSON back using a shared linear memory layout. The calling convention differs between spec versions.
+The WASM module receives JSON input and writes parsed JSON back using a shared linear
+memory layout. The layout differs between `parseSession` and `buildSyncCommands` — they
+are not the same call, and `manifest.specVersion` has no effect on either (it's read
+only by a dead legacy per-packet code path).
 
-**Spec v2 layout (recommended for new drivers):**
+**`parseSession` — no metadata header:**
+
+```
+Offset 0x0010 (   16)  INPUT REGION — up to ~50 000 bytes per call
+  UTF-8 JSON array of buffered session frames:
+  [{"characteristic": "...", "opcode": "0xNN", "bytes": "<base64>"}, ...]
+  Large sessions are split into multiple chunks; parseSession is called once per
+  chunk and the app concatenates the results.
+
+Offset 0x1000 (4 096)  OUTPUT REGION — up to 61 440 bytes
+  WASM writes a UTF-8 JSON array of readings here; export function returns byte count as i32
+```
+
+**`buildSyncCommands` — has a metadata header, called once at connect time:**
 
 ```
 Offset 0x0000 (    0)  METADATA HEADER — 16 bytes
-  Bytes 0–7:   syncStartMs (i64, little-endian) — UTC epoch ms at start of sync session
-  Bytes 8–9:   utcOffsetMinutes (i16, little-endian) — device local timezone offset
+  Bytes 0–7:   currentTimeMs (i64, little-endian) — captured fresh at call time
+  Bytes 8–9:   utcOffsetMinutes (i16, little-endian) — captured fresh at call time
   Bytes 10–15: reserved (zero-filled)
 
-Offset 0x0010 (   16)  INPUT REGION — up to 4 080 bytes
-  Raw BLE characteristic payload bytes
+Offset 0x0010 (   16)  INPUT REGION
+  UTF-8 SyncContext JSON string (fields populated per the manifest's syncRequirements)
 
-Offset 0x1000 (4 096)  OUTPUT REGION — up to 61 440 bytes
-  WASM writes UTF-8 JSON here; export function returns byte count as i32
+Offset 0x0400 (1 024)  OUTPUT REGION
+  WASM writes a UTF-8 JSON array of Write commands here; export function returns byte count as i32
 ```
 
-**Spec v1 layout:** input starts at offset 0x0000 (no metadata header). No output from `buildSyncCommands` in v1.
-
-**Export function signature (all exports):**
+**Export function signatures:**
 
 ```wat
 (func (param i32 i32) (result i32))
   ; param 1 — input offset in linear memory
   ; param 2 — input byte length
-  ; result  — number of bytes written to output region
+  ; result  — number of bytes written to the export's output region
 ```
 
-For `buildSyncCommands`, the WASM function receives the metadata header (offset 0, length 16) and writes a JSON array of `Write` commands to the output region.
+Both `parseSession` and `buildSyncCommands` share this shape; only the input content,
+input offset semantics, and output offset differ as shown above.
 
 **Security model:** The WASM sandbox (Chicory runtime) provides the security boundary. The WASM module cannot call Android APIs, access the network, read the filesystem, or execute arbitrary native code. Only the linear memory and declared imports are accessible. The app validates the WASM magic header (`0x00 0x61 0x73 0x6D`) before loading.
 
@@ -379,45 +417,26 @@ For `buildSyncCommands`, the WASM function receives the metadata header (offset 
 
 ### WASM Output DTOs
 
-These are the JSON shapes the WASM module must produce. The app deserializes them from the output region.
-
-**`MetricWasmDto` (output of `parseMetrics`):**
+**`MetricWasmDto` (output of `parseSession` — a JSON array of these):**
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `metricType` | `MetricType` (enum name) | yes | The metric being reported |
+| `metricType` | `MetricType` (enum name) | yes | The metric being reported. Sleep uses `SLEEP_STAGE` with stage details in `metaJson`; there is no separate sleep object. |
 | `value` | `Double` | yes | Numeric measurement |
 | `unit` | `String` | yes | Human-readable unit, e.g. `"bpm"`, `"ms"`, `"%"` |
 | `recordedAtMs` | `Long` | yes | UTC epoch milliseconds when the sensor captured the value |
 | `confidence` | `Float?` | no | Signal quality in `[0.0, 1.0]` |
 | `metaJson` | `String?` | no | Driver-specific extras as a JSON object string |
 
-**`SleepWasmDto` (output of `parseSleep`):**
+This is the only DTO the live pipeline decodes from a WASM module's output. Two more
+DTOs exist in source (`ble/wasm/WasmParseDto.kt`) but are never deserialized by any
+code path — they're vestigial from the retired per-notification contract:
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `dateIso` | `String` | yes | `"YYYY-MM-DD"` — the UTC date of wake-up (morning date) |
-| `sleepStartMs` | `Long` | yes | UTC epoch ms when sleep began |
-| `sleepEndMs` | `Long` | yes | UTC epoch ms when sleep ended |
-| `durationMinutes` | `Int` | no | Ignored by the app; duration is computed from start/end |
-| `stagesJson` | `String?` | no | JSON array of `{stage, startMs, endMs}` objects for sleep stages |
-
-**`ActivityWasmDto` (output of `parseActivity`):**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `startTimeMs` | `Long` | yes | UTC epoch ms |
-| `endTimeMs` | `Long` | yes | UTC epoch ms |
-| `durationMinutes` | `Int` | no | Ignored; computed from start/end |
-| `deviceName` | `String` | yes | Display name of the device that recorded the activity |
-| `avgHrBpm` | `Double?` | no | Average heart rate |
-| `maxHrBpm` | `Double?` | no | Maximum heart rate |
-| `minHrBpm` | `Double?` | no | Minimum heart rate |
-| `calories` | `Double?` | no | Total calories |
-| `activeCalories` | `Double?` | no | Active calories |
-| `distanceMeters` | `Double?` | no | Distance in metres |
-| `steps` | `Int?` | no | Step count |
-| `hrZonesJson` | `String?` | no | JSON array of HR zone breakdown objects |
+- **`SleepWasmDto`** — was the output of the legacy `parseSleep` export (end-of-night
+  summary with `dateIso`/`sleepStartMs`/`sleepEndMs`/`stagesJson`). Dead.
+- **`ActivityWasmDto`** — was the output of the legacy `parseActivity` export
+  (`startTimeMs`/`endTimeMs`/`deviceName`/HR-and-calorie fields). Dead — there is
+  currently no live path for activity data at all.
 
 ---
 
@@ -483,7 +502,10 @@ enum class MetricType {
 
 The engine calls the driver — never the reverse. The driver (WASM module) is a pure function: given bytes, return parsed values. It has no way to initiate any action.
 
-- `BleEngine` decides when to call `parseMetrics`, `parseSleep`, or `parseActivity`.
+- `BleEngine` decides when to call `parseSession` — once per sync (or once per
+  chunk, for large sessions), from either `triggerSync()` (manual/quiescence-driven
+  syncs) or `dispatchPostStreamParse()` (`awaitEndOfStream`-driven syncs) — and when
+  to call `buildSyncCommands`, once at connection time.
 - The WASM module executes synchronously within a coroutine on `Dispatchers.IO`.
 - The module has no access to Android APIs, network, filesystem, or any external state beyond the memory region the engine provides.
 - The engine owns the connection lifecycle entirely; the driver's `syncCommands` list is consumed by the engine, not executed by the driver.
@@ -515,8 +537,9 @@ The engine calls the driver — never the reverse. The driver (WASM module) is a
 | `supportedMetrics` | HR, HRV, SPO2, STEPS, BATTERY, SKIN_TEMP, ACTIVE_CALORIES, BLOOD_PRESSURE, SLEEP_STAGE |
 
 Sync command sequence: entirely generated by the WASM `buildSyncCommands` export at
-connection time (specVersion 4 — its return value is the complete command sequence;
-the manifest carries no static `syncCommands` array). It builds `ENABLE_NOTIFY` on
+connection time (because that export is present, its return value is the complete
+command sequence — this holds regardless of `specVersion`; the manifest carries no
+static `syncCommands` array). It builds `ENABLE_NOTIFY` on
 the notify characteristic, then a series of `WRITE` commands (`0x13`, `0x01`, `0x02`,
 `0x55`, `0x52`, `0x53`, `0x66`, `0x56`, `0x65`) — pacing uses `awaitReply`/
 `awaitEndOfStream` (`IN_STREAM_TERMINATOR`), not `DELAY`. These byte sequences put the
@@ -534,7 +557,7 @@ This driver is the baseline for testing the full BLE-to-database pipeline. Any n
 **Loading a driver manifest:**
 1. User taps "Add Driver" in DevicesScreen; system file picker opens.
 2. JSON is read from the selected URI.
-3. `ManifestValidator.validate()` checks: `id` non-blank, `version` is semver, `supportedMetrics` non-empty, `ble.services` non-empty, WASM magic header valid (`0x00 0x61 0x73 0x6D`), `exports.parseMetrics` non-blank.
+3. `ManifestValidator.validate()` checks: `id` non-blank, `version` is semver, `supportedMetrics` non-empty, `ble.services` non-empty, WASM magic header valid (`0x00 0x61 0x73 0x6D`), and at least one of `exports.parseSession` or `exports.parseMetrics` non-blank.
 4. On success: `DriverRegistry.register(manifest)` → `DriverStorage.save()` persists the JSON to app-private storage.
 
 **Viewing and deleting:**

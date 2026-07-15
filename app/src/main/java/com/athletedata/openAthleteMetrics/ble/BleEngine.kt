@@ -363,8 +363,8 @@ class BleEngine @Inject constructor(
      * A fragment whose size equals that maximum may be followed by more fragments;
      * a fragment shorter than that maximum is the final (or only) fragment.
      *
-     * This matches the standard BLE streaming pattern used by the Hume Band: all its
-     * packets are 3-4 bytes — always shorter than any realistic ATT payload size — so
+     * This matches the standard BLE streaming pattern used by short-packet devices: all
+     * their packets are 3-4 bytes — always shorter than any realistic ATT payload size — so
      * each notification is immediately a complete packet (no buffering occurs in practice).
      * The buffer is present so that drivers for devices with larger packets work correctly
      * without engine changes.
@@ -410,28 +410,34 @@ class BleEngine @Inject constructor(
             sessionId,
         )
 
-        silentSyncTimeoutJob?.cancel()
-        silentSyncTimeoutJob = null
-
-        // Update live packet counter and restart quiescence timer.
+        // CHANGED: the legacy quiescence/silent-sync-timeout timers are a fallback
+        // completion signal for commands with no driver-declared awaitEndOfStream strategy.
+        // While one is armed (awaitEndOfStreamStrategy != null), completion is driven solely
+        // by awaitEndOfStream — these timers must not run, reset, or have any side effect.
         val count = ++packetCount
         val address = activeDeviceAddress ?: return
-        quiescenceJob?.cancel()
-        isQuiescent = false
-        if (_connectionState.value is BleConnectionState.Connected) {
-            _connectionState.value = BleConnectionState.Connected(address, manifest.displayName, count, false)
-            quiescenceJob = scope.launch {
-                delay(STREAM_QUIESCENCE_MS.milliseconds)
-                if (_connectionState.value is BleConnectionState.Connected) {
-                    isQuiescent = true
-                    _connectionState.value = BleConnectionState.Connected(address, manifest.displayName, count, true)
-                    val datesToProcess = synchronized(affectedDates) {
-                        affectedDates.toSet().also { affectedDates.clear() }
-                    }
-                    val manifestStepsMode = activeManifest?.stepsMode ?: StepsMode.DELTA // STEPS-MODE
-                    datesToProcess.forEach { date ->
-                        Timber.tag(TAG).d("[STAGE-6 DB-WRITE] enqueuing DailySummaryWorker for date=%s stepsMode=%s", date, manifestStepsMode) // DPT / STEPS-MODE
-                        enqueueSummaryWorker(date, workManager, manifestStepsMode) // STEPS-MODE
+        if (awaitEndOfStreamStrategy == null) {
+            silentSyncTimeoutJob?.cancel()
+            silentSyncTimeoutJob = null
+
+            // Update live packet counter and restart quiescence timer.
+            quiescenceJob?.cancel()
+            isQuiescent = false
+            if (_connectionState.value is BleConnectionState.Connected) {
+                _connectionState.value = BleConnectionState.Connected(address, manifest.displayName, count, false)
+                quiescenceJob = scope.launch {
+                    delay(STREAM_QUIESCENCE_MS.milliseconds)
+                    if (_connectionState.value is BleConnectionState.Connected) {
+                        isQuiescent = true
+                        _connectionState.value = BleConnectionState.Connected(address, manifest.displayName, count, true)
+                        val datesToProcess = synchronized(affectedDates) {
+                            affectedDates.toSet().also { affectedDates.clear() }
+                        }
+                        val manifestStepsMode = activeManifest?.stepsMode ?: StepsMode.DELTA // STEPS-MODE
+                        datesToProcess.forEach { date ->
+                            Timber.tag(TAG).d("[STAGE-6 DB-WRITE] enqueuing DailySummaryWorker for date=%s stepsMode=%s", date, manifestStepsMode) // DPT / STEPS-MODE
+                            enqueueSummaryWorker(date, workManager, manifestStepsMode) // STEPS-MODE
+                        }
                     }
                 }
             }
@@ -852,6 +858,8 @@ class BleEngine @Inject constructor(
                         val charUuid  = awaitEndOfStreamCharUuid
                         val timeoutMs = awaitEndOfStreamTimeoutMs
                         val strategy  = awaitEndOfStreamStrategy
+                        val armedAtMs = awaitEndOfStreamArmedAtMs
+                        val armedCommandIndex = commandIndex
                         scope.launch {
                             val received = withTimeoutOrNull(timeoutMs) {
                                 coroutineScope { // races the deferred against a QuietPeriod poll loop, if armed
@@ -871,6 +879,12 @@ class BleEngine @Inject constructor(
                                     aesDeferred.await()
                                 }
                             }
+                            val elapsedMs = SystemClock.elapsedRealtime() - armedAtMs
+                            val reason = if (received != null) "MATCH" else "TIMEOUT"
+                            Timber.tag(TAG).d(
+                                "[EOS-RESOLVED] command=%d char=%s reason=%s elapsedMs=%d",
+                                armedCommandIndex, charUuid, reason, elapsedMs
+                            )
                             if (received == null) {
                                 Timber.w("BleEngine: awaitEndOfStream timed out on $charUuid — continuing")
                             }
@@ -1090,6 +1104,13 @@ class BleEngine @Inject constructor(
                         awaitEndOfStreamTimeoutMs = aes.timeoutMs
                         awaitEndOfStreamCharUuid  = aesUuid
                         awaitEndOfStreamDeferred  = CompletableDeferred()
+                        // CHANGED: flush any quiescenceJob left running by an earlier
+                        // non-EOS command in this manifest's command list — connectionState
+                        // stays Connected throughout automatic sync execution, so a stale
+                        // job would otherwise still fire mid-stream and prematurely drain
+                        // affectedDates / enqueue DailySummaryWorker for partial data.
+                        quiescenceJob?.cancel()
+                        quiescenceJob = null
                     } else {
                         Timber.w("BleEngine: awaitEndOfStream characteristic '${aes.characteristic}' not in manifest — treating as fire-and-forget")
                     }
@@ -1208,7 +1229,8 @@ class BleEngine @Inject constructor(
     private suspend fun routeReading(reading: MetricReading) {
         val stepsMode = activeManifest?.stepsMode ?: StepsMode.DELTA // STEPS-MODE
         val caloriesMode = activeManifest?.caloriesMode ?: CaloriesMode.DELTA // CALORIES-MODE / METRIC-OWNERSHIP
-        metricRouter.route(reading, stepsMode, caloriesMode) // STEPS-MODE / CALORIES-MODE
+        val syncIntervalMs = activeManifest?.syncIntervalMs // CHANGED
+        metricRouter.route(reading, stepsMode, caloriesMode, syncIntervalMs) // STEPS-MODE / CALORIES-MODE / CHANGED
         val date = reading.recordedAt.atZone(ZoneId.systemDefault()).toLocalDate()
         synchronized(affectedDates) { affectedDates.add(date) }
     }

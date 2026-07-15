@@ -3,6 +3,7 @@ package com.athletedata.openAthleteMetrics.data.repository
 import com.athletedata.openAthleteMetrics.data.model.DataSource
 import com.athletedata.openAthleteMetrics.data.model.SleepSession
 import kotlinx.coroutines.flow.Flow
+import java.time.Instant
 import java.time.LocalDate
 
 /**
@@ -21,6 +22,16 @@ interface SleepRepository {
 
     /** Inserts or replaces a device sleep session; a correct morning session always wins over a prior partial. */
     suspend fun insertOrReplace(session: SleepSession)
+
+    /**
+     * Extends an existing session's span in place (same id) — used by
+     * [com.athletedata.openAthleteMetrics.worker.SleepStagePromoter] when new stage rows
+     * attach to a session an earlier promote() call already created, so its recorded
+     * duration doesn't go stale relative to the accumulated stage minutes. [date] is the
+     * session's own date (the caller already has it) and is used only to re-enqueue
+     * DailySummaryWorker so `DailySummary.sleepMinutes` picks up the corrected duration.
+     */
+    suspend fun updateSessionSpan(id: Long, date: LocalDate, sleepStartMs: Instant, sleepEndMs: Instant, durationMinutes: Int)
 
     /** Live stream of the session for a given night (keyed by morning date), or null. */
     fun getSessionForDate(date: LocalDate): Flow<SleepSession?>

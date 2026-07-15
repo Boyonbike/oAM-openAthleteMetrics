@@ -135,6 +135,7 @@ class DeviceReprocessor @Inject constructor(
                     readings = acceptedReadings, // POST-AUDIT-FIX
                     stepsMode = manifest.stepsMode, // POST-AUDIT-FIX
                     caloriesMode = manifest.caloriesMode, // POST-AUDIT-FIX
+                    syncIntervalMs = manifest.syncIntervalMs, // CHANGED
                 ) // POST-AUDIT-FIX
                 mergedSessions.forEach { sleepRepository.insertOrReplace(it) }
                 activityRepository.replaceAllFromDevice(acceptedActivities)
@@ -156,6 +157,7 @@ class DeviceReprocessor @Inject constructor(
                 driverId = device.driverId,
                 syncWindowStartMs = since.toEpochMilli(),
                 syncWindowEndMs = reprocessEndedAt.toEpochMilli(),
+                sessionGapThresholdMs = manifest.sessionGapThresholdMs, // CHANGED
             )
 
             val recordsReplaced = acceptedReadings.size + mergedSessions.size + activitiesReplaced

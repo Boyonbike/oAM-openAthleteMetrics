@@ -253,47 +253,74 @@ class EndOfStreamStrategyTest {
     }
 
     // ---------------------------------------------------------------------------
-    // InStreamTerminator short-packet completion (Hume Band 0x52/0x66/0x55 only)
+    // InStreamTerminator short-packet completion (shortPacketRecordSize, opt-in)
     //
-    // Hume decompile: getDetailData (Steps)/getBloodoxygen (SpO2)/getOnceHeartData
-    // (HR) additionally treat a notification too short to hold one full record
-    // (length/recordSize == 0) as end-of-stream on its own. Sleep/Temp/HRV's
-    // decompiled parse functions do NOT apply this rule.
+    // CHANGED: this used to be a hardcoded HUME_BAND_SHORT_PACKET_RECORD_SIZE map
+    // inside InStreamTerminator, keyed by literal opcode and applied to ANY driver
+    // reusing IN_STREAM_TERMINATOR with matchOpcode=false — not gated by driverId.
+    // It's now a manifest-declared params field (shortPacketRecordSize), opt-in per
+    // command, with no fallback default. The fixture opcodes/sizes below (0x52/0x66/
+    // 0x55 -> 15/10/10) are Hume Band's manifest values, reused here only as
+    // realistic test data — not because the engine still knows about Hume Band.
     // ---------------------------------------------------------------------------
 
     private val humeBandShortPacketRecordSizes = mapOf(0x52 to 15, 0x66 to 10, 0x55 to 10)
 
     @Test
-    fun `InStreamTerminator completes on a too-short packet for GetSteps GetSpO2 GetHR`() {
+    fun `InStreamTerminator does not complete on a too-short or empty packet when shortPacketRecordSize is not declared`() {
+        // Proves there is no leftover hardcoded fallback: a hypothetical second driver
+        // reusing these same opcode values, but not declaring shortPacketRecordSize in
+        // its own manifest, must not inherit Hume Band's short-packet behavior.
         for ((opcode, recordSize) in humeBandShortPacketRecordSizes) {
             val strategy = EndOfStreamStrategy.InStreamTerminator(terminatorBytes = byteArrayOf(0xFF.toByte()))
             strategy.onStreamStart(opcode)
-            // One byte short of a full record, no trailing 0xFF — the short-packet
-            // signal must fire on its own.
-            val shortPacket = ByteArray(recordSize - 1)
-            assertTrue(
-                "opcode 0x%02X should complete on a packet shorter than its %d-byte record size".format(opcode, recordSize),
-                strategy.onNotification(shortPacket, 0),
+            assertFalse(
+                "opcode 0x%02X should NOT complete on a too-short packet without a declared shortPacketRecordSize".format(opcode),
+                strategy.onNotification(ByteArray(recordSize - 1), 0),
             )
-        }
-    }
-
-    @Test
-    fun `InStreamTerminator completes on a fully empty packet for GetSteps GetSpO2 GetHR`() {
-        for (opcode in humeBandShortPacketRecordSizes.keys) {
-            val strategy = EndOfStreamStrategy.InStreamTerminator(terminatorBytes = byteArrayOf(0xFF.toByte()))
-            strategy.onStreamStart(opcode)
-            assertTrue(
-                "opcode 0x%02X should complete on an empty notification".format(opcode),
+            assertFalse(
+                "opcode 0x%02X should NOT complete on an empty packet without a declared shortPacketRecordSize".format(opcode),
                 strategy.onNotification(ByteArray(0), 0),
             )
         }
     }
 
     @Test
-    fun `InStreamTerminator does not complete early on a full-size non-terminal packet for GetSteps GetSpO2 GetHR`() {
+    fun `InStreamTerminator completes on a too-short or empty packet when shortPacketRecordSize is declared`() {
+        // Same fixture bytes as the old hardcoded-map tests exercised — proves behavior
+        // is preserved for Hume Band now that its values are manifest-declared params
+        // instead of an engine-internal lookup.
         for ((opcode, recordSize) in humeBandShortPacketRecordSizes) {
-            val strategy = EndOfStreamStrategy.InStreamTerminator(terminatorBytes = byteArrayOf(0xFF.toByte()))
+            val strategy = EndOfStreamStrategy.InStreamTerminator(
+                terminatorBytes = byteArrayOf(0xFF.toByte()),
+                shortPacketRecordSize = recordSize,
+            )
+            strategy.onStreamStart(opcode)
+            assertTrue(
+                "opcode 0x%02X should complete on a packet shorter than its declared %d-byte record size".format(opcode, recordSize),
+                strategy.onNotification(ByteArray(recordSize - 1), 0),
+            )
+        }
+        for ((opcode, recordSize) in humeBandShortPacketRecordSizes) {
+            val strategy = EndOfStreamStrategy.InStreamTerminator(
+                terminatorBytes = byteArrayOf(0xFF.toByte()),
+                shortPacketRecordSize = recordSize,
+            )
+            strategy.onStreamStart(opcode)
+            assertTrue(
+                "opcode 0x%02X should complete on an empty notification when shortPacketRecordSize is declared".format(opcode),
+                strategy.onNotification(ByteArray(0), 0),
+            )
+        }
+    }
+
+    @Test
+    fun `InStreamTerminator does not complete early on a full-size non-terminal packet when shortPacketRecordSize is declared`() {
+        for ((opcode, recordSize) in humeBandShortPacketRecordSizes) {
+            val strategy = EndOfStreamStrategy.InStreamTerminator(
+                terminatorBytes = byteArrayOf(0xFF.toByte()),
+                shortPacketRecordSize = recordSize,
+            )
             strategy.onStreamStart(opcode)
             // Exactly one full record's worth of bytes, no trailing 0xFF — must not
             // complete via either the terminator check or the short-packet check.
@@ -306,15 +333,33 @@ class EndOfStreamStrategyTest {
     }
 
     @Test
-    fun `InStreamTerminator does not complete on an empty packet for GetSleep GetTemp GetHRV`() {
-        // Negative case: Hume's decompile does NOT apply the short-packet rule to
-        // these three opcodes, unlike Steps/SpO2/HR above.
+    fun `InStreamTerminator does not complete on an empty packet for opcodes that never declare shortPacketRecordSize`() {
+        // Negative case: Hume Band's own manifest never declares shortPacketRecordSize
+        // for Sleep/HRV/Temp (0x53/0x56/0x65) — same absence-means-no-completion rule
+        // as any other undeclared opcode, exercised here for a distinct set of opcodes.
         for (opcode in listOf(0x53, 0x65, 0x56)) {
             val strategy = EndOfStreamStrategy.InStreamTerminator(terminatorBytes = byteArrayOf(0xFF.toByte()))
             strategy.onStreamStart(opcode)
             assertFalse(
-                "opcode 0x%02X should NOT complete on an empty notification (short-packet rule is Steps/SpO2/HR-only)".format(opcode),
+                "opcode 0x%02X should NOT complete on an empty notification (shortPacketRecordSize not declared)".format(opcode),
                 strategy.onNotification(ByteArray(0), 0),
+            )
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Source-level guard: no driver-specific literal may live in generic engine code
+    // ---------------------------------------------------------------------------
+
+    @Test
+    fun `EndOfStreamStrategy source contains no Hume Band opcode or vendor literal`() {
+        val sourceFile = java.io.File("src/main/java/com/athletedata/openAthleteMetrics/ble/driver/EndOfStreamStrategy.kt")
+        assertTrue("expected to find EndOfStreamStrategy.kt at ${sourceFile.absolutePath}", sourceFile.exists())
+        val source = sourceFile.readText()
+        for (forbidden in listOf("0x52", "0x66", "0x55", "Hume")) {
+            assertFalse(
+                "EndOfStreamStrategy.kt must not contain the driver-specific literal \"$forbidden\" — protocol knowledge belongs in the driver's manifest/WASM, not generic engine code",
+                source.contains(forbidden),
             )
         }
     }

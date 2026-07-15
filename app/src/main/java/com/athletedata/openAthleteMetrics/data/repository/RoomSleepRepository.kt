@@ -10,6 +10,7 @@ import com.athletedata.openAthleteMetrics.worker.enqueueSummaryWorker
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import timber.log.Timber
+import java.time.Instant
 import java.time.LocalDate
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -53,6 +54,22 @@ class RoomSleepRepository @Inject constructor(
 
     override suspend fun getByDriverAndDate(driverId: String, date: LocalDate): SleepSession? =
         dao.getByDriverAndDate(driverId, date)?.toModel()
+
+    override suspend fun updateSessionSpan(
+        id: Long,
+        date: LocalDate,
+        sleepStartMs: Instant,
+        sleepEndMs: Instant,
+        durationMinutes: Int,
+    ) {
+        try {
+            dao.updateSpan(id, sleepStartMs, sleepEndMs, durationMinutes)
+            enqueueSummaryWorker(date, workManager)
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to update sleep session span")
+            throw e
+        }
+    }
 
     override suspend fun insertOrReplace(session: SleepSession) {
         try {

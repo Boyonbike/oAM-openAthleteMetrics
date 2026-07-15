@@ -126,8 +126,8 @@ class WasmDriverEngine @Inject constructor(
                 ?: return@withLock WasmParseResult.EngineNotInitialised
             if (instance == null) return@withLock WasmParseResult.EngineNotInitialised
 
-            // hume_band.wat's static lookup tables (scan patterns, base64 table, string
-            // constants) live on their own memory page (0x40000+), well clear of the input
+            // The compiled WASM module's static lookup tables (scan patterns, base64 table,
+            // string constants) live on their own memory page (0x40000+), well clear of the input
             // region below OUT_OFFSET, so oversized input no longer risks corrupting them.
             // Chunking is still worth keeping as a conservative bound on JSON payload size
             // and per-call parse-loop work for very large sessions.
@@ -600,8 +600,8 @@ class WasmDriverEngine @Inject constructor(
         private const val IN_OFFSET_V2 = 16  // spec v2: bytes 0–15 are the metadata header
         private const val OUT_OFFSET = 0x1000
         private const val CMD_OUT_OFFSET = 0x400  // 1024 — output offset for buildSyncCommands
-        // hume_band.wat's static data used to start at 0xD800 (55,296), giving a hard
-        // 55,280-byte input limit before it collided with those tables; they've since moved
+        // A compiled WASM module's static data previously started at 0xD800 (55,296), giving a
+        // hard 55,280-byte input limit before it collided with those tables; they've since moved
         // to their own page (0x40000+). 50,000 is kept as a conservative chunk size to bound
         // per-call JSON payload size and parse-loop work, not because of that old collision.
         private const val WASM_SAFE_INPUT_BYTES = 50_000

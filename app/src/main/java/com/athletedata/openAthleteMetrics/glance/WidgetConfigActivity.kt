@@ -29,10 +29,10 @@ import kotlinx.coroutines.launch
 
 /**
  * Per-instance configuration: launched by the OS widget host at add-time (declared via
- * `android:configure` on all three provider-info XMLs), lets the user choose which of the
- * 7 [com.athletedata.openAthleteMetrics.glance.HOME_SCREEN_WIDGET_TEMPLATES] this
- * particular home-screen instance shows, then persists the choice per-instance via
- * Glance's [androidx.glance.appwidget.state.PreferencesGlanceStateDefinition].
+ * `android:configure` on all four provider-info XMLs), lets the user choose which of the
+ * [com.athletedata.openAthleteMetrics.glance.HOME_SCREEN_WIDGET_TEMPLATES] valid for this
+ * particular instance's tier (see [tierFor]/[HomeScreenTier]) it shows, then persists the
+ * choice per-instance via Glance's [androidx.glance.appwidget.state.PreferencesGlanceStateDefinition].
  */
 @AndroidEntryPoint
 class WidgetConfigActivity : ComponentActivity() {
@@ -56,10 +56,29 @@ class WidgetConfigActivity : ComponentActivity() {
             return
         }
 
+        // Sleep templates each have one fixed layout and are restricted to their one matching
+        // tier (unlike the generic single-value templates, which reflow to any tier) — fail
+        // open to the unfiltered list if the provider can't be resolved, rather than blocking
+        // setup entirely.
+        val tier = tierFor(appWidgetId)
+        val candidates = tier?.let { t -> HOME_SCREEN_WIDGET_TEMPLATES.filter { t in it.homeScreenTiers() } }
+            ?: HOME_SCREEN_WIDGET_TEMPLATES
+
         setContent {
             AthleteDataAppTheme {
-                WidgetConfigScreen(onTemplateSelected = ::onTemplateSelected)
+                WidgetConfigScreen(candidates = candidates, onTemplateSelected = ::onTemplateSelected)
             }
+        }
+    }
+
+    private fun tierFor(appWidgetId: Int): HomeScreenTier? {
+        val provider = AppWidgetManager.getInstance(this).getAppWidgetInfo(appWidgetId)?.provider ?: return null
+        return when (provider.className) {
+            MetricWidgetSmallReceiver::class.java.name -> HomeScreenTier.SMALL
+            MetricWidgetMediumReceiver::class.java.name -> HomeScreenTier.MEDIUM
+            MetricWidgetLargeReceiver::class.java.name -> HomeScreenTier.LARGE
+            MetricWidgetXLargeReceiver::class.java.name -> HomeScreenTier.XLARGE
+            else -> null
         }
     }
 
@@ -80,18 +99,25 @@ class WidgetConfigActivity : ComponentActivity() {
     }
 }
 
-private fun labelFor(templateId: WidgetTemplateId): String =
-    WidgetTemplates.bindingsFor(templateId).firstOrNull()?.label
+private fun labelFor(templateId: WidgetTemplateId): String = when (templateId) {
+    WidgetTemplateId.SLEEP_DURATION -> "Sleep Duration"
+    WidgetTemplateId.SLEEP_TIMINGS -> "Sleep Timings"
+    WidgetTemplateId.SLEEP_STAGES -> "Sleep Stages"
+    WidgetTemplateId.SLEEP_HYPNOGRAM -> "Hypnogram"
+    WidgetTemplateId.SLEEP_SUMMARY_SMALL -> "Sleep Summary (small)"
+    WidgetTemplateId.SLEEP_SUMMARY_LARGE -> "Sleep Summary (large)"
+    else -> WidgetTemplates.bindingsFor(templateId).firstOrNull()?.label
         ?: templateId.name.lowercase().replaceFirstChar { it.uppercase() }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun WidgetConfigScreen(onTemplateSelected: (WidgetTemplateId) -> Unit) {
+private fun WidgetConfigScreen(candidates: List<WidgetTemplateId>, onTemplateSelected: (WidgetTemplateId) -> Unit) {
     Scaffold(
         topBar = { TopAppBar(title = { Text("Choose a metric") }) },
     ) { innerPadding ->
         Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-            HOME_SCREEN_WIDGET_TEMPLATES.forEach { templateId ->
+            candidates.forEach { templateId ->
                 Text(
                     text = labelFor(templateId),
                     style = MaterialTheme.typography.titleMedium,

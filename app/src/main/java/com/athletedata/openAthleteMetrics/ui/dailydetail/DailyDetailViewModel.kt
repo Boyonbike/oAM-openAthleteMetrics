@@ -7,7 +7,6 @@ import com.athletedata.openAthleteMetrics.data.db.HrReadingEntity
 import com.athletedata.openAthleteMetrics.data.db.HrvReadingEntity
 import com.athletedata.openAthleteMetrics.data.db.RespirationReadingEntity
 import com.athletedata.openAthleteMetrics.data.db.SpO2ReadingEntity
-import com.athletedata.openAthleteMetrics.data.db.SleepStageEntity
 import com.athletedata.openAthleteMetrics.data.db.StepsReadingEntity
 import com.athletedata.openAthleteMetrics.data.db.TotalCalorieReadingEntity
 import com.athletedata.openAthleteMetrics.data.model.Activity
@@ -16,8 +15,8 @@ import com.athletedata.openAthleteMetrics.data.model.QuestionCategory
 import com.athletedata.openAthleteMetrics.data.model.QuestionDefinition
 import com.athletedata.openAthleteMetrics.data.model.QuestionResponse
 import com.athletedata.openAthleteMetrics.data.model.QuestionType
-import com.athletedata.openAthleteMetrics.data.model.SleepAverages
-import com.athletedata.openAthleteMetrics.data.model.SleepSession
+import com.athletedata.openAthleteMetrics.data.model.SleepData
+import com.athletedata.openAthleteMetrics.data.model.TimestampedReading
 import com.athletedata.openAthleteMetrics.data.model.UserCategory
 import com.athletedata.openAthleteMetrics.data.repository.ActiveCalorieReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.ActivityRepository
@@ -29,9 +28,8 @@ import com.athletedata.openAthleteMetrics.data.repository.HrvReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.QuestionRepository
 import com.athletedata.openAthleteMetrics.data.repository.RespirationReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.SettingsRepository
-import com.athletedata.openAthleteMetrics.data.repository.SleepAverageCalculator
+import com.athletedata.openAthleteMetrics.data.repository.SleepDetailProvider
 import com.athletedata.openAthleteMetrics.data.repository.SleepRepository
-import com.athletedata.openAthleteMetrics.data.repository.SleepStageRepository
 import com.athletedata.openAthleteMetrics.data.repository.SpO2ReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.StepsReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.TotalCalorieReadingRepository
@@ -45,10 +43,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -66,8 +62,7 @@ class DailyDetailViewModel @Inject constructor(
     private val activityRepo: ActivityRepository,
     private val questionRepo: QuestionRepository,
     private val sleepRepo: SleepRepository,
-    private val sleepStageRepo: SleepStageRepository,
-    private val sleepAverageCalculator: SleepAverageCalculator,
+    private val sleepDetailProvider: SleepDetailProvider,
     private val baselineRepo: BaselineRepository,
     private val hrRepo: HrReadingRepository,
     private val hrvRepo: HrvReadingRepository,
@@ -158,25 +153,10 @@ class DailyDetailViewModel @Inject constructor(
                 QuestionsBundle(responses, lifestyle + custom)
             }
 
-            val sleepWithStagesFlow = sleepRepo.getSessionForDate(date)
-                .flatMapLatest { session ->
-                    if (session == null) flowOf(null as Pair<SleepSession, List<SleepStageEntity>>?)
-                    else flow {
-                        val stages = sleepStageRepo.getStagesForSessionOnce(session.id)
-                        emit(Pair(session, stages))
-                    }
-                }
+            val sleepDataFlow: Flow<SleepData?> = sleepDetailProvider.observeSleepData(date)
 
             val rawReadingsFlow: Flow<RawReadingsForDay> = flow {
                 emit(loadRawReadings(startMs, endMs))
-            }
-
-            val sleepAveragesFlow: Flow<SleepAverages> = flow {
-                emit(sleepAverageCalculator.calculate(date))
-            }
-
-            val sleepDurationHistoryFlow: Flow<List<TimestampedReading>> = flow {
-                emit(loadSleepDurationHistory(date))
             }
 
             val tileConfigFlow = combine(
@@ -207,23 +187,13 @@ class DailyDetailViewModel @Inject constructor(
                 PrimaryData(summary, context, activities, questions)
             }
 
-            val sleepExtrasFlow: Flow<Pair<SleepAverages, List<TimestampedReading>>> = combine(
-                sleepAveragesFlow,
-                sleepDurationHistoryFlow,
-            ) { averages, history -> averages to history }
-
             val secondaryFlow = combine(
-                sleepWithStagesFlow,
+                sleepDataFlow,
                 rawReadingsFlow,
                 tileConfigFlow,
                 hrvSectionFlow,
-                sleepExtrasFlow,
-            ) { sleepWithStages, rawReadings, tileConfig, hrvSection, sleepExtras ->
-                SecondaryData(
-                    sleepWithStages, rawReadings, tileConfig, hrvSection,
-                    sleepAverages = sleepExtras.first,
-                    sleepDurationHistory = sleepExtras.second,
-                )
+            ) { sleepData, rawReadings, tileConfig, hrvSection ->
+                SecondaryData(sleepData, rawReadings, tileConfig, hrvSection)
             }
 
             combine(primaryFlow, secondaryFlow) { primary, secondary ->
@@ -243,63 +213,6 @@ class DailyDetailViewModel @Inject constructor(
                         spo2MaxPct = summary.spo2MaxPct,
                     )
                 } else null
-
-                val sleepData = secondary.sleepWithStages?.let { (session, stages) ->
-                    val totalMinutes = session.durationMinutes
-                    // Denominator for stage percentages is this night's own four stage fields,
-                    // not the session's separately-sourced duration — guarantees the four
-                    // percentages can never exceed 100% between them, regardless of any
-                    // staleness in the session span they'd otherwise be compared against.
-                    val stageTotalMinutes = listOfNotNull(
-                        summary?.sleepDeepMinutes, summary?.sleepLightMinutes,
-                        summary?.sleepRemMinutes, summary?.sleepAwakeMinutes,
-                    ).sum()
-                    SleepData(
-                        formattedDuration = formatDuration(totalMinutes),
-                        totalMinutes = totalMinutes,
-                        deepMinutes = summary?.sleepDeepMinutes,
-                        lightMinutes = summary?.sleepLightMinutes,
-                        remMinutes = summary?.sleepRemMinutes,
-                        awakeMinutes = summary?.sleepAwakeMinutes,
-                        deepPct = pctOfTotal(summary?.sleepDeepMinutes, stageTotalMinutes),
-                        lightPct = pctOfTotal(summary?.sleepLightMinutes, stageTotalMinutes),
-                        remPct = pctOfTotal(summary?.sleepRemMinutes, stageTotalMinutes),
-                        awakePct = pctOfTotal(summary?.sleepAwakeMinutes, stageTotalMinutes),
-                        sleepStartMs = session.sleepStartMs.toEpochMilli(),
-                        sleepEndMs = session.sleepEndMs.toEpochMilli(),
-                        onsetTimeLabel = session.sleepStartMs.toLocalTimeLabel(),
-                        wakeTimeLabel = session.sleepEndMs.toLocalTimeLabel(),
-                        hypnogramSegments = stages.sortedBy { it.startMs }.map { s ->
-                            HypnogramSegment(s.stage, s.startMs, s.endMs)
-                        },
-                        averages = secondary.sleepAverages,
-                        durationHistory = secondary.sleepDurationHistory,
-                    )
-                } ?: summary?.sleepMinutes?.let { minutes ->
-                    val stageTotalMinutes = listOfNotNull(
-                        summary.sleepDeepMinutes, summary.sleepLightMinutes,
-                        summary.sleepRemMinutes, summary.sleepAwakeMinutes,
-                    ).sum()
-                    SleepData(
-                        formattedDuration = formatDuration(minutes),
-                        totalMinutes = minutes,
-                        deepMinutes = summary.sleepDeepMinutes,
-                        lightMinutes = summary.sleepLightMinutes,
-                        remMinutes = summary.sleepRemMinutes,
-                        awakeMinutes = summary.sleepAwakeMinutes,
-                        deepPct = pctOfTotal(summary.sleepDeepMinutes, stageTotalMinutes),
-                        lightPct = pctOfTotal(summary.sleepLightMinutes, stageTotalMinutes),
-                        remPct = pctOfTotal(summary.sleepRemMinutes, stageTotalMinutes),
-                        awakePct = pctOfTotal(summary.sleepAwakeMinutes, stageTotalMinutes),
-                        sleepStartMs = null,
-                        sleepEndMs = null,
-                        onsetTimeLabel = null,
-                        wakeTimeLabel = null,
-                        hypnogramSegments = emptyList(),
-                        averages = secondary.sleepAverages,
-                        durationHistory = secondary.sleepDurationHistory,
-                    )
-                }
 
                 val activityData = if (summary != null && (
                     summary.steps != null || summary.activeCalories != null || summary.stepsActiveMinutes != null
@@ -339,7 +252,7 @@ class DailyDetailViewModel @Inject constructor(
                     date = date,
                     tileOrder = secondary.tileConfig,
                     cardiovascular = cardio,
-                    sleep = sleepData,
+                    sleep = secondary.sleepData,
                     activity = activityData,
                     body = bodyData,
                     questionGroups = buildQuestionGroups(primary.questions.responses, primary.questions.definitions),
@@ -376,15 +289,6 @@ class DailyDetailViewModel @Inject constructor(
                 stepsReadings = steps.await().map { it.toTimestamped() },
                 activeCalorieReadings = activeCal.await().map { it.toTimestamped() },
                 totalCalorieReadings = totalCal.await().map { it.toTimestamped() },
-            )
-        }
-
-    private suspend fun loadSleepDurationHistory(date: LocalDate): List<TimestampedReading> =
-        sleepRepo.getSessionsForRange(date.minusDays(6), date).first().map { session ->
-            TimestampedReading(
-                timeLabel = session.date.format(HISTORY_DATE_FMT),
-                value = "%.1f".format(session.durationMinutes / 60.0),
-                unit = "h",
             )
         }
 
@@ -433,17 +337,14 @@ class DailyDetailViewModel @Inject constructor(
     )
 
     private data class SecondaryData(
-        val sleepWithStages: Pair<SleepSession, List<SleepStageEntity>>?,
+        val sleepData: SleepData?,
         val rawReadings: RawReadingsForDay,
         val tileConfig: List<TileConfig>,
         val hrvSection: HrvSectionState,
-        val sleepAverages: SleepAverages,
-        val sleepDurationHistory: List<TimestampedReading>,
     )
 }
 
 private val TIME_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
-private val HISTORY_DATE_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMM")
 
 private fun Instant.toLocalTimeLabel(): String =
     atZone(ZoneId.systemDefault()).format(TIME_FMT)
@@ -471,9 +372,6 @@ private fun TotalCalorieReadingEntity.toTimestamped() =
 
 private fun LocalDate.toEpochMilli(): Long =
     atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
-
-private fun pctOfTotal(stageMinutes: Int?, totalMinutes: Int): Double? =
-    if (stageMinutes == null || totalMinutes <= 0) null else stageMinutes * 100.0 / totalMinutes
 
 private fun formatDuration(minutes: Int): String {
     val h = minutes / 60

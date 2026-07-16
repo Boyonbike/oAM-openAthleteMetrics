@@ -125,6 +125,16 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/metric_widget_large_info" />
         </receiver>
+        <receiver
+            android:name=".glance.MetricWidgetXLargeReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/metric_widget_xlarge_info" />
+        </receiver>
 
         <!--
             Remove the default WorkManager auto-initializer so WorkManager picks up

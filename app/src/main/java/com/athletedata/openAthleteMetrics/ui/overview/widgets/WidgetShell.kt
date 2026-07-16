@@ -79,12 +79,6 @@ fun computeWidgetTrend(today: Double?, yesterday: Double?): WidgetTrendInfo? {
     return WidgetTrendInfo("$arrow ${"%.1f".format(kotlin.math.abs(pct))}%")
 }
 
-fun formatWidgetSleep(minutes: Int): String {
-    val h = minutes / 60
-    val m = minutes % 60
-    return if (m == 0) "${h}h" else "${h}h ${m}m"
-}
-
 fun formatWidgetDuration(minutes: Int): String {
     val h = minutes / 60
     val m = minutes % 60

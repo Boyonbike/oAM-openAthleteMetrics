@@ -2,6 +2,7 @@ package com.athletedata.openAthleteMetrics.ui.overview.widgets
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -27,9 +28,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
@@ -41,6 +44,8 @@ import com.athletedata.openAthleteMetrics.data.model.BaselineRange
 import com.athletedata.openAthleteMetrics.data.model.DailyContext
 import com.athletedata.openAthleteMetrics.data.model.DailySummary
 import com.athletedata.openAthleteMetrics.data.model.QuestionType
+import com.athletedata.openAthleteMetrics.data.model.SleepData
+import com.athletedata.openAthleteMetrics.data.model.SleepStage
 import com.athletedata.openAthleteMetrics.data.model.UserCategory
 import com.athletedata.openAthleteMetrics.data.model.WidgetDefinition
 import com.athletedata.openAthleteMetrics.data.model.WidgetLayoutHint
@@ -53,9 +58,20 @@ import com.athletedata.openAthleteMetrics.data.repository.DailySummaryRepository
 import com.athletedata.openAthleteMetrics.data.repository.HrvReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.QuestionRepository
 import com.athletedata.openAthleteMetrics.data.repository.ResolvedValue
+import com.athletedata.openAthleteMetrics.data.repository.SleepDetailProvider
 import com.athletedata.openAthleteMetrics.data.repository.SleepRepository
 import com.athletedata.openAthleteMetrics.data.repository.WidgetDataContext
 import com.athletedata.openAthleteMetrics.data.repository.resolveDataSource
+import com.athletedata.openAthleteMetrics.ui.dailydetail.Hypnogram
+import com.athletedata.openAthleteMetrics.ui.dailydetail.HypnogramLegend
+import com.athletedata.openAthleteMetrics.ui.dailydetail.STAGE_COLORS
+import com.athletedata.openAthleteMetrics.ui.dailydetail.SleepDurationSection
+import com.athletedata.openAthleteMetrics.ui.dailydetail.StageBox
+import com.athletedata.openAthleteMetrics.ui.dailydetail.StageGrid
+import com.athletedata.openAthleteMetrics.ui.dailydetail.formatDurationShort
+import com.athletedata.openAthleteMetrics.ui.dailydetail.sleepAvgDurationLabel
+import com.athletedata.openAthleteMetrics.ui.dailydetail.sleepAvgTimeRangeLabel
+import com.athletedata.openAthleteMetrics.ui.dailydetail.sleepTimeRangeLabel
 import com.athletedata.openAthleteMetrics.ui.theme.TypographyMeta
 import com.athletedata.openAthleteMetrics.ui.theme.TypographyTitle
 import com.athletedata.openAthleteMetrics.ui.theme.TypographyValue
@@ -100,6 +116,16 @@ sealed class GenericWidgetUiState {
         object NoSleepSession : HrvMetric()
     }
 
+    /**
+     * Shared by all 6 sleep widgets — each just projects the parts of [SleepData] it needs.
+     * Two-way (unlike [HrvMetric]'s three-way split) since [SleepDetailProvider.observeSleepData]
+     * already collapses "no session and no summary" into a single null.
+     */
+    sealed class SleepMetric : GenericWidgetUiState() {
+        data class HasSession(val data: SleepData) : SleepMetric()
+        object NoSleepSession : SleepMetric()
+    }
+
     data class Weight(
         val weightKg: Double?,
         val bodyFatPct: Double?,
@@ -122,6 +148,7 @@ class GenericWidgetViewModel @Inject constructor(
     private val activityRepo: ActivityRepository,
     private val questionRepo: QuestionRepository,
     private val sleepRepo: SleepRepository,
+    private val sleepDetailProvider: SleepDetailProvider,
     private val baselineRepo: BaselineRepository,
     private val hrvRepo: HrvReadingRepository,
 ) : ViewModel() {
@@ -136,9 +163,12 @@ class GenericWidgetViewModel @Inject constructor(
         .flatMapLatest { input ->
             val (date, definition) = input ?: return@flatMapLatest flowOf<GenericWidgetUiState>(GenericWidgetUiState.Loading)
             when (definition.templateId) {
-                WidgetTemplateId.HR, WidgetTemplateId.RHR, WidgetTemplateId.SLEEP,
+                WidgetTemplateId.HR, WidgetTemplateId.RHR,
                 WidgetTemplateId.SPO2, WidgetTemplateId.STEPS -> singleMetricFlow(date, definition)
                 WidgetTemplateId.HRV -> hrvFlow(date)
+                WidgetTemplateId.SLEEP_DURATION, WidgetTemplateId.SLEEP_TIMINGS, WidgetTemplateId.SLEEP_STAGES,
+                WidgetTemplateId.SLEEP_HYPNOGRAM, WidgetTemplateId.SLEEP_SUMMARY_SMALL,
+                WidgetTemplateId.SLEEP_SUMMARY_LARGE -> sleepMetricFlow(date)
                 WidgetTemplateId.WEIGHT -> weightFlow(date)
                 WidgetTemplateId.STARRED_LIFESTYLE_BAR -> starredLifestyleFlow(date)
                 WidgetTemplateId.CUSTOM_QUESTIONS_BAR -> customQuestionsFlow(date)
@@ -160,7 +190,7 @@ class GenericWidgetViewModel @Inject constructor(
             val sorted = range.sortedBy { it.date }
             GenericWidgetUiState.SingleMetric(
                 label = binding.label,
-                value = formatSingleMetricValue(definition.templateId, binding.decimalPlaces, todayResolved),
+                value = formatSingleMetricValue(binding.decimalPlaces, todayResolved),
                 unit = binding.unitSuffix,
                 trend = computeWidgetTrend(todayResolved.asDoubleOrNull(), yesterdayResolved.asDoubleOrNull()),
                 sparkline = sorted.mapNotNull { s ->
@@ -194,6 +224,12 @@ class GenericWidgetViewModel @Inject constructor(
                 if (headline == null) GenericWidgetUiState.HrvMetric.InsufficientData(readings)
                 else GenericWidgetUiState.HrvMetric.HasData(headline, baseline, readings)
             }
+        }
+
+    private fun sleepMetricFlow(date: LocalDate): Flow<GenericWidgetUiState> =
+        sleepDetailProvider.observeSleepData(date).map { data ->
+            if (data == null) GenericWidgetUiState.SleepMetric.NoSleepSession
+            else GenericWidgetUiState.SleepMetric.HasSession(data)
         }
 
     private fun weightFlow(date: LocalDate): Flow<GenericWidgetUiState> {
@@ -264,16 +300,12 @@ private fun ResolvedValue.asDoubleOrNull(): Double? = when (this) {
     else -> null
 }
 
-internal fun formatSingleMetricValue(templateId: WidgetTemplateId, decimalPlaces: Int, resolved: ResolvedValue): String? =
-    if (templateId == WidgetTemplateId.SLEEP) {
-        (resolved as? ResolvedValue.IntValue)?.value?.let { formatWidgetSleep(it) }
-    } else {
-        when (resolved) {
-            is ResolvedValue.Numeric -> "%.${decimalPlaces}f".format(resolved.value)
-            is ResolvedValue.IntValue -> resolved.value.toString()
-            is ResolvedValue.Text -> resolved.value
-            else -> null
-        }
+internal fun formatSingleMetricValue(decimalPlaces: Int, resolved: ResolvedValue): String? =
+    when (resolved) {
+        is ResolvedValue.Numeric -> "%.${decimalPlaces}f".format(resolved.value)
+        is ResolvedValue.IntValue -> resolved.value.toString()
+        is ResolvedValue.Text -> resolved.value
+        else -> null
     }
 
 private data class HrvCardParts(val valueText: String?, val baselineText: String?, val readings: List<Float>)
@@ -328,6 +360,12 @@ fun GenericWidget(
             WidgetLayoutHint.STARRED_BAR -> StarredLifestyleBarBody(uiState, guardedOnTap)
             WidgetLayoutHint.CUSTOM_QUESTIONS_BAR -> CustomQuestionsBarBody(uiState, guardedOnTap, isEditMode)
             WidgetLayoutHint.ACTIVITIES_CARD -> ActivitiesCardBody(uiState, guardedOnTap)
+            WidgetLayoutHint.SLEEP_DURATION -> SleepDurationBody(uiState, guardedOnTap)
+            WidgetLayoutHint.SLEEP_TIMINGS -> SleepTimingsBody(uiState, guardedOnTap)
+            WidgetLayoutHint.SLEEP_STAGES -> SleepStagesBody(uiState, guardedOnTap)
+            WidgetLayoutHint.SLEEP_HYPNOGRAM -> SleepHypnogramBody(uiState, guardedOnTap)
+            WidgetLayoutHint.SLEEP_SUMMARY_SMALL -> SleepSummarySmallBody(uiState, guardedOnTap)
+            WidgetLayoutHint.SLEEP_SUMMARY_LARGE -> SleepSummaryLargeBody(uiState, guardedOnTap)
         }
     }
 }
@@ -512,6 +550,256 @@ private fun HrvMetricWide(uiState: GenericWidgetUiState, onClick: () -> Unit) {
             }
             if (parts.readings.size >= 2) {
                 WidgetSparkline(values = parts.readings, modifier = Modifier.height(60.dp).fillMaxWidth(0.45f))
+            }
+        }
+    }
+}
+
+// ── Body: Sleep (6 widgets, all sourced from SleepDetailProvider) ───────────
+
+/** Value slightly bolder than the app's standard meta style, avg visibly smaller — per the
+ *  chosen Sleep Summary Small design: value-primary, avg-secondary, not two equal-weight numbers. */
+private val SleepSummaryValueStyle = TypographyMeta.copy(fontWeight = FontWeight.Bold)
+private val SleepSummaryAvgStyle = TypographyMeta.copy(fontSize = 9.sp)
+
+@Composable
+private fun SleepStatCardBody(label: String, valueText: String?, avgText: String?, onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxSize(),
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(text = label, style = TypographyTitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(text = valueText ?: "--", style = TypographyValue)
+            Text(
+                text = avgText ?: "",
+                style = TypographyMeta,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                minLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SleepDurationBody(uiState: GenericWidgetUiState, onClick: () -> Unit) {
+    val data = (uiState as? GenericWidgetUiState.SleepMetric.HasSession)?.data
+    SleepStatCardBody(
+        label = "Sleep Duration",
+        valueText = data?.formattedDuration,
+        avgText = data?.let { sleepAvgDurationLabel(it.averages) },
+        onClick = onClick,
+    )
+}
+
+@Composable
+private fun SleepTimingsBody(uiState: GenericWidgetUiState, onClick: () -> Unit) {
+    val data = (uiState as? GenericWidgetUiState.SleepMetric.HasSession)?.data
+    SleepStatCardBody(
+        label = "Sleep Timings",
+        valueText = data?.let { sleepTimeRangeLabel(it) },
+        avgText = data?.let { sleepAvgTimeRangeLabel(it.averages) },
+        onClick = onClick,
+    )
+}
+
+@Composable
+private fun SleepStagesBody(uiState: GenericWidgetUiState, onClick: () -> Unit) {
+    val data = (uiState as? GenericWidgetUiState.SleepMetric.HasSession)?.data
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxSize(),
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(text = "Sleep Stages", style = TypographyTitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (data == null) {
+                Text(text = "--", style = TypographyValue)
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                    StageBox(
+                        color = STAGE_COLORS.getValue(SleepStage.DEEP), label = "Deep",
+                        minutes = data.deepMinutes, pct = data.deepPct,
+                        avgMinutes = data.averages.avgDeepMinutes, avgPct = data.averages.avgDeepPct,
+                        modifier = Modifier.weight(1f),
+                    )
+                    StageBox(
+                        color = STAGE_COLORS.getValue(SleepStage.LIGHT), label = "Light",
+                        minutes = data.lightMinutes, pct = data.lightPct,
+                        avgMinutes = data.averages.avgLightMinutes, avgPct = data.averages.avgLightPct,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                    StageBox(
+                        color = STAGE_COLORS.getValue(SleepStage.REM), label = "REM",
+                        minutes = data.remMinutes, pct = data.remPct,
+                        avgMinutes = data.averages.avgRemMinutes, avgPct = data.averages.avgRemPct,
+                        modifier = Modifier.weight(1f),
+                    )
+                    StageBox(
+                        color = STAGE_COLORS.getValue(SleepStage.AWAKE), label = "Awake",
+                        minutes = data.awakeMinutes, pct = data.awakePct,
+                        avgMinutes = data.averages.avgAwakeMinutes, avgPct = data.averages.avgAwakePct,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SleepHypnogramBody(uiState: GenericWidgetUiState, onClick: () -> Unit) {
+    val data = (uiState as? GenericWidgetUiState.SleepMetric.HasSession)?.data
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxSize(),
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(text = "Hypnogram", style = TypographyTitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (data == null || data.hypnogramSegments.isEmpty()) {
+                Text(text = "No sleep data", style = TypographyMeta, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                Hypnogram(
+                    segments = data.hypnogramSegments,
+                    onsetTimeLabel = data.onsetTimeLabel,
+                    wakeTimeLabel = data.wakeTimeLabel,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                HypnogramLegend()
+            }
+        }
+    }
+}
+
+@Composable
+private fun SleepSummaryCell(label: String, value: String?, avg: String?, modifier: Modifier = Modifier) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = label,
+            style = SleepSummaryAvgStyle,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+        Text(text = value ?: "--", style = SleepSummaryValueStyle, maxLines = 1)
+        Text(
+            text = avg ?: "",
+            style = SleepSummaryAvgStyle,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * Dense single-row layout (2x1 — same row height as a 1x1 cell): duration, timings, and all
+ * 4 stages, each paired with its baseline average at a visibly smaller size than the headline
+ * value. Chosen over dropping content to fit, per explicit sign-off on the tighter/denser option.
+ */
+@Composable
+private fun SleepSummarySmallBody(uiState: GenericWidgetUiState, onClick: () -> Unit) {
+    val data = (uiState as? GenericWidgetUiState.SleepMetric.HasSession)?.data
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxSize(),
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        if (data == null) {
+            Box(modifier = Modifier.fillMaxSize().padding(12.dp), contentAlignment = Alignment.CenterStart) {
+                Text(text = "No sleep data", style = TypographyMeta, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                SleepSummaryCell(
+                    "Duration", data.formattedDuration, sleepAvgDurationLabel(data.averages),
+                    Modifier.weight(1.2f),
+                )
+                SleepSummaryCell(
+                    "Timings", sleepTimeRangeLabel(data), sleepAvgTimeRangeLabel(data.averages),
+                    Modifier.weight(1.4f),
+                )
+                SleepSummaryCell(
+                    "Deep", data.deepMinutes?.let { formatDurationShort(it) },
+                    data.averages.avgDeepMinutes?.let { formatDurationShort(it) }, Modifier.weight(0.8f),
+                )
+                SleepSummaryCell(
+                    "Light", data.lightMinutes?.let { formatDurationShort(it) },
+                    data.averages.avgLightMinutes?.let { formatDurationShort(it) }, Modifier.weight(0.8f),
+                )
+                SleepSummaryCell(
+                    "REM", data.remMinutes?.let { formatDurationShort(it) },
+                    data.averages.avgRemMinutes?.let { formatDurationShort(it) }, Modifier.weight(0.8f),
+                )
+                SleepSummaryCell(
+                    "Awake", data.awakeMinutes?.let { formatDurationShort(it) },
+                    data.averages.avgAwakeMinutes?.let { formatDurationShort(it) }, Modifier.weight(0.8f),
+                )
+            }
+        }
+    }
+}
+
+/** 2x4 — Sleep Summary Small's content plus the Hypnogram, stacked (SleepTile's full expanded
+ *  content minus the 6-night duration-history sparkline, which stays out of scope). */
+@Composable
+private fun SleepSummaryLargeBody(uiState: GenericWidgetUiState, onClick: () -> Unit) {
+    val data = (uiState as? GenericWidgetUiState.SleepMetric.HasSession)?.data
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxSize(),
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(text = "Sleep Summary", style = TypographyTitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (data == null) {
+                Text(text = "No sleep data", style = TypographyMeta, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                SleepDurationSection(data)
+                val hasStages = data.deepMinutes != null || data.lightMinutes != null ||
+                    data.remMinutes != null || data.awakeMinutes != null
+                if (hasStages) {
+                    StageGrid(data)
+                }
+                if (data.hypnogramSegments.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Hypnogram", style = TypographyTitle)
+                        Hypnogram(
+                            segments = data.hypnogramSegments,
+                            onsetTimeLabel = data.onsetTimeLabel,
+                            wakeTimeLabel = data.wakeTimeLabel,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        HypnogramLegend()
+                    }
+                }
             }
         }
     }

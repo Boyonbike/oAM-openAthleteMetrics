@@ -2,8 +2,8 @@ package com.athletedata.openAthleteMetrics.ui.dailydetail
 
 import com.athletedata.openAthleteMetrics.data.model.BaselineRange
 import com.athletedata.openAthleteMetrics.data.model.QuestionCategory
-import com.athletedata.openAthleteMetrics.data.model.SleepAverages
-import com.athletedata.openAthleteMetrics.data.model.SleepStage
+import com.athletedata.openAthleteMetrics.data.model.SleepData
+import com.athletedata.openAthleteMetrics.data.model.TimestampedReading
 import com.athletedata.openAthleteMetrics.data.model.UserCategory
 import java.time.LocalDate
 
@@ -62,32 +62,6 @@ data class CardiovascularData(
     val spo2MaxPct: Double?,
 )
 
-data class SleepData(
-    val formattedDuration: String,
-    val totalMinutes: Int,
-    val deepMinutes: Int?,
-    val lightMinutes: Int?,
-    val remMinutes: Int?,
-    val awakeMinutes: Int?,
-    val deepPct: Double?,
-    val lightPct: Double?,
-    val remPct: Double?,
-    val awakePct: Double?,
-    val sleepStartMs: Long?,
-    val sleepEndMs: Long?,
-    val onsetTimeLabel: String?,
-    val wakeTimeLabel: String?,
-    val hypnogramSegments: List<HypnogramSegment>,
-    val averages: SleepAverages,
-    val durationHistory: List<TimestampedReading>,
-)
-
-data class HypnogramSegment(
-    val stage: SleepStage,
-    val startMs: Long,
-    val endMs: Long,
-)
-
 data class ActivityData(
     val steps: Int?,
     val activeCalories: Double?,
@@ -116,12 +90,6 @@ data class RawReadingsForDay(
     val stepsReadings: List<TimestampedReading> = emptyList(),
     val activeCalorieReadings: List<TimestampedReading> = emptyList(),
     val totalCalorieReadings: List<TimestampedReading> = emptyList(),
-)
-
-data class TimestampedReading(
-    val timeLabel: String,
-    val value: String,
-    val unit: String,
 )
 
 data class ActivityUiItem(

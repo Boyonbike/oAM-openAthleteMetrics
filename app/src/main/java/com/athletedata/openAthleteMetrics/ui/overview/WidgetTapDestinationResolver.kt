@@ -29,7 +29,9 @@ class WidgetTapDestinationResolver @Inject constructor(
                     DailyDetailSection.CARDIOVASCULAR,
                     templateId.metricKeyOrNull,
                 )
-            WidgetTemplateId.SLEEP ->
+            WidgetTemplateId.SLEEP_DURATION, WidgetTemplateId.SLEEP_TIMINGS, WidgetTemplateId.SLEEP_STAGES,
+            WidgetTemplateId.SLEEP_HYPNOGRAM, WidgetTemplateId.SLEEP_SUMMARY_SMALL,
+            WidgetTemplateId.SLEEP_SUMMARY_LARGE ->
                 DashboardNavigationEvent.OpenDailyDetail(date, DailyDetailSection.SLEEP, "SLEEP")
             WidgetTemplateId.STEPS ->
                 DashboardNavigationEvent.OpenDailyDetail(date, DailyDetailSection.ACTIVITY, "STEPS")

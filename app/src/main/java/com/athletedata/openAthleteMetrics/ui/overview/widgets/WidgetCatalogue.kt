@@ -73,10 +73,39 @@ val WIDGET_CATALOGUE: List<WidgetCatalogueCategoryGroup> = listOf(
         category = WidgetCatalogueCategory.SLEEP,
         metricTypes = listOf(
             WidgetCatalogueMetricType(
-                id = "SLEEP",
-                label = "Sleep",
+                id = "SLEEP_DURATION",
+                label = "Sleep Duration",
                 widgets = listOf(
-                    WidgetCatalogueEntry(WidgetTemplateId.SLEEP, "Sleep", "Metric", defaultColSpan = 1, defaultRowSpan = 1, isSingleton = false),
+                    WidgetCatalogueEntry(WidgetTemplateId.SLEEP_DURATION, "Sleep Duration", "Metric", defaultColSpan = 1, defaultRowSpan = 1, isSingleton = false),
+                ),
+            ),
+            WidgetCatalogueMetricType(
+                id = "SLEEP_TIMINGS",
+                label = "Sleep Timings",
+                widgets = listOf(
+                    WidgetCatalogueEntry(WidgetTemplateId.SLEEP_TIMINGS, "Sleep Timings", "Metric", defaultColSpan = 1, defaultRowSpan = 1, isSingleton = false),
+                ),
+            ),
+            WidgetCatalogueMetricType(
+                id = "SLEEP_STAGES",
+                label = "Sleep Stages",
+                widgets = listOf(
+                    WidgetCatalogueEntry(WidgetTemplateId.SLEEP_STAGES, "Sleep Stages", "Metric", defaultColSpan = 1, defaultRowSpan = 1, isSingleton = false),
+                ),
+            ),
+            WidgetCatalogueMetricType(
+                id = "SLEEP_HYPNOGRAM",
+                label = "Hypnogram",
+                widgets = listOf(
+                    WidgetCatalogueEntry(WidgetTemplateId.SLEEP_HYPNOGRAM, "Hypnogram", "Chart", defaultColSpan = 2, defaultRowSpan = 1, isSingleton = false),
+                ),
+            ),
+            WidgetCatalogueMetricType(
+                id = "SLEEP_SUMMARY",
+                label = "Sleep Summary",
+                widgets = listOf(
+                    WidgetCatalogueEntry(WidgetTemplateId.SLEEP_SUMMARY_SMALL, "Sleep Summary", "Small", defaultColSpan = 2, defaultRowSpan = 1, isSingleton = false),
+                    WidgetCatalogueEntry(WidgetTemplateId.SLEEP_SUMMARY_LARGE, "Sleep Summary", "Large", defaultColSpan = 2, defaultRowSpan = 4, isSingleton = false),
                 ),
             ),
         ),

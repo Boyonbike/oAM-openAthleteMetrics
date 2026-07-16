@@ -27,6 +27,9 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.athletedata.openAthleteMetrics.data.model.HypnogramSegment
+import com.athletedata.openAthleteMetrics.data.model.SleepAverages
+import com.athletedata.openAthleteMetrics.data.model.SleepData
 import com.athletedata.openAthleteMetrics.data.model.SleepStage
 import com.athletedata.openAthleteMetrics.ui.theme.TypographyMeta
 import com.athletedata.openAthleteMetrics.ui.theme.TypographyTitle
@@ -43,13 +46,13 @@ private val HOUR_LABEL_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:
  * typography system for the hypnogram's single dense axis row (onset + hourly ticks + wake),
  * which needs to fit more labels on one line than any other text in this card.
  */
-private val HypnogramLabelStyle = TypographyMeta.copy(fontSize = 10.sp)
+internal val HypnogramLabelStyle = TypographyMeta.copy(fontSize = 10.sp)
 
 /**
  * Slightly bigger and bold — a scoped exception to the app's 3-style typography system for
  * the card's duration/time-range headline, which should stand out more than [TypographyTitle].
  */
-private val SleepHeadlineStyle = TypographyTitle.copy(fontSize = 16.sp, fontWeight = FontWeight.Bold)
+internal val SleepHeadlineStyle = TypographyTitle.copy(fontSize = 16.sp, fontWeight = FontWeight.Bold)
 
 // ── Sleep tile ────────────────────────────────────────────────────────────────
 
@@ -113,34 +116,40 @@ internal fun SleepTile(
 
 // ── Duration row ──────────────────────────────────────────────────────────────
 
-@Composable
-private fun SleepDurationSection(data: SleepData) {
-    val timeRangeLabel = if (data.onsetTimeLabel != null && data.wakeTimeLabel != null) {
+/** "Avg 7h10m" — the sleep duration baseline, or null if there's not enough history yet. */
+internal fun sleepAvgDurationLabel(averages: SleepAverages): String? =
+    averages.avgTotalMinutes?.let { "Avg ${formatDurationShort(it)}" }
+
+/** "23:12 → 06:44" — this night's onset→wake range, or null if either edge is missing. */
+internal fun sleepTimeRangeLabel(data: SleepData): String? =
+    if (data.onsetTimeLabel != null && data.wakeTimeLabel != null) {
         "${data.onsetTimeLabel} → ${data.wakeTimeLabel}"
     } else null
 
-    val avg = data.averages
-    val avgDurationText = avg.avgTotalMinutes?.let { "Avg ${formatDurationShort(it)}" }
-    val avgTimeRangeText = if (avg.avgOnsetTime != null && avg.avgWakeTime != null) {
-        "${avg.avgOnsetTime.format(HOUR_LABEL_FMT)} → ${avg.avgWakeTime.format(HOUR_LABEL_FMT)}"
+/** "23:00 → 07:00" — the baseline onset→wake range, or null if there's not enough history yet. */
+internal fun sleepAvgTimeRangeLabel(averages: SleepAverages): String? =
+    if (averages.avgOnsetTime != null && averages.avgWakeTime != null) {
+        "${averages.avgOnsetTime.format(HOUR_LABEL_FMT)} → ${averages.avgWakeTime.format(HOUR_LABEL_FMT)}"
     } else null
 
+@Composable
+internal fun SleepDurationSection(data: SleepData) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
         SleepStatTile(
             value = data.formattedDuration,
-            avgText = avgDurationText,
+            avgText = sleepAvgDurationLabel(data.averages),
             modifier = Modifier.weight(1f),
         )
         SleepStatTile(
-            value = timeRangeLabel,
-            avgText = avgTimeRangeText,
+            value = sleepTimeRangeLabel(data),
+            avgText = sleepAvgTimeRangeLabel(data.averages),
             modifier = Modifier.weight(1f),
         )
     }
 }
 
 @Composable
-private fun SleepStatTile(
+internal fun SleepStatTile(
     value: String?,
     avgText: String?,
     modifier: Modifier = Modifier,
@@ -191,7 +200,7 @@ private fun SleepDurationHistorySection(data: SleepData) {
 
 // ── Stage grid ────────────────────────────────────────────────────────────────
 
-private val STAGE_COLORS = mapOf(
+internal val STAGE_COLORS = mapOf(
     SleepStage.DEEP  to Color(0xFF1A237E),
     SleepStage.LIGHT to Color(0xFF5C6BC0),
     SleepStage.REM   to Color(0xFF9C27B0),
@@ -199,7 +208,7 @@ private val STAGE_COLORS = mapOf(
 )
 
 @Composable
-private fun StageGrid(data: SleepData) {
+internal fun StageGrid(data: SleepData) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Sleep Stages", style = TypographyTitle)
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -236,7 +245,7 @@ private fun StageGrid(data: SleepData) {
 }
 
 @Composable
-private fun StageBox(
+internal fun StageBox(
     color: Color,
     label: String,
     minutes: Int?,
@@ -302,7 +311,7 @@ private fun StageBox(
  * each end, since hourly ticks are always ≥1 hour apart and only ever crowd the two fixed
  * anchor points in practice.
  */
-private fun dropCollidingEdgeTicks(
+internal fun dropCollidingEdgeTicks(
     labels: List<Pair<Float, String>>,
     widthPx: Float,
     labelWidthPx: Int,
@@ -328,7 +337,7 @@ private fun dropCollidingEdgeTicks(
     }
 }
 
-private fun hourlyTicks(startMs: Long, endMs: Long, zone: ZoneId): List<ZonedDateTime> {
+internal fun hourlyTicks(startMs: Long, endMs: Long, zone: ZoneId): List<ZonedDateTime> {
     val endInstant = Instant.ofEpochMilli(endMs)
     var tick = Instant.ofEpochMilli(startMs).atZone(zone).withMinute(0).withSecond(0).withNano(0)
     if (tick.toInstant().toEpochMilli() < startMs) tick = tick.plusHours(1)
@@ -341,7 +350,7 @@ private fun hourlyTicks(startMs: Long, endMs: Long, zone: ZoneId): List<ZonedDat
 }
 
 @Composable
-private fun Hypnogram(
+internal fun Hypnogram(
     segments: List<HypnogramSegment>,
     onsetTimeLabel: String?,
     wakeTimeLabel: String?,
@@ -416,7 +425,7 @@ private fun Hypnogram(
 }
 
 @Composable
-private fun HypnogramLegend() {
+internal fun HypnogramLegend() {
     Row(
         horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
         modifier = Modifier.fillMaxWidth(),

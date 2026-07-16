@@ -3,6 +3,7 @@ package com.athletedata.openAthleteMetrics.glance
 import com.athletedata.openAthleteMetrics.data.repository.DailyContextRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailySummaryRepository
 import com.athletedata.openAthleteMetrics.data.repository.SettingsRepository
+import com.athletedata.openAthleteMetrics.data.repository.SleepDetailProvider
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
@@ -19,4 +20,5 @@ interface WidgetDataEntryPoint {
     fun dailySummaryRepository(): DailySummaryRepository
     fun dailyContextRepository(): DailyContextRepository
     fun settingsRepository(): SettingsRepository
+    fun sleepDetailProvider(): SleepDetailProvider
 }

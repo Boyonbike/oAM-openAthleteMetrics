@@ -161,7 +161,7 @@ class DevicesViewModel @Inject constructor(
 
     fun onSyncTapped() {
         if (connectionState.value !is BleConnectionState.Connected) return
-        viewModelScope.launch { bleEngine.triggerSync() }
+        bleEngine.startSync()
     }
 
     fun onDisconnectTapped() { bleEngine.disconnect() }

@@ -1,12 +1,12 @@
 package com.athletedata.openAthleteMetrics.ui.overview
 
-import com.athletedata.openAthleteMetrics.data.model.WidgetLayout
+import com.athletedata.openAthleteMetrics.data.model.WidgetDefinition
 import com.athletedata.openAthleteMetrics.ui.dailydetail.DailyDetailSection
 import java.time.LocalDate
 
 data class DashboardUiState(
     val date: LocalDate = LocalDate.now(),
-    val widgets: List<WidgetLayout> = emptyList(),
+    val widgets: List<WidgetDefinition> = emptyList(),
     val isEditMode: Boolean = false,
     val hasSeederData: Boolean = false,
 )

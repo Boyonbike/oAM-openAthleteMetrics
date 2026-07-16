@@ -3,9 +3,8 @@ package com.athletedata.openAthleteMetrics.data.repository
 import com.athletedata.openAthleteMetrics.data.db.WidgetLayoutDao
 import com.athletedata.openAthleteMetrics.data.db.WidgetLayoutEntity
 import com.athletedata.openAthleteMetrics.data.db.toModel
-import com.athletedata.openAthleteMetrics.data.model.WidgetLayout
-import com.athletedata.openAthleteMetrics.data.model.WidgetSize
-import com.athletedata.openAthleteMetrics.data.model.WidgetType
+import com.athletedata.openAthleteMetrics.data.model.WidgetDefinition
+import com.athletedata.openAthleteMetrics.data.model.WidgetTemplateId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -17,18 +16,18 @@ class RoomWidgetLayoutRepository @Inject constructor(
     private val dao: WidgetLayoutDao,
 ) : WidgetLayoutRepository {
 
-    override fun getLayout(): Flow<List<WidgetLayout>> =
-        dao.getAll().map { entities -> entities.map { it.toModel() } }
+    override fun getLayout(): Flow<List<WidgetDefinition>> =
+        dao.getAll().map { entities -> entities.mapNotNull { it.toModel() } }
 
-    override suspend fun addWidget(type: WidgetType, size: WidgetSize): Long {
+    override suspend fun addWidget(templateId: WidgetTemplateId, colSpan: Int, rowSpan: Int): Long {
         val current = dao.getAll().first()
-        val nextOrder = if (current.isEmpty()) 0 else current.maxOf { it.sortOrder } + 1
+        val nextOrder = if (current.isEmpty()) 0 else current.maxOf { it.sequenceOrder } + 1
         return dao.insert(
             WidgetLayoutEntity(
-                widgetType = WidgetType.discriminator(type),
-                size = if (size == WidgetSize.WIDE) "WIDE" else "SMALL",
-                sortOrder = nextOrder,
-                extraId = WidgetType.extraId(type),
+                templateId = templateId.name,
+                colSpan = colSpan,
+                rowSpan = rowSpan,
+                sequenceOrder = nextOrder,
             )
         )
     }
@@ -38,8 +37,10 @@ class RoomWidgetLayoutRepository @Inject constructor(
     }
 
     override suspend fun reorderWidgets(orderedIds: List<Long>) {
-        orderedIds.forEachIndexed { index, id ->
-            dao.updateSortOrder(id, index)
-        }
+        dao.updateSequenceOrders(orderedIds)
+    }
+
+    override suspend fun resizeWidget(id: Long, colSpan: Int, rowSpan: Int) {
+        dao.updateSize(id, colSpan, rowSpan)
     }
 }

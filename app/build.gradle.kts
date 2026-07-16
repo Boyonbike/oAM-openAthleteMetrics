@@ -100,6 +100,11 @@ dependencies {
     // Deferred, constraint-aware background work. Used for DailySummaryWorker.
     implementation(libs.androidx.work.runtime.ktx)
 
+    // ── Glance (home-screen widgets) ──────────────────────────────────────
+    // Compose-like API for building AppWidgets, used instead of the older
+    // RemoteViews/AppWidgetProvider API.
+    implementation(libs.androidx.glance.appwidget)
+
     // ── Timber ─────────────────────────────────────────────────────────────
     implementation(libs.timber)
 

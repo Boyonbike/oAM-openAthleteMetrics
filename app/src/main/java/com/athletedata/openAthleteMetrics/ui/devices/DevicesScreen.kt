@@ -65,6 +65,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.athletedata.openAthleteMetrics.ble.BleConnectionState
+import com.athletedata.openAthleteMetrics.ble.BatteryOptimizationHelper
 import com.athletedata.openAthleteMetrics.ble.BlePermissionHelper
 import com.athletedata.openAthleteMetrics.ble.DiscoveredCandidate
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
@@ -331,6 +332,10 @@ fun DevicesScreen(
                                                         "Please enable Bluetooth to add a device"
                                                     )
                                                 }
+                                            !BatteryOptimizationHelper.isExempt(context) ->
+                                                context.startActivity(
+                                                    BatteryOptimizationHelper.requestExemptionIntent(context)
+                                                )
                                             else -> viewModel.onAddDeviceTapped()
                                         }
                                     }

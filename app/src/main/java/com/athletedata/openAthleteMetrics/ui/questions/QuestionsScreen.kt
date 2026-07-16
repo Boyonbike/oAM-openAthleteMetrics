@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -134,6 +135,7 @@ fun QuestionsScreen(
             DataPageTopBar(
                 date = localDate,
                 onDateClick = { showDatePicker = true },
+                onDateLongClick = { viewModel.setDate(LocalDate.now()) },
                 centre = {
                     PillSelector(
                         tabs = listOf("Lifestyle", "Habits"),
@@ -207,6 +209,14 @@ fun QuestionsScreen(
                                             }
                                         },
                                         editMode = editMode,
+                                        dragHandle = {
+                                            Icon(
+                                                imageVector = Icons.Outlined.DragIndicator,
+                                                contentDescription = "Drag to reorder",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = dragHandleMod,
+                                            )
+                                        },
                                         editControls = {
                                             IconButton(
                                                 onClick = { viewModel.toggleVisibility(item.definition.id) },
@@ -221,12 +231,6 @@ fun QuestionsScreen(
                                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 )
                                             }
-                                            Icon(
-                                                imageVector = Icons.Outlined.DragIndicator,
-                                                contentDescription = "Drag to reorder",
-                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = dragHandleMod,
-                                            )
                                         },
                                     )
                                 }
@@ -279,6 +283,14 @@ fun QuestionsScreen(
                                             viewModel.saveResponse(item.definition.id, value)
                                         },
                                         editMode = editMode,
+                                        dragHandle = {
+                                            Icon(
+                                                imageVector = Icons.Outlined.DragIndicator,
+                                                contentDescription = "Drag to reorder",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = dragHandleMod,
+                                            )
+                                        },
                                         editControls = {
                                             IconButton(
                                                 onClick = { viewModel.deleteCustomQuestion(item.definition.id) },
@@ -309,12 +321,6 @@ fun QuestionsScreen(
                                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 )
                                             }
-                                            Icon(
-                                                imageVector = Icons.Outlined.DragIndicator,
-                                                contentDescription = "Drag to reorder",
-                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = dragHandleMod,
-                                            )
                                         },
                                     )
                                 }
@@ -384,6 +390,7 @@ private fun QuestionRow(
     onBooleanToggle: ((String) -> Unit)? = null,
     onTextSave: ((String) -> Unit)? = null,
     editMode: Boolean = false,
+    dragHandle: (@Composable () -> Unit)? = null,
     editControls: (@Composable () -> Unit)? = null,
 ) {
     Column(
@@ -395,6 +402,10 @@ private fun QuestionRow(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (editMode && dragHandle != null) {
+                dragHandle()
+                Spacer(Modifier.width(8.dp))
+            }
             Text(
                 text = item.definition.name,
                 style = TypographyTitle,

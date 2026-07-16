@@ -1,10 +1,8 @@
 package com.athletedata.openAthleteMetrics.ui.overview.widgets
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
@@ -40,13 +38,12 @@ fun WidgetShell(
                 onClick = onRemove,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .size(28.dp)
-                    .background(MaterialTheme.colorScheme.error, CircleShape),
+                    .size(32.dp),
             ) {
                 Icon(
                     imageVector = Icons.Filled.Close,
                     contentDescription = "Remove widget",
-                    tint = MaterialTheme.colorScheme.onError,
+                    tint = MaterialTheme.colorScheme.error,
                     modifier = Modifier.size(16.dp),
                 )
             }

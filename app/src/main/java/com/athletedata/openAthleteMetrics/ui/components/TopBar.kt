@@ -1,5 +1,6 @@
 package com.athletedata.openAthleteMetrics.ui.components
 
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.drag
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -25,11 +27,14 @@ import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import java.time.Instant
 import java.time.LocalDate
@@ -70,6 +75,7 @@ fun Modifier.horizontalDateSwipe(
 fun DataPageTopBar(
     date: LocalDate,
     onDateClick: () -> Unit,
+    onDateLongClick: () -> Unit = {},
     centre: @Composable BoxScope.() -> Unit = {},
     actions: @Composable RowScope.() -> Unit = {},
     modifier: Modifier = Modifier,
@@ -80,13 +86,24 @@ fun DataPageTopBar(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
-            TextButton(
-                onClick = onDateClick,
-                modifier = Modifier.align(Alignment.CenterStart),
+            val haptics = LocalHapticFeedback.current
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .clip(RoundedCornerShape(percent = 50))
+                    .combinedClickable(
+                        onClick = onDateClick,
+                        onLongClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onDateLongClick()
+                        },
+                    )
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
                 Text(
                     text = date.format(DATE_FORMATTER),
                     style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary,
                 )
             }
             Box(

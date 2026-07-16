@@ -34,6 +34,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *  18 — added baseline_window_config table for per-BaselineMetric overrides of the
  *       baseline rolling window and minimum-days requirement (window_days/minimum_days
  *       nullable so either can be overridden independently; see BaselineWindowConfigRepository)
+ *  19 — replaced widget_layout's widget_type/size/extra_id columns with
+ *       template_id/col_span/row_span (skyline-packer grid rewrite: fixed 2 columns,
+ *       colSpan 1-2, rowSpan 1-4, position computed from sequence_order at render time,
+ *       not persisted); table is dropped and recreated, reseeded with the same 10-widget
+ *       default layout as MIGRATION_12_13 — existing custom placements/sizes are not
+ *       migrated (acceptable per product decision)
  */
 @Database(
     entities = [
@@ -63,7 +69,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BaselineEntity::class,
         BaselineWindowConfigEntity::class,
     ],
-    version = 18,
+    version = 19,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -983,6 +989,48 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                     """.trimIndent()
                 )
+            }
+        }
+
+        private data class DefaultWidget(val templateId: String, val colSpan: Int, val rowSpan: Int, val sequenceOrder: Int)
+
+        // Replaces widget_layout's widget_type/size/extra_id discriminator columns with
+        // template_id/col_span/row_span for the skyline-packer grid rewrite. No per-row
+        // migration is attempted (widget_type -> template_id isn't a 1:1 rename, and the old
+        // binary size doesn't map cleanly onto arbitrary colSpan/rowSpan) - the table is
+        // dropped and reseeded with the same 10-widget default layout MIGRATION_12_13 used.
+        val MIGRATION_18_19 = object : Migration(18, 19) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DROP TABLE IF EXISTS `widget_layout`")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `widget_layout` (
+                        `id`             INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `template_id`    TEXT NOT NULL,
+                        `col_span`       INTEGER NOT NULL,
+                        `row_span`       INTEGER NOT NULL,
+                        `sequence_order` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                val defaults = listOf(
+                    DefaultWidget("HR", 1, 1, 0),
+                    DefaultWidget("HRV", 1, 1, 1),
+                    DefaultWidget("RHR", 1, 1, 2),
+                    DefaultWidget("SLEEP", 1, 1, 3),
+                    DefaultWidget("SPO2", 1, 1, 4),
+                    DefaultWidget("STEPS", 1, 1, 5),
+                    DefaultWidget("WEIGHT", 2, 1, 6),
+                    DefaultWidget("STARRED_LIFESTYLE_BAR", 2, 1, 7),
+                    DefaultWidget("CUSTOM_QUESTIONS_BAR", 2, 1, 8),
+                    DefaultWidget("ACTIVITIES", 2, 1, 9),
+                )
+                defaults.forEach { (template, colSpan, rowSpan, order) ->
+                    db.execSQL(
+                        "INSERT INTO widget_layout (template_id, col_span, row_span, sequence_order) VALUES (?, ?, ?, ?)",
+                        arrayOf(template, colSpan, rowSpan, order)
+                    )
+                }
             }
         }
     }

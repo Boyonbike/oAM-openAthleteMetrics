@@ -28,6 +28,16 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
+    <!-- Keep the process alive while a device sync is streaming in the background -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+
+    <!-- API 33+: required to show the foreground-service sync notification -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Lets us prompt for an exemption from OEM background-kill policies during sync -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <!-- API 29–32: scoped storage — no permission needed for
          file picker via SAF; no declaration required -->
 
@@ -49,6 +59,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
+            android:launchMode="singleTask"
             android:theme="@style/Theme.AthleteDataApp"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
@@ -57,6 +68,64 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <service
+            android:name=".ble.BleSyncService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <!-- Milestone 1: trivial static Glance widget proving the plumbing works. -->
+        <receiver
+            android:name=".glance.StaticTestWidgetReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/static_test_widget_info" />
+        </receiver>
+
+        <!--
+            Milestone 2: per-instance metric picker, launched by the widget host at
+            add-time. exported="true" is required — it's launched by the
+            launcher/widget-host process (a different app) via explicit component intent.
+        -->
+        <activity
+            android:name=".glance.WidgetConfigActivity"
+            android:exported="true"
+            android:theme="@style/Theme.AthleteDataApp" />
+
+        <receiver
+            android:name=".glance.MetricWidgetSmallReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/metric_widget_small_info" />
+        </receiver>
+        <receiver
+            android:name=".glance.MetricWidgetMediumReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/metric_widget_medium_info" />
+        </receiver>
+        <receiver
+            android:name=".glance.MetricWidgetLargeReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/metric_widget_large_info" />
+        </receiver>
+
         <!--
             Remove the default WorkManager auto-initializer so WorkManager picks up
             the custom Configuration (with HiltWorkerFactory) from AthleteDataApplication

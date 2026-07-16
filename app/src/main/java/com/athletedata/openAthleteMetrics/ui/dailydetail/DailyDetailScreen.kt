@@ -130,6 +130,7 @@ fun DailyDetailScreen(
                 DataPageTopBar(
                     date = localDate,
                     onDateClick = { showDatePicker = true },
+                    onDateLongClick = { viewModel.setDate(LocalDate.now()) },
                     centre = { Text("Daily Detail", style = MaterialTheme.typography.titleMedium) },
                     actions = {
                         IconButton(onClick = viewModel::toggleEditMode) {
@@ -155,6 +156,7 @@ fun DailyDetailScreen(
                     initialMetricKey = initialMetricKey,
                     onInitialSectionConsumed = onInitialSectionConsumed,
                     onTileToggle = viewModel::toggleTile,
+                    onExpandTile = viewModel::expandTile,
                     onTileReordered = viewModel::onTileReordered,
                     onTileVisibilityToggle = viewModel::toggleTileVisibility,
                     onActivityTap = { activity -> categorySheetActivity = activity },
@@ -223,6 +225,7 @@ private fun SuccessContent(
     initialMetricKey: String?,
     onInitialSectionConsumed: () -> Unit,
     onTileToggle: (String) -> Unit,
+    onExpandTile: (String) -> Unit,
     onTileReordered: (Int, Int) -> Unit,
     onTileVisibilityToggle: (String) -> Unit,
     onActivityTap: (ActivityUiItem) -> Unit,
@@ -249,7 +252,7 @@ private fun SuccessContent(
             if (tileId != null) {
                 val index = effectiveTiles.indexOfFirst { it.id == tileId }
                 if (index >= 0) listState.animateScrollToItem(index)
-                onTileToggle(tileId)
+                onExpandTile(tileId)
             }
             onInitialSectionConsumed()
         }

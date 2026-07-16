@@ -1,10 +1,12 @@
 package com.athletedata.openAthleteMetrics.ui.nav
 
+import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -17,14 +19,18 @@ import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.athletedata.openAthleteMetrics.data.model.MetricType
+import com.athletedata.openAthleteMetrics.data.model.WidgetTemplateId
+import com.athletedata.openAthleteMetrics.glance.WidgetDeepLink
 import com.athletedata.openAthleteMetrics.ui.dailydetail.DailyDetailScreen
 import com.athletedata.openAthleteMetrics.ui.dailydetail.DailyDetailSection
 import com.athletedata.openAthleteMetrics.ui.devices.DevicesScreen
 import com.athletedata.openAthleteMetrics.ui.history.HistoryScreen
 import com.athletedata.openAthleteMetrics.ui.metric.MetricDetailScreen
+import com.athletedata.openAthleteMetrics.ui.overview.DashboardNavigationEvent
 import com.athletedata.openAthleteMetrics.ui.overview.DashboardScreen
 import com.athletedata.openAthleteMetrics.ui.questions.QuestionsScreen
 import com.athletedata.openAthleteMetrics.ui.settings.SettingsScreen
+import java.time.LocalDate
 
 enum class Page(val label: String) {
     DASHBOARD("Dashboard"),
@@ -44,7 +50,11 @@ private fun parseMetricKey(key: String): MetricType? = when (key) {
 // ── Nav graph ─────────────────────────────────────────────────────────────────
 
 @Composable
-fun AppNavGraph(modifier: Modifier = Modifier) {
+fun AppNavGraph(
+    widgetIntent: Intent? = null,
+    onWidgetIntentConsumed: () -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
     val viewModel: NavHostViewModel = hiltViewModel()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val batteryPct by viewModel.batteryPct.collectAsStateWithLifecycle()
@@ -71,6 +81,44 @@ fun AppNavGraph(modifier: Modifier = Modifier) {
             backStack.add(page)
             currentPage = page
         }
+    }
+
+    // Hoisted so both DashboardScreen's callback params and the widget-deep-link effect
+    // below can reuse the exact same "event -> nav state" wiring.
+    val onOpenDailyDetailAtSection: (date: LocalDate, section: DailyDetailSection, metricKey: String?) -> Unit =
+        { date, section, metricKey ->
+            pendingDailyDetailDate = date.toString()
+            pendingDailyDetailSection = section
+            pendingDailyDetailMetric = metricKey
+            navigateTo(Page.DAILY_DETAIL)
+        }
+    val onNavigateToQuestions: (LocalDate) -> Unit = { date ->
+        pendingQuestionsDate = date.toString()
+        navigateTo(Page.QUESTIONS)
+    }
+    val onNavigateToHabitsTab: (LocalDate) -> Unit = { date ->
+        pendingQuestionsDate = date.toString()
+        pendingQuestionsTab = "HABITS"
+        navigateTo(Page.QUESTIONS)
+    }
+
+    // Home-screen widget tap-to-open: resolves via the same WidgetTapDestinationResolver
+    // the in-app dashboard tap uses, then dispatches through the same nav-state wiring
+    // above. OpenWeightSheet has no wired callback at this level (it's handled locally
+    // inside DashboardScreen's own collector) — landing on Dashboard without
+    // auto-opening the sheet is a deliberate simplification for the cold-launch case.
+    LaunchedEffect(widgetIntent) {
+        val intent = widgetIntent ?: return@LaunchedEffect
+        val templateId = intent.getStringExtra(WidgetDeepLink.EXTRA_TEMPLATE_ID)
+            ?.let { name -> WidgetTemplateId.entries.find { it.name == name } } ?: return@LaunchedEffect
+        val date = intent.getStringExtra(WidgetDeepLink.EXTRA_DATE)?.let(LocalDate::parse) ?: LocalDate.now()
+        when (val event = viewModel.resolveWidgetTap(templateId, date)) {
+            is DashboardNavigationEvent.OpenDailyDetail -> onOpenDailyDetailAtSection(event.date, event.section, event.metricKey)
+            is DashboardNavigationEvent.OpenQuestions -> onNavigateToQuestions(event.date)
+            is DashboardNavigationEvent.OpenHabitsTab -> onNavigateToHabitsTab(event.date)
+            DashboardNavigationEvent.OpenWeightSheet -> navigateTo(Page.DASHBOARD)
+        }
+        onWidgetIntentConsumed()
     }
 
     val currentRoute = when {
@@ -105,21 +153,9 @@ fun AppNavGraph(modifier: Modifier = Modifier) {
                 ) {
                     when (page) {
                         Page.DASHBOARD -> DashboardScreen(
-                            onNavigateToQuestions = { date ->
-                                pendingQuestionsDate = date.toString()
-                                navigateTo(Page.QUESTIONS)
-                            },
-                            onNavigateToHabitsTab = { date ->
-                                pendingQuestionsDate = date.toString()
-                                pendingQuestionsTab = "HABITS"
-                                navigateTo(Page.QUESTIONS)
-                            },
-                            onOpenDailyDetailAtSection = { date, section, metricKey ->
-                                pendingDailyDetailDate = date.toString()
-                                pendingDailyDetailSection = section
-                                pendingDailyDetailMetric = metricKey
-                                navigateTo(Page.DAILY_DETAIL)
-                            },
+                            onNavigateToQuestions = onNavigateToQuestions,
+                            onNavigateToHabitsTab = onNavigateToHabitsTab,
+                            onOpenDailyDetailAtSection = onOpenDailyDetailAtSection,
                         )
                         Page.DAILY_DETAIL -> DailyDetailScreen(
                             initialDate = pendingDailyDetailDate,

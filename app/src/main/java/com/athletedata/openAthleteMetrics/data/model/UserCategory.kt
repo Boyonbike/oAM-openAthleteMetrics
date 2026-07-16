@@ -15,3 +15,9 @@ enum class UserCategory {
     /** A competitive event. */
     RACE,
 }
+
+fun UserCategory.toLabel(): String = when (this) {
+    UserCategory.TRAINING -> "Training"
+    UserCategory.LIFE -> "Life"
+    UserCategory.RACE -> "Race"
+}

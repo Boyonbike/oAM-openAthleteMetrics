@@ -6,8 +6,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,12 +14,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Check
@@ -46,35 +42,29 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.athletedata.openAthleteMetrics.data.model.DailyContext
-import com.athletedata.openAthleteMetrics.data.model.WidgetLayout
-import com.athletedata.openAthleteMetrics.data.model.WidgetSize
-import com.athletedata.openAthleteMetrics.data.model.WidgetType
+import com.athletedata.openAthleteMetrics.data.model.WidgetDefinition
 import com.athletedata.openAthleteMetrics.ui.components.DataPageDatePickerDialog
 import com.athletedata.openAthleteMetrics.ui.components.DataPageTopBar
 import com.athletedata.openAthleteMetrics.ui.components.horizontalDateSwipe
 import com.athletedata.openAthleteMetrics.ui.dailydetail.DailyDetailSection
 import com.athletedata.openAthleteMetrics.ui.nav.LocalBottomNavScrollBehavior
 import com.athletedata.openAthleteMetrics.ui.nav.rememberBottomNavNestedScrollConnection
-import com.athletedata.openAthleteMetrics.ui.overview.widgets.ActivitiesWidget
-import com.athletedata.openAthleteMetrics.ui.overview.widgets.HrvMetricWidget
-import com.athletedata.openAthleteMetrics.ui.overview.widgets.MetricWidget
-import com.athletedata.openAthleteMetrics.ui.overview.widgets.StarredHabitsBarWidget
-import com.athletedata.openAthleteMetrics.ui.overview.widgets.StarredLifestyleBarWidget
-import com.athletedata.openAthleteMetrics.ui.overview.widgets.WeightWidget
+import com.athletedata.openAthleteMetrics.ui.overview.grid.SkylineGridLayout
+import com.athletedata.openAthleteMetrics.ui.overview.grid.dashboardDragHandle
+import com.athletedata.openAthleteMetrics.ui.overview.grid.packSkyline
+import com.athletedata.openAthleteMetrics.ui.overview.grid.rememberDraggableGridState
+import com.athletedata.openAthleteMetrics.ui.overview.widgets.GenericWidget
 import com.athletedata.openAthleteMetrics.ui.overview.widgets.WidgetCatalogueSheet
 import com.athletedata.openAthleteMetrics.ui.theme.TypographyMeta
 import kotlinx.coroutines.launch
-import sh.calvin.reorderable.ReorderableItem
-import sh.calvin.reorderable.rememberReorderableLazyGridState
 import java.time.LocalDate
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -116,38 +106,57 @@ fun DashboardScreen(
 
     val infiniteTransition = rememberInfiniteTransition(label = "wiggle")
     val wiggleAngle by infiniteTransition.animateFloat(
-        initialValue = -2f,
-        targetValue = 2f,
+        initialValue = -0.6f,
+        targetValue = 0.6f,
         animationSpec = infiniteRepeatable(
             animation = tween(durationMillis = 120, easing = LinearEasing),
             repeatMode = RepeatMode.Reverse,
         ),
         label = "wiggle_angle",
     )
-    val effectiveWiggle = if (uiState.isEditMode) wiggleAngle else 0f
 
-    // Local snapshot list — Calvin library mutates this directly during drag.
-    // Syncing from uiState is blocked while a drag is active to avoid
-    // mid-drag recompositions that confuse the library's item tracking.
-    val localWidgets = remember { mutableStateListOf<WidgetLayout>() }
-    val isDraggingActive = remember { mutableStateOf(false) }
-    val currentHasSeederData = rememberUpdatedState(uiState.hasSeederData)
+    // Local snapshot list - mutated directly during drag, synced from uiState.widgets
+    // otherwise so a live drag isn't clobbered mid-gesture by a Room re-emission.
+    val localWidgets = remember { mutableStateListOf<WidgetDefinition>() }
+    var containerWidthPx by remember { mutableStateOf(0) }
 
-    LaunchedEffect(uiState.widgets) {
-        if (!isDraggingActive.value) {
-            localWidgets.clear()
-            localWidgets.addAll(uiState.widgets)
+    // Shared with the drag-hit-testing math below - SkylineGridLayout and
+    // DraggableGridState must agree on the exact same geometry, so these are passed
+    // explicitly to both rather than relying on matching default parameter values.
+    val gridColumnGap = 12.dp
+    val gridRowGap = 12.dp
+    val gridRowUnitHeight = 150.dp
+
+    val packResult = packSkyline(localWidgets)
+    val dragState = rememberDraggableGridState(
+        widgets = localWidgets,
+        packResult = packResult,
+        containerWidthPx = containerWidthPx,
+        columnGap = gridColumnGap,
+        rowGap = gridRowGap,
+        rowUnitHeight = gridRowUnitHeight,
+        onMove = { from, to ->
+            localWidgets.add(to, localWidgets.removeAt(from))
+            // packSkyline sorts by sequenceOrder, not list position, so the moved
+            // widgets must be renumbered in place or the grid won't visually reflect
+            // the reorder until the persisted order round-trips back from Room.
+            localWidgets.forEachIndexed { index, widget ->
+                if (widget.sequenceOrder != index) localWidgets[index] = widget.copy(sequenceOrder = index)
+            }
+        },
+        onDragEnd = { viewModel.onReorderPersist(localWidgets.toList()) },
+    )
+
+    LaunchedEffect(uiState.isEditMode) {
+        if (!uiState.isEditMode) {
+            dragState.cancelIfDragging()
         }
     }
 
-    val lazyGridState = rememberLazyGridState()
-    val reorderState = rememberReorderableLazyGridState(lazyGridState) { from, to ->
-        // Subtract the offset of non-widget DSL items that precede the items() block.
-        val offset = if (currentHasSeederData.value) 1 else 0
-        val fromIdx = from.index - offset
-        val toIdx = to.index - offset
-        if (fromIdx in localWidgets.indices && toIdx in localWidgets.indices) {
-            localWidgets.add(toIdx, localWidgets.removeAt(fromIdx))
+    LaunchedEffect(uiState.widgets) {
+        if (!dragState.isDragging) {
+            localWidgets.clear()
+            localWidgets.addAll(uiState.widgets)
         }
     }
 
@@ -155,7 +164,7 @@ fun DashboardScreen(
         modifier = modifier.horizontalDateSwipe(
             enabled = !uiState.isEditMode,
             onDayForward = { viewModel.stepDate(true) },
-            onDayBack    = { viewModel.stepDate(false) },
+            onDayBack = { viewModel.stepDate(false) },
         ),
         contentWindowInsets = WindowInsets.navigationBars,
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -163,6 +172,7 @@ fun DashboardScreen(
             DataPageTopBar(
                 date = uiState.date,
                 onDateClick = { showDatePicker = true },
+                onDateLongClick = { viewModel.setDate(LocalDate.now()) },
                 centre = { Text("Dashboard", style = MaterialTheme.typography.titleMedium) },
                 actions = {
                     if (uiState.isEditMode) {
@@ -185,64 +195,62 @@ fun DashboardScreen(
             )
         },
     ) { innerPadding ->
-        LazyVerticalGrid(
-            state = lazyGridState,
-            columns = GridCells.Fixed(2),
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
                 .nestedScroll(nestedScrollConnection),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp, ),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (uiState.hasSeederData) {
-                item(key = "seeder_banner", span = { GridItemSpan(2) }) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = MaterialTheme.shapes.medium,
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-                    ) {
-                        Text(
-                            text = "Demo data — clear via Settings › Developer › Clear seeder data",
-                            style = TypographyMeta,
-                            color = MaterialTheme.colorScheme.onTertiaryContainer,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        )
-                    }
-                }
-            }
-
-            items(
-                items = localWidgets,
-                key = { it.id },
-                span = { widget -> GridItemSpan(if (widget.size == WidgetSize.WIDE) 2 else 1) },
-            ) { widget ->
-                ReorderableItem(state = reorderState, key = widget.id, enabled = uiState.isEditMode) { isDraggingItem ->
-                    WidgetHost(
-                        widget = widget,
-                        date = uiState.date,
-                        isEditMode = uiState.isEditMode,
-                        isDragging = isDraggingItem,
-                        wiggleAngle = effectiveWiggle,
-                        onTap = { viewModel.onWidgetTap(widget) },
-                        onRemove = { viewModel.removeWidget(widget.id) },
-                        onWeightEditTap = { showWeightSheet = true },
-                        draggableHandleModifier = Modifier.draggableHandle(
-                            onDragStarted = { isDraggingActive.value = true },
-                            onDragStopped = {
-                                isDraggingActive.value = false
-                                viewModel.onReorderPersist(localWidgets.toList())
-                            },
-                        ),
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    shape = MaterialTheme.shapes.medium,
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                ) {
+                    Text(
+                        text = "Demo data — clear via Settings › Developer › Clear seeder data",
+                        style = TypographyMeta,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                     )
                 }
             }
 
-            item(key = "bottom_spacer", span = { GridItemSpan(2) }) {
-                Spacer(Modifier.height(80.dp))
+            SkylineGridLayout(
+                widgets = localWidgets,
+                packResult = packResult,
+                columnGap = gridColumnGap,
+                rowGap = gridRowGap,
+                rowUnitHeight = gridRowUnitHeight,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .onSizeChanged { containerWidthPx = it.width },
+            ) { widget ->
+                // Idle edit mode is static; once a widget is picked up for reorder, only
+                // the OTHER widgets shimmer - the dragged one glides smoothly with the
+                // finger via dashboardDragHandle's own translation, with no rotation added.
+                val widgetWiggle = if (dragState.isDragging && widget.id != dragState.draggedWidgetId) {
+                    wiggleAngle
+                } else {
+                    0f
+                }
+                GenericWidget(
+                    widgetId = widget.id,
+                    definition = widget,
+                    date = uiState.date,
+                    isEditMode = uiState.isEditMode,
+                    wiggleAngle = widgetWiggle,
+                    onTap = { viewModel.onWidgetTap(widget) },
+                    onRemove = { viewModel.removeWidget(widget.id) },
+                    onWeightEditTap = { showWeightSheet = true },
+                    modifier = Modifier.dashboardDragHandle(dragState, widget.id, uiState.isEditMode),
+                )
             }
+
+            Spacer(Modifier.height(80.dp))
         }
     }
 
@@ -273,102 +281,12 @@ fun DashboardScreen(
     if (showCatalogue) {
         WidgetCatalogueSheet(
             placedWidgets = uiState.widgets,
-            onAddWidget = { type, size ->
-                viewModel.addWidget(type, size)
+            onAddWidget = { templateId, colSpan, rowSpan ->
+                viewModel.addWidget(templateId, colSpan, rowSpan)
                 showCatalogue = false
             },
             onDismiss = { showCatalogue = false },
         )
-    }
-}
-
-// ── Widget host — dispatches to the right widget composable ──────────────────
-
-@Composable
-private fun WidgetHost(
-    widget: com.athletedata.openAthleteMetrics.data.model.WidgetLayout,
-    date: LocalDate,
-    isEditMode: Boolean,
-    isDragging: Boolean,
-    wiggleAngle: Float,
-    onTap: () -> Unit,
-    onRemove: () -> Unit,
-    onWeightEditTap: () -> Unit,
-    draggableHandleModifier: Modifier,
-    modifier: Modifier = Modifier,
-) {
-    val combinedModifier = modifier.then(draggableHandleModifier)
-    when (widget.type) {
-        is WidgetType.Hr, WidgetType.Rhr,
-        WidgetType.Sleep, WidgetType.Spo2, WidgetType.Steps ->
-            MetricWidget(
-                widgetId = widget.id,
-                widgetType = widget.type,
-                date = date,
-                size = widget.size,
-                isEditMode = isEditMode,
-                wiggleAngle = wiggleAngle,
-                onTap = onTap,
-                onRemove = onRemove,
-                modifier = combinedModifier,
-            )
-        is WidgetType.Hrv ->
-            HrvMetricWidget(
-                widgetId = widget.id,
-                date = date,
-                size = widget.size,
-                isEditMode = isEditMode,
-                wiggleAngle = wiggleAngle,
-                onTap = onTap,
-                onRemove = onRemove,
-                modifier = combinedModifier,
-            )
-        is WidgetType.Weight ->
-            WeightWidget(
-                widgetId = widget.id,
-                date = date,
-                size = widget.size,
-                isEditMode = isEditMode,
-                wiggleAngle = wiggleAngle,
-                onTap = onTap,
-                onEditTap = onWeightEditTap,
-                onRemove = onRemove,
-                modifier = combinedModifier,
-            )
-        is WidgetType.StarredLifestyleBar ->
-            StarredLifestyleBarWidget(
-                widgetId = widget.id,
-                date = date,
-                size = widget.size,
-                isEditMode = isEditMode,
-                wiggleAngle = wiggleAngle,
-                onTap = onTap,
-                onRemove = onRemove,
-                modifier = combinedModifier,
-            )
-        is WidgetType.StarredHabitsBar ->
-            StarredHabitsBarWidget(
-                widgetId = widget.id,
-                date = date,
-                size = widget.size,
-                isEditMode = isEditMode,
-                wiggleAngle = wiggleAngle,
-                onTap = onTap,
-                onRemove = onRemove,
-                modifier = combinedModifier,
-            )
-        is WidgetType.Activities ->
-            ActivitiesWidget(
-                widgetId = widget.id,
-                date = date,
-                size = widget.size,
-                isEditMode = isEditMode,
-                wiggleAngle = wiggleAngle,
-                onTap = onTap,
-                onRemove = onRemove,
-                modifier = combinedModifier,
-            )
-        else -> Unit
     }
 }
 
@@ -394,7 +312,7 @@ private fun DashboardWeightSheet(
     val scope = rememberCoroutineScope()
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
-        androidx.compose.foundation.layout.Column(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp)

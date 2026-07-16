@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Small tier: roughly square, targets a 1x1 launcher cell. Floor tier - no minResize. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="90dp"
+    android:minHeight="90dp"
+    android:targetCellWidth="1"
+    android:targetCellHeight="1"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:updatePeriodMillis="0"
+    android:configure="com.athletedata.openAthleteMetrics.glance.WidgetConfigActivity"
+    android:initialLayout="@layout/glance_default_loading_layout" />

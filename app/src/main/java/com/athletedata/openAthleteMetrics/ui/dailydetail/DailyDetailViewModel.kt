@@ -99,6 +99,10 @@ class DailyDetailViewModel @Inject constructor(
         }
     }
 
+    fun expandTile(id: String) {
+        expandedTiles.update { current -> current + id }
+    }
+
     fun toggleEditMode() {
         val entering = !isEditMode.value
         isEditMode.value = entering

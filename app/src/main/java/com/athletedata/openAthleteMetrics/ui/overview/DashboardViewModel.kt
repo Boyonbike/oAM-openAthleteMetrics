@@ -4,15 +4,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.athletedata.openAthleteMetrics.data.model.DailyContext
 import com.athletedata.openAthleteMetrics.data.model.UserCategory
-import com.athletedata.openAthleteMetrics.data.model.WidgetLayout
-import com.athletedata.openAthleteMetrics.data.model.WidgetSize
-import com.athletedata.openAthleteMetrics.data.model.WidgetType
+import com.athletedata.openAthleteMetrics.data.model.WidgetDefinition
+import com.athletedata.openAthleteMetrics.data.model.WidgetTemplateId
 import com.athletedata.openAthleteMetrics.data.repository.ActivityRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailyContextRepository
 import com.athletedata.openAthleteMetrics.data.repository.HrReadingRepository
-import com.athletedata.openAthleteMetrics.data.repository.QuestionRepository
 import com.athletedata.openAthleteMetrics.data.repository.WidgetLayoutRepository
-import com.athletedata.openAthleteMetrics.ui.dailydetail.DailyDetailSection
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,9 +32,9 @@ import javax.inject.Inject
 class DashboardViewModel @Inject constructor(
     private val widgetLayoutRepo: WidgetLayoutRepository,
     private val contextRepo: DailyContextRepository,
-    private val questionRepo: QuestionRepository,
     private val activityRepo: ActivityRepository,
     private val hrReadingRepo: HrReadingRepository,
+    private val widgetTapResolver: WidgetTapDestinationResolver,
 ) : ViewModel() {
 
     private val _errors = MutableSharedFlow<String>(extraBufferCapacity = 1)
@@ -84,10 +81,10 @@ class DashboardViewModel @Inject constructor(
         _isEditMode.update { !it }
     }
 
-    fun addWidget(type: WidgetType, size: WidgetSize) {
+    fun addWidget(templateId: WidgetTemplateId, colSpan: Int, rowSpan: Int) {
         viewModelScope.launch {
             try {
-                widgetLayoutRepo.addWidget(type, size)
+                widgetLayoutRepo.addWidget(templateId, colSpan, rowSpan)
             } catch (e: Exception) {
                 Timber.e(e, "Failed to add widget")
                 _errors.tryEmit("Failed to add widget")
@@ -106,7 +103,7 @@ class DashboardViewModel @Inject constructor(
         }
     }
 
-    fun onReorderPersist(orderedWidgets: List<WidgetLayout>) {
+    fun onReorderPersist(orderedWidgets: List<WidgetDefinition>) {
         viewModelScope.launch {
             try {
                 widgetLayoutRepo.reorderWidgets(orderedWidgets.map { it.id })
@@ -117,51 +114,10 @@ class DashboardViewModel @Inject constructor(
         }
     }
 
-    fun onWidgetTap(widget: WidgetLayout) {
+    fun onWidgetTap(widget: WidgetDefinition) {
         val date = _date.value
         viewModelScope.launch {
-            val event = when (widget.type) {
-                is WidgetType.Hr, WidgetType.Hrv, WidgetType.Rhr, WidgetType.Spo2 ->
-                    DashboardNavigationEvent.OpenDailyDetail(
-                        date,
-                        DailyDetailSection.CARDIOVASCULAR,
-                        widget.type.metricKey,
-                    )
-                is WidgetType.Sleep ->
-                    DashboardNavigationEvent.OpenDailyDetail(date, DailyDetailSection.SLEEP, "SLEEP")
-                is WidgetType.Steps ->
-                    DashboardNavigationEvent.OpenDailyDetail(date, DailyDetailSection.ACTIVITY, "STEPS")
-                is WidgetType.Activities ->
-                    DashboardNavigationEvent.OpenDailyDetail(date, DailyDetailSection.ACTIVITIES)
-                is WidgetType.Weight -> {
-                    val context = contextRepo.getForDate(date).first()
-                    if (context?.weightKg != null) {
-                        DashboardNavigationEvent.OpenDailyDetail(date, DailyDetailSection.BODY)
-                    } else {
-                        DashboardNavigationEvent.OpenWeightSheet
-                    }
-                }
-                is WidgetType.LifestyleQuestion, WidgetType.StarredLifestyleBar -> {
-                    val responses = questionRepo.getResponsesForDate(date).first()
-                    if (responses.isEmpty()) {
-                        DashboardNavigationEvent.OpenQuestions(date)
-                    } else {
-                        DashboardNavigationEvent.OpenDailyDetail(date, DailyDetailSection.QUESTIONS)
-                    }
-                }
-                is WidgetType.HabitQuestion, WidgetType.StarredHabitsBar -> {
-                    val responses = questionRepo.getResponsesForDate(date).first()
-                    val lifestyleIds = questionRepo.getLifestyleQuestionsOnce().map { it.id }.toSet()
-                    val hasHabitResponse = responses.any { it.questionId !in lifestyleIds }
-                    if (!hasHabitResponse) {
-                        DashboardNavigationEvent.OpenHabitsTab(date)
-                    } else {
-                        DashboardNavigationEvent.OpenDailyDetail(date, DailyDetailSection.QUESTIONS)
-                    }
-                }
-                else -> DashboardNavigationEvent.OpenDailyDetail(date, DailyDetailSection.CARDIOVASCULAR)
-            }
-            _navigationEvents.tryEmit(event)
+            _navigationEvents.tryEmit(widgetTapResolver.resolve(widget.templateId, date))
         }
     }
 

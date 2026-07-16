@@ -132,6 +132,7 @@ fun HistoryScreen(
             DataPageTopBar(
                 date = pageDate,
                 onDateClick = { showDatePicker = true },
+                onDateLongClick = { viewModel.setPageDate(today) },
                 centre = {
                     Text("History", style = MaterialTheme.typography.titleMedium)
                 },

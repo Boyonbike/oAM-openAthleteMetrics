@@ -3,34 +3,51 @@ package com.athletedata.openAthleteMetrics.data.db
 import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
-import com.athletedata.openAthleteMetrics.data.model.WidgetLayout
-import com.athletedata.openAthleteMetrics.data.model.WidgetSize
-import com.athletedata.openAthleteMetrics.data.model.WidgetType
+import com.athletedata.openAthleteMetrics.data.model.WidgetDefinition
+import com.athletedata.openAthleteMetrics.data.model.WidgetTemplateId
+import com.athletedata.openAthleteMetrics.data.model.WidgetTemplates
+import timber.log.Timber
 
 @Entity(tableName = "widget_layout")
 data class WidgetLayoutEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
-    @ColumnInfo(name = "widget_type")
-    val widgetType: String,
-    val size: String,
-    @ColumnInfo(name = "sort_order")
-    val sortOrder: Int,
-    @ColumnInfo(name = "extra_id")
-    val extraId: Long? = null,
+    @ColumnInfo(name = "template_id")
+    val templateId: String,
+    @ColumnInfo(name = "col_span")
+    val colSpan: Int,
+    @ColumnInfo(name = "row_span")
+    val rowSpan: Int,
+    @ColumnInfo(name = "sequence_order")
+    val sequenceOrder: Int,
 )
 
-fun WidgetLayoutEntity.toModel() = WidgetLayout(
-    id = id,
-    type = WidgetType.fromDiscriminator(widgetType, extraId),
-    size = if (size == "WIDE") WidgetSize.WIDE else WidgetSize.SMALL,
-    sortOrder = sortOrder,
-)
+/**
+ * Returns null (rather than throwing) for a `template_id` that doesn't match any current
+ * [WidgetTemplateId] — e.g. after a rollback to a build with fewer templates. The template
+ * set is closed and versioned, so there's no first-class "Unknown" model variant; an
+ * unrecognized row is just dropped from the rendered layout.
+ */
+fun WidgetLayoutEntity.toModel(): WidgetDefinition? {
+    val template = try {
+        WidgetTemplateId.valueOf(templateId)
+    } catch (e: IllegalArgumentException) {
+        Timber.e(e, "Unrecognized widget template_id '%s' for widget_layout row %d", templateId, id)
+        return null
+    }
+    return WidgetTemplates.definitionFor(
+        id = id,
+        templateId = template,
+        colSpan = colSpan,
+        rowSpan = rowSpan,
+        sequenceOrder = sequenceOrder,
+    )
+}
 
-fun WidgetLayout.toEntity() = WidgetLayoutEntity(
+fun WidgetDefinition.toEntity() = WidgetLayoutEntity(
     id = id,
-    widgetType = WidgetType.discriminator(type),
-    size = if (size == WidgetSize.WIDE) "WIDE" else "SMALL",
-    sortOrder = sortOrder,
-    extraId = WidgetType.extraId(type),
+    templateId = templateId.name,
+    colSpan = colSpan,
+    rowSpan = rowSpan,
+    sequenceOrder = sequenceOrder,
 )

@@ -5,9 +5,13 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.glance.appwidget.updateAll
 import com.athletedata.openAthleteMetrics.data.model.ThemePreference
+import com.athletedata.openAthleteMetrics.glance.MetricGlanceWidget
 import com.athletedata.openAthleteMetrics.ui.dailydetail.DEFAULT_TILE_ORDER
 import com.athletedata.openAthleteMetrics.ui.dailydetail.TileConfig
+import dagger.hilt.android.qualifiers.ApplicationContext
+import android.content.Context
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
@@ -18,6 +22,7 @@ import javax.inject.Singleton
 @Singleton
 class DataStoreSettingsRepository @Inject constructor(
     private val dataStore: DataStore<Preferences>,
+    @ApplicationContext private val context: Context,
 ) : SettingsRepository {
 
     /**
@@ -39,6 +44,10 @@ class DataStoreSettingsRepository @Inject constructor(
         dataStore.edit { prefs ->
             prefs[THEME_KEY] = pref.name
         }
+        // Home-screen widgets resolve their colours from this preference (see
+        // MetricGlanceWidget.provideGlance) - refresh immediately rather than waiting
+        // for the next event-triggered or periodic update.
+        MetricGlanceWidget().updateAll(context)
     }
 
     override suspend fun clearAllPreferences() {

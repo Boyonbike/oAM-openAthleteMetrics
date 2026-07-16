@@ -25,7 +25,12 @@ fun rememberBlePermissionState(): BlePermissionState {
 
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { grants -> allGranted = grants.values.all { it } }
+    ) { grants ->
+        // Only the BLE-required permissions gate `allGranted` — POST_NOTIFICATIONS is
+        // requested alongside them (for the background-sync notification) but is optional,
+        // so a denial of it must not be read as "BLE permissions missing".
+        allGranted = BlePermissionHelper.requiredPermissions().all { grants[it] == true }
+    }
 
     val rationale = remember(allGranted) {
         val activity = context as? Activity ?: return@remember false
@@ -40,7 +45,11 @@ fun rememberBlePermissionState(): BlePermissionState {
         allGranted = allGranted,
         shouldShowRationale = rationale,
         requestPermissions = {
-            launcher.launch(BlePermissionHelper.requiredPermissions().toTypedArray())
+            val permissions = BlePermissionHelper.requiredPermissions().toMutableList()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                permissions += Manifest.permission.POST_NOTIFICATIONS
+            }
+            launcher.launch(permissions.toTypedArray())
         },
     )
 }

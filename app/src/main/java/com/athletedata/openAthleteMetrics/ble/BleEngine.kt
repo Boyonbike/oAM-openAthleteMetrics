@@ -444,6 +444,13 @@ class BleEngine @Inject constructor(
         }
     }
 
+    // Fire-and-forget entry point for callers (ViewModels) that shouldn't tie the sync's
+    // lifetime to their own scope — launches on this engine's app-scoped `scope` instead of
+    // the caller's, so the sync isn't cancelled if the caller (e.g. a ViewModel) is cleared.
+    fun startSync() {
+        scope.launch { triggerSync() }
+    }
+
     suspend fun triggerSync(): SyncSummary? {
         if (_connectionState.value !is BleConnectionState.Connected) return null
         val manifest = activeManifest ?: return null

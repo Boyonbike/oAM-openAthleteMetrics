@@ -1,9 +1,13 @@
 package com.athletedata.openAthleteMetrics.data.repository
 
+import android.content.Context
 import com.athletedata.openAthleteMetrics.data.db.DailyContextDao
 import com.athletedata.openAthleteMetrics.data.db.toEntity
 import com.athletedata.openAthleteMetrics.data.db.toModel
 import com.athletedata.openAthleteMetrics.data.model.DailyContext
+import com.athletedata.openAthleteMetrics.glance.MetricGlanceWidget
+import androidx.glance.appwidget.updateAll
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import timber.log.Timber
@@ -15,6 +19,7 @@ import javax.inject.Singleton
 class RoomDailyContextRepository @Inject constructor(
     private val dao: DailyContextDao,
     private val userProfileRepository: UserProfileRepository,
+    @ApplicationContext private val androidContext: Context,
 ) : DailyContextRepository {
 
     override suspend fun upsert(context: DailyContext) {
@@ -33,6 +38,11 @@ class RoomDailyContextRepository @Inject constructor(
                 Timber.e(e, "Failed to sync weight to user profile")
                 // Swallow — a profile-sync failure must not roll back the daily context save.
             }
+        }
+        // Home-screen widgets only ever show "today" - an upsert for a past date can't
+        // change what's rendered, so skip the refresh in that case.
+        if (context.date == LocalDate.now()) {
+            MetricGlanceWidget().updateAll(androidContext)
         }
     }
 

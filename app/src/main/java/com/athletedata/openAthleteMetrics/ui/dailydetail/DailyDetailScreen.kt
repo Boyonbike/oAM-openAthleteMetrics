@@ -923,23 +923,38 @@ internal fun ReadingsLineChart(
         readings.mapIndexedNotNull { i, r -> r.value.toDoubleOrNull()?.let { i to it } }
     }
 
+    // Readings actually reflected in modelProducer's current model. Only advances once
+    // the transaction for `pairs` completes, so the axis formatter (index-based into this
+    // list) never gets ahead of the async chart data update when `readings` changes.
+    var plottedReadings by remember { mutableStateOf(readings) }
+
     LaunchedEffect(pairs) {
-        if (pairs.isEmpty()) return@LaunchedEffect
         modelProducer.runTransaction {
-            lineSeries {
-                series(
-                    x = pairs.map { it.first },
-                    y = pairs.map { it.second },
-                )
+            if (pairs.isNotEmpty()) {
+                lineSeries {
+                    series(
+                        x = pairs.map { it.first },
+                        y = pairs.map { it.second },
+                    )
+                }
             }
         }
+        plottedReadings = readings
     }
 
     val axisLabelColor = MaterialTheme.colorScheme.onBackground
     val axisLabel = rememberTextComponent(color = axisLabelColor)
-    val timeFormatter = remember(readings) {
+    val timeFormatter = remember(plottedReadings) {
         CartesianValueFormatter { _, value, _ ->
-            readings.getOrNull(value.toLong().toInt())?.timeLabel ?: ""
+            // Vico throws if a formatter ever returns "" (it uses ItemPlacer, not empty
+            // strings, to decide which ticks to skip), so clamp to the nearest valid
+            // reading instead of falling through to getOrNull returning null here.
+            if (plottedReadings.isEmpty()) {
+                ""
+            } else {
+                val index = value.toLong().toInt().coerceIn(0, plottedReadings.lastIndex)
+                plottedReadings[index].timeLabel
+            }
         }
     }
 

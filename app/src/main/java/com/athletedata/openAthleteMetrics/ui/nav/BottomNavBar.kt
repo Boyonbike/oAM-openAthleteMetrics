@@ -162,10 +162,12 @@ fun BottomNavBar(
         navBarBottomPx + 16.dp.toPx() + barHeightDp.toPx()
     }
 
+    val isSyncingNow = connectionState is BleConnectionState.Syncing ||
+        connectionState is BleConnectionState.Parsing
     val targetOffsetY = if (
         currentRoute != ROUTE_SETTINGS &&
         currentRoute != ROUTE_DEVICES &&
-        scrollBehavior.isVisible
+        (scrollBehavior.isVisible || isSyncingNow)
     ) 0f else hiddenOffsetPx
 
     val slideSpec: AnimationSpec<Float> = spring(

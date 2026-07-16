@@ -343,7 +343,21 @@ class BleEngine @Inject constructor(
         if (_connectionState.value !is BleConnectionState.SyncComplete) return
         val address = activeDeviceAddress ?: return
         val driverName = activeManifest?.displayName ?: return
-        _connectionState.value = BleConnectionState.Connected(address, driverName)
+        if (activeGatt != null) {
+            // Passive-stream drivers never disconnect for a sync — the link is still live,
+            // so a manual re-sync tap can keep flushing whatever streams in next.
+            _connectionState.value = BleConnectionState.Connected(address, driverName)
+        } else {
+            // EOS-based drivers close the GATT link once dispatchPostStreamParse() finishes
+            // (see triggerSync/dispatchPostStreamParse). There is no live connection left, so
+            // faking Connected here would let a manual sync tap fall into triggerSync(), which
+            // only re-parses the (now empty) in-memory buffers instead of talking to the device
+            // — producing an instant, bogus "Sync complete". Drop to Idle instead so the next
+            // tap goes through a real reconnect + full sync command sequence.
+            activeManifest = null
+            activeDeviceAddress = null
+            _connectionState.value = BleConnectionState.Idle
+        }
     }
 
     fun resetToIdle() {

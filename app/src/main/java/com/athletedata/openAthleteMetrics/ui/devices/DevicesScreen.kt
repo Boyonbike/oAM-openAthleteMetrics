@@ -801,7 +801,7 @@ private fun BleBanner(
                         s.sessionsInserted + s.activitiesInserted
                     val hasNew = newCount > 0
                     Text(
-                        if (hasNew) "Sync complete" else "Already up to date",
+                        "Sync complete",
                         style = TypographyTitle,
                         fontWeight = FontWeight.Bold,
                     )

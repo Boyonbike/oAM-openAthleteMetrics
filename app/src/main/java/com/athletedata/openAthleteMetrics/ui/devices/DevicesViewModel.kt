@@ -152,6 +152,7 @@ class DevicesViewModel @Inject constructor(
         val isThisDevice = when (current) {
             is BleConnectionState.Connected  -> current.deviceAddress == device.bleAddress
             is BleConnectionState.Syncing    -> current.deviceAddress == device.bleAddress
+            is BleConnectionState.Parsing    -> current.deviceAddress == device.bleAddress
             is BleConnectionState.Connecting -> current.deviceAddress == device.bleAddress
             else -> false
         }

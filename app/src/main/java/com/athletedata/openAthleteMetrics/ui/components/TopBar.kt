@@ -73,9 +73,10 @@ fun Modifier.horizontalDateSwipe(
 
 @Composable
 fun DataPageTopBar(
-    date: LocalDate,
-    onDateClick: () -> Unit,
+    date: LocalDate? = null,
+    onDateClick: () -> Unit = {},
     onDateLongClick: () -> Unit = {},
+    leading: (@Composable BoxScope.() -> Unit)? = null,
     centre: @Composable BoxScope.() -> Unit = {},
     actions: @Composable RowScope.() -> Unit = {},
     modifier: Modifier = Modifier,
@@ -87,24 +88,31 @@ fun DataPageTopBar(
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
             val haptics = LocalHapticFeedback.current
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .clip(RoundedCornerShape(percent = 50))
-                    .combinedClickable(
-                        onClick = onDateClick,
-                        onLongClick = {
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onDateLongClick()
-                        },
-                    )
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-            ) {
-                Text(
-                    text = date.format(DATE_FORMATTER),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.primary,
+            if (leading != null) {
+                Box(
+                    modifier = Modifier.align(Alignment.CenterStart),
+                    content = leading,
                 )
+            } else if (date != null) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .clip(RoundedCornerShape(percent = 50))
+                        .combinedClickable(
+                            onClick = onDateClick,
+                            onLongClick = {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onDateLongClick()
+                            },
+                        )
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                ) {
+                    Text(
+                        text = date.format(DATE_FORMATTER),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
             }
             Box(
                 modifier = Modifier.align(Alignment.Center),

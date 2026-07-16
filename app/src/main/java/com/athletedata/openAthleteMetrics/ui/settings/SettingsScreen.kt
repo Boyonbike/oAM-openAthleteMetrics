@@ -39,8 +39,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -59,6 +57,7 @@ import com.athletedata.openAthleteMetrics.BuildConfig
 import com.athletedata.openAthleteMetrics.data.model.ThemePreference
 import com.athletedata.openAthleteMetrics.seeder.SeederState
 import com.athletedata.openAthleteMetrics.seeder.SeederViewModel
+import com.athletedata.openAthleteMetrics.ui.components.DataPageTopBar
 import com.athletedata.openAthleteMetrics.ui.components.PillSelector
 import com.athletedata.openAthleteMetrics.ui.components.SectionHeader
 import com.athletedata.openAthleteMetrics.ui.questions.DailyQuestionsViewModel
@@ -202,32 +201,24 @@ fun SettingsScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            Column {
-                TopAppBar(
-                    title = { Text("Settings", style = MaterialTheme.typography.titleMedium) },
-                    navigationIcon = {
-                        IconButton(onClick = onNavigateBack) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
-                            )
-                        }
-                    },
-                )
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.Center,
-                ) {
+            DataPageTopBar(
+                leading = {
+                    IconButton(onClick = onNavigateBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = MaterialTheme.colorScheme.onBackground,
+                        )
+                    }
+                },
+                centre = {
                     PillSelector(
-                        tabs = listOf("Profile", "App"),
+                        tabs = listOf("Profile", "Settings"),
                         selectedIndex = selectedTab,
                         onSelect = { selectedTab = it },
                     )
-                }
-            }
+                },
+            )
         },
     ) { innerPadding ->
         when (selectedTab) {

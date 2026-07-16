@@ -12,7 +12,8 @@ sealed class BleConnectionState {
         val packetsReceived: Int = 0,
         val isQuiescent: Boolean = false,
     ) : BleConnectionState()
-    data class Syncing(val deviceAddress: String, val progress: Float) : BleConnectionState()
+    data class Syncing(val deviceAddress: String, val packetsReceived: Int = 0) : BleConnectionState()
+    data class Parsing(val deviceAddress: String) : BleConnectionState()
     data class SyncComplete(val summary: SyncSummary, val deviceAddress: String) : BleConnectionState()
     data class Disconnected(val deviceAddress: String, val reason: String?) : BleConnectionState()
     data class Error(val message: String) : BleConnectionState()

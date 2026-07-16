@@ -32,6 +32,7 @@ class NavHostViewModel @Inject constructor(
         val address = when (state) {
             is BleConnectionState.Connected -> state.deviceAddress
             is BleConnectionState.Syncing -> state.deviceAddress
+            is BleConnectionState.Parsing -> state.deviceAddress
             is BleConnectionState.SyncComplete -> state.deviceAddress
             else -> null
         }
@@ -40,7 +41,8 @@ class NavHostViewModel @Inject constructor(
 
     fun onDevicesLongPressed() {
         val state = connectionState.value
-        if (state is BleConnectionState.Connected || state is BleConnectionState.Syncing) {
+        if (state is BleConnectionState.Connected || state is BleConnectionState.Syncing ||
+            state is BleConnectionState.Parsing) {
             bleEngine.startSync()
         }
     }

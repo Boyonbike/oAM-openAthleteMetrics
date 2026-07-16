@@ -14,16 +14,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -38,7 +35,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -71,6 +67,7 @@ import com.athletedata.openAthleteMetrics.ble.DiscoveredCandidate
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
 import com.athletedata.openAthleteMetrics.ble.rememberBlePermissionState
 import com.athletedata.openAthleteMetrics.data.model.Device
+import com.athletedata.openAthleteMetrics.ui.components.DataPageTopBar
 import com.athletedata.openAthleteMetrics.ui.components.PillSelector
 import com.athletedata.openAthleteMetrics.ui.theme.CardRadius
 import com.athletedata.openAthleteMetrics.ui.theme.TypographyMeta
@@ -255,10 +252,23 @@ fun DevicesScreen(
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             Column {
-                DevicesHeader(
-                    selectedTab = selectedTab,
-                    onSelectTab = viewModel::selectTab,
-                    onNavigateBack = onNavigateBack,
+                DataPageTopBar(
+                    leading = {
+                        IconButton(onClick = onNavigateBack) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                tint = MaterialTheme.colorScheme.onBackground,
+                            )
+                        }
+                    },
+                    centre = {
+                        PillSelector(
+                            tabs = listOf("Device", "Driver"),
+                            selectedIndex = selectedTab.ordinal,
+                            onSelect = { viewModel.selectTab(DevicesTab.entries[it]) },
+                        )
+                    },
                 )
 
                 if (connectionState !is BleConnectionState.Idle &&
@@ -371,54 +381,6 @@ fun DevicesScreen(
                 hostState = snackbarHostState,
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
-        }
-    }
-}
-
-@Composable
-private fun DevicesHeader(
-    selectedTab: DevicesTab,
-    onSelectTab: (DevicesTab) -> Unit,
-    onNavigateBack: () -> Unit,
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.background,
-        shadowElevation = 0.dp,
-        tonalElevation = 0.dp,
-    ) {
-        Column(
-            modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp)
-                    .padding(horizontal = 4.dp),
-            ) {
-                IconButton(
-                    onClick = onNavigateBack,
-                    modifier = Modifier.align(Alignment.CenterStart),
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = MaterialTheme.colorScheme.onBackground,
-                    )
-                }
-                PillSelector(
-                    tabs = listOf("Device", "Driver"),
-                    selectedIndex = selectedTab.ordinal,
-                    onSelect = { onSelectTab(DevicesTab.entries[it]) },
-                    modifier = Modifier.align(Alignment.Center),
-                )
-                Spacer(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .align(Alignment.CenterEnd),
-                )
-            }
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
         }
     }
 }
@@ -540,6 +502,7 @@ private fun DeviceCell(
     val isActive = when (connectionState) {
         is BleConnectionState.Connected     -> connectionState.deviceAddress == device.bleAddress
         is BleConnectionState.Syncing       -> connectionState.deviceAddress == device.bleAddress
+        is BleConnectionState.Parsing       -> connectionState.deviceAddress == device.bleAddress
         is BleConnectionState.SyncComplete  -> connectionState.deviceAddress == device.bleAddress
         else -> false
     }
@@ -820,12 +783,17 @@ private fun BleBanner(
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
                 is BleConnectionState.Syncing -> {
-                    Text("Syncing...", style = TypographyTitle)
-                    Spacer(Modifier.height(space4))
-                    LinearProgressIndicator(
-                        progress = { state.progress },
-                        modifier = Modifier.fillMaxWidth(),
+                    Text(
+                        if (state.packetsReceived > 0) "Syncing... ${state.packetsReceived} packets" else "Syncing...",
+                        style = TypographyTitle,
                     )
+                    Spacer(Modifier.height(space4))
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                is BleConnectionState.Parsing -> {
+                    Text("Parsing...", style = TypographyTitle)
+                    Spacer(Modifier.height(space4))
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
                 is BleConnectionState.SyncComplete -> {
                     val s = state.summary

@@ -109,6 +109,7 @@ class AthleteDataApplication : Application(), Configuration.Provider {
                     is BleConnectionState.Connecting,
                     is BleConnectionState.Connected,
                     is BleConnectionState.Syncing,
+                    is BleConnectionState.Parsing,
                     is BleConnectionState.SyncComplete -> true
                     else -> false
                 }

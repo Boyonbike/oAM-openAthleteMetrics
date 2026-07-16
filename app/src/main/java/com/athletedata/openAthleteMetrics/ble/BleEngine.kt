@@ -416,6 +416,9 @@ class BleEngine @Inject constructor(
         // by awaitEndOfStream — these timers must not run, reset, or have any side effect.
         val count = ++packetCount
         val address = activeDeviceAddress ?: return
+        if (_connectionState.value is BleConnectionState.Syncing) {
+            _connectionState.value = BleConnectionState.Syncing(address, count)
+        }
         if (awaitEndOfStreamStrategy == null) {
             silentSyncTimeoutJob?.cancel()
             silentSyncTimeoutJob = null
@@ -475,7 +478,7 @@ class BleEngine @Inject constructor(
         } else {
             Timber.tag(TAG).d("[STAGE-6 SYNC] draining affectedDates count=%d dates=%s", datesToEnqueue.size, datesToEnqueue.joinToString()) // AFFECTED-DATES
         }
-        _connectionState.value = BleConnectionState.Syncing(address, 0f)
+        _connectionState.value = BleConnectionState.Parsing(address)
         val preSyncSessionId = currentSyncSessionId
         currentSyncSessionId = null
         return try {
@@ -960,6 +963,8 @@ class BleEngine @Inject constructor(
     // when buildSyncCommands is exported, WASM owns the full sequence.
     private suspend fun beginSyncCommandExecution() {
         val manifest = activeManifest ?: return
+        val address = activeDeviceAddress ?: return
+        _connectionState.value = BleConnectionState.Syncing(address, 0)
         val wasm = manifest.parsing as? ParsingConfig.WasmParsing
         val hasBuildSyncCommands = wasm?.exports?.buildSyncCommands != null
         Timber.tag(TAG).d("[SYNC] beginSyncCommandExecution: driver=%s hasBuildSyncCommands=%b exportName=%s",
@@ -1275,6 +1280,8 @@ class BleEngine @Inject constructor(
         activeGatt?.disconnect()
         activeGatt?.close()
         activeGatt = null
+
+        _connectionState.value = BleConnectionState.Parsing(address)
 
         val frames = synchronized(sessionCache) { sessionCache.toList() }
 

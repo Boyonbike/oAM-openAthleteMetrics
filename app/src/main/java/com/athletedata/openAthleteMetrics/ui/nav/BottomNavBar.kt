@@ -332,7 +332,8 @@ private fun DevicesButton(
     onLongPress: () -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
-    val isSyncing = connectionState is BleConnectionState.Syncing
+    val isSyncing = connectionState is BleConnectionState.Syncing ||
+        connectionState is BleConnectionState.Parsing
     val isConnected = connectionState is BleConnectionState.Connected ||
         connectionState is BleConnectionState.SyncComplete
 

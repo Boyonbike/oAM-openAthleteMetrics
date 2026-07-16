@@ -127,13 +127,11 @@ private fun SleepDurationSection(data: SleepData) {
 
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
         SleepStatTile(
-            label = "Sleep Duration",
             value = data.formattedDuration,
             avgText = avgDurationText,
             modifier = Modifier.weight(1f),
         )
         SleepStatTile(
-            label = "Sleep Timings",
             value = timeRangeLabel,
             avgText = avgTimeRangeText,
             modifier = Modifier.weight(1f),
@@ -143,7 +141,6 @@ private fun SleepDurationSection(data: SleepData) {
 
 @Composable
 private fun SleepStatTile(
-    label: String,
     value: String?,
     avgText: String?,
     modifier: Modifier = Modifier,
@@ -154,7 +151,6 @@ private fun SleepStatTile(
             .padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        Text(label, style = TypographyTitle)
         if (value == null) {
             EmptyStateText("No data")
         } else {

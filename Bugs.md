@@ -3,16 +3,6 @@ Autonomous read-only bug-hunting pass over the OpenAthleteMetrics codebase. Find
 
 ### Medium Severity
 
-### Stale in-memory snapshot silently overwrites newer data
-
-**`ui/settings/ProfileTab.kt`** — Lines 97-111 (`saveField`), 141-146, 212, 125: every save path does a read-modify-write against a cached `profile` snapshot (a `StateFlow` backed by an async Room `Flow`) rather than the DB. Two edits committed faster than the write→re-emit round trip (e.g. Height then immediately Date of Birth) cause the second save's `.copy()` to silently revert the first field. Not yet fixed. Suggested fix: perform the merge inside the repository/DAO as a partial update, or serialize saves off a single always-current source of truth.
-
-**`ui/questions/DailyQuestionsViewModel.kt`** — Lines 74-86 (`init`) + `buildContext()` (163-181) + `saveQuestions()`/`saveWeight()` (104-116, 124-136): loads today's `DailyContext` **once** at construction rather than continuously collecting, then always writes back **all** fields from the in-memory snapshot. This ViewModel is long-lived (e.g. held by `SettingsScreen`). If the row is modified elsewhere (e.g. `DashboardViewModel`) while this instance stays alive, the next save overwrites those changes back to stale values. Not yet fixed. Suggested fix: re-read/merge the latest row instead of writing back a point-in-time snapshot.
-
-**`ui/metric/MetricDetailScreen.kt`** — Line 72-74: `hiltViewModel(...)` is called with no explicit `key`, so the returned ViewModel is cached solely by class under the current `ViewModelStoreOwner` — the `creationCallback`'s `metricType` is only consulted on first creation. If this screen is shown for one metric, dismissed, then reopened for a different metric while the same Activity is alive, it keeps returning the ViewModel bound to the first metric, silently showing stale data. Currently unreachable since `NavGraph.kt`'s `pendingMetricType` is never assigned — but the mechanism is real. Not yet fixed. Suggested fix: pass `key = metricType.name`.
-
-**`ui/settings/ProfileTab.kt`** — Lines 113-127 (`saveZone`) + 374-408: `editingZone = null` executes unconditionally before validating `lower`/`upper`; a blank/non-numeric field on focus-loss silently closes the editor and discards input with no error. Additionally only the "upper" field has an `onFocusChanged` handler that triggers `saveZone()` — the "lower" field has none, so typing only the Lower value and tapping away never saves. Not yet fixed. Suggested fix: validate and surface an error, and add save-on-blur for the lower field too.
-
 ### UI acts on the wrong target / shows duplicates
 
 **`ui/history/HistoryViewModel.kt`** — Line 214-220 (`stepTileDate`), with `HistoryScreen.kt` line 526-528: always operates on `metricTiles.value.first()` regardless of which tile's arrow was pressed — every tile's step callback is wired to the same handler without tile identity. With 2+ overlaid metrics, pressing the second tile's arrow moves according to the *first* tile's spacing/index. Not yet fixed. Suggested fix: thread the tapped tile's `metricKey` through `onStepTile`.

@@ -105,7 +105,21 @@ class DailyQuestionsViewModel @Inject constructor(
         viewModelScope.launch {
             _questionsState.update { it.copy(isSaving = true) }
             try {
-                repo.upsert(buildContext())
+                val q = _questionsState.value
+                val existing = repo.getForDate(today).first()
+                repo.upsert(
+                    (existing ?: DailyContext(date = today, updatedAt = Instant.now())).copy(
+                        fatigue = q.fatigue,
+                        stress = q.stress,
+                        motivation = q.motivation,
+                        sleepQuality = q.sleepQuality,
+                        performanceFeel = q.performanceFeel,
+                        isIll = q.isIll,
+                        illnessNotes = q.illnessNotes.takeIf { it.isNotBlank() },
+                        habitsJson = buildHabitsJson(q.habits),
+                        updatedAt = Instant.now(),
+                    )
+                )
             } catch (e: Exception) {
                 Timber.e(e, "Failed to save questions")
                 _errors.tryEmit("Failed to save")
@@ -125,7 +139,16 @@ class DailyQuestionsViewModel @Inject constructor(
         viewModelScope.launch {
             _weightState.update { it.copy(isSaving = true) }
             try {
-                repo.upsert(buildContext())
+                val w = _weightState.value
+                val existing = repo.getForDate(today).first()
+                repo.upsert(
+                    (existing ?: DailyContext(date = today, updatedAt = Instant.now())).copy(
+                        weightKg = w.weightKg.toDoubleOrNull(),
+                        bodyFatPct = w.bodyFatPct.toDoubleOrNull(),
+                        notes = w.notes.takeIf { it.isNotBlank() },
+                        updatedAt = Instant.now(),
+                    )
+                )
             } catch (e: Exception) {
                 Timber.e(e, "Failed to save weight")
                 _errors.tryEmit("Failed to save weight")
@@ -158,26 +181,6 @@ class DailyQuestionsViewModel @Inject constructor(
                 notes = context.notes ?: "",
             )
         }
-    }
-
-    private fun buildContext(): DailyContext {
-        val q = _questionsState.value
-        val w = _weightState.value
-        return DailyContext(
-            date = today,
-            fatigue = q.fatigue,
-            stress = q.stress,
-            motivation = q.motivation,
-            sleepQuality = q.sleepQuality,
-            performanceFeel = q.performanceFeel,
-            isIll = q.isIll,
-            illnessNotes = q.illnessNotes.takeIf { it.isNotBlank() },
-            habitsJson = buildHabitsJson(q.habits),
-            weightKg = w.weightKg.toDoubleOrNull(),
-            bodyFatPct = w.bodyFatPct.toDoubleOrNull(),
-            notes = w.notes.takeIf { it.isNotBlank() },
-            updatedAt = Instant.now(),
-        )
     }
 
     private fun parseHabits(json: String?): Map<String, Boolean> {

@@ -51,7 +51,7 @@ private enum class ProfileField {
 @Composable
 fun ProfileTab(
     profile: UserProfile?,
-    onUpdate: (UserProfile) -> Unit,
+    onUpdate: ((UserProfile) -> UserProfile) -> Unit,
     onWeightTap: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -69,9 +69,11 @@ fun ProfileTab(
     var maxHrDraft by remember { mutableStateOf("") }
 
     var editingZone by remember { mutableStateOf<Int?>(null) }
+    var zoneLowerHasFocused by remember { mutableStateOf(false) }
     var zoneUpperHasFocused by remember { mutableStateOf(false) }
     var zoneLowerDraft by remember { mutableStateOf("") }
     var zoneUpperDraft by remember { mutableStateOf("") }
+    var zoneError by remember { mutableStateOf<String?>(null) }
 
     var showDatePicker by remember { mutableStateOf(false) }
 
@@ -86,7 +88,9 @@ fun ProfileTab(
     val zoneLowerFocus = remember { FocusRequester() }
     val zoneUpperFocus = remember { FocusRequester() }
     LaunchedEffect(editingZone) {
+        zoneLowerHasFocused = false
         zoneUpperHasFocused = false
+        zoneError = null
         if (editingZone != null) {
             try { zoneLowerFocus.requestFocus() } catch (_: IllegalStateException) {}
         }
@@ -95,8 +99,7 @@ fun ProfileTab(
     // ── Save helpers ──────────────────────────────────────────────────────────
 
     fun saveField(field: ProfileField) {
-        val current = profile ?: UserProfile()
-        onUpdate(
+        onUpdate { current ->
             when (field) {
                 ProfileField.NAME          -> current.copy(name = nameDraft.ifBlank { null })
                 ProfileField.HEIGHT        -> current.copy(heightCm = heightDraft.toDoubleOrNull())
@@ -106,23 +109,27 @@ fun ProfileTab(
                 ProfileField.VO2_MAX       -> current.copy(vo2Max = vo2Draft.toDoubleOrNull())
                 ProfileField.MAX_HR        -> current.copy(maxHr = maxHrDraft.toIntOrNull())
             }
-        )
+        }
         if (editingField == field) editingField = null
     }
 
     fun saveZone() {
         val zone = editingZone ?: return
-        editingZone = null
         val lower = zoneLowerDraft.toIntOrNull()
         val upper = zoneUpperDraft.toIntOrNull()
-        if (lower != null && upper != null) {
-            val current = profile ?: UserProfile()
+        if (lower == null || upper == null) {
+            zoneError = "Enter valid numbers for both bounds"
+            return
+        }
+        zoneError = null
+        editingZone = null
+        onUpdate { current ->
             val updatedZones = current.hrZones.toMutableList().apply {
                 removeIf { it.zone == zone }
                 add(HrZone(zone = zone, lowerBpm = lower, upperBpm = upper))
                 sortBy { it.zone }
             }
-            onUpdate(current.copy(hrZones = updatedZones))
+            current.copy(hrZones = updatedZones)
         }
     }
 
@@ -140,7 +147,7 @@ fun ProfileTab(
                 TextButton(onClick = {
                     datePickerState.selectedDateMillis?.let { millis ->
                         val date = Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate()
-                        onUpdate((profile ?: UserProfile()).copy(dateOfBirth = date.toString()))
+                        onUpdate { it.copy(dateOfBirth = date.toString()) }
                     }
                     showDatePicker = false
                 }) { Text("OK") }
@@ -209,7 +216,7 @@ fun ProfileTab(
                 listOf("MALE" to "Male", "FEMALE" to "Female", "OTHER" to "Other").forEach { (key, label) ->
                     FilterChip(
                         selected = profile?.biologicalSex == key,
-                        onClick = { onUpdate((profile ?: UserProfile()).copy(biologicalSex = key)) },
+                        onClick = { onUpdate { it.copy(biologicalSex = key) } },
                         label = { Text(label) },
                     )
                 }
@@ -359,53 +366,65 @@ fun ProfileTab(
             if (zone > 1) HorizontalDivider()
 
             if (editingZone == zone) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "Zone $zone",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.width(52.dp),
-                    )
-                    OutlinedTextField(
-                        value = zoneLowerDraft,
-                        onValueChange = { zoneLowerDraft = it },
-                        label = { Text("Lower") },
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Number,
-                            imeAction = ImeAction.Next,
-                        ),
-                        keyboardActions = KeyboardActions(
-                            onNext = { zoneUpperFocus.requestFocus() },
-                        ),
-                        singleLine = true,
-                        modifier = Modifier
-                            .weight(1f)
-                            .focusRequester(zoneLowerFocus),
-                    )
-                    Text("–", style = MaterialTheme.typography.bodyMedium)
-                    OutlinedTextField(
-                        value = zoneUpperDraft,
-                        onValueChange = { zoneUpperDraft = it },
-                        label = { Text("Upper") },
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Number,
-                            imeAction = ImeAction.Done,
-                        ),
-                        keyboardActions = KeyboardActions(onDone = { saveZone() }),
-                        singleLine = true,
-                        modifier = Modifier
-                            .weight(1f)
-                            .focusRequester(zoneUpperFocus)
-                            .onFocusChanged { fs ->
-                                if (fs.isFocused) zoneUpperHasFocused = true
-                                else if (zoneUpperHasFocused) saveZone()
-                            },
-                    )
+                Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "Zone $zone",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.width(52.dp),
+                        )
+                        OutlinedTextField(
+                            value = zoneLowerDraft,
+                            onValueChange = { zoneLowerDraft = it },
+                            label = { Text("Lower") },
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Number,
+                                imeAction = ImeAction.Next,
+                            ),
+                            keyboardActions = KeyboardActions(
+                                onNext = { zoneUpperFocus.requestFocus() },
+                            ),
+                            singleLine = true,
+                            modifier = Modifier
+                                .weight(1f)
+                                .focusRequester(zoneLowerFocus)
+                                .onFocusChanged { fs ->
+                                    if (fs.isFocused) zoneLowerHasFocused = true
+                                    else if (zoneLowerHasFocused) saveZone()
+                                },
+                        )
+                        Text("–", style = MaterialTheme.typography.bodyMedium)
+                        OutlinedTextField(
+                            value = zoneUpperDraft,
+                            onValueChange = { zoneUpperDraft = it },
+                            label = { Text("Upper") },
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Number,
+                                imeAction = ImeAction.Done,
+                            ),
+                            keyboardActions = KeyboardActions(onDone = { saveZone() }),
+                            singleLine = true,
+                            modifier = Modifier
+                                .weight(1f)
+                                .focusRequester(zoneUpperFocus)
+                                .onFocusChanged { fs ->
+                                    if (fs.isFocused) zoneUpperHasFocused = true
+                                    else if (zoneUpperHasFocused) saveZone()
+                                },
+                        )
+                    }
+                    if (zoneError != null) {
+                        Text(
+                            text = zoneError.orEmpty(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(start = 58.dp, top = 2.dp),
+                        )
+                    }
                 }
             } else {
                 Row(

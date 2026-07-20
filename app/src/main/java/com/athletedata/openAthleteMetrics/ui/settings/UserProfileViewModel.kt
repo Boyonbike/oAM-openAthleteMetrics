@@ -20,10 +20,11 @@ class UserProfileViewModel @Inject constructor(
     val profile: StateFlow<UserProfile?> = repo.observe()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    fun updateProfile(updated: UserProfile) {
+    fun updateProfile(transform: (UserProfile) -> UserProfile) {
         viewModelScope.launch {
             try {
-                repo.upsert(updated)
+                val current = repo.get() ?: UserProfile()
+                repo.upsert(transform(current))
             } catch (e: Exception) {
                 Timber.e(e, "Failed to update profile")
             }

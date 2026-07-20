@@ -644,7 +644,12 @@ class BleEngine @Inject constructor(
         userDisconnecting = false
         Timber.tag(TAG).d("[CONN] connecting address=%s driver=%s retry=%d", device.address, manifest.id, retryCount)
         _connectionState.value = BleConnectionState.Connecting(device.address)
-        activeGatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+        try {
+            activeGatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+        } catch (e: SecurityException) {
+            Timber.w(e, "BLE permission revoked during connect")
+            _connectionState.value = BleConnectionState.Error("Bluetooth permission denied")
+        }
     }
 
     @SuppressLint("MissingPermission")

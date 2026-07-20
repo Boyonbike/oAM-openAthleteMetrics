@@ -40,7 +40,10 @@ class Converters {
     fun fromMetricType(type: MetricType): String = type.name
 
     @TypeConverter
-    fun toMetricType(value: String): MetricType = MetricType.valueOf(value)
+    fun toMetricType(value: String): MetricType = when (value) {
+        "RESPIRATORY_RATE" -> MetricType.RESPIRATION // legacy alias for pre-rename rows, see MIGRATION_10_11
+        else -> MetricType.valueOf(value)
+    }
 
     // ── DataSource ↔ String ───────────────────────────────────────────────────
 

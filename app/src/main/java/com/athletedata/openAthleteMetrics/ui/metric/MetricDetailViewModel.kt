@@ -203,7 +203,12 @@ class MetricDetailViewModel @AssistedInject constructor(
 
             MetricType.GLUCOSE -> glucoseRepo.getReadingsInRangeOnce(startMs, endMs)
                 .groupBy { it.recordedAt.localDate() }
-                .mapValues { (_, es) -> es.map { it.value }.average() }
+                .mapValues { (_, es) ->
+                    // Readings can be stored in either unit (see GlucoseReadingEntity.unit) --
+                    // normalise to mmol/L before averaging, matching DailySummaryWorker's
+                    // avgGlucoseMmolL and the mmol label in displayUnit below.
+                    es.map { r -> if (r.unit == "mmol") r.value else r.value / 18.0182 }.average()
+                }
 
             MetricType.BLOOD_PRESSURE -> bloodPressureRepo.getReadingsInRangeOnce(startMs, endMs)
                 .groupBy { it.recordedAt.localDate() }

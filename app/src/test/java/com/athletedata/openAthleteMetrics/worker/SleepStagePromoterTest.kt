@@ -288,8 +288,10 @@ class SleepStagePromoterTest {
         // (driver_id, date) — see the unique index on SleepSessionEntity. If a large gap
         // splits a same-day nap from the overnight sleep that already woke up on that date,
         // both clusters resolve to the same date and are attached to the SAME row rather
-        // than creating a second one. This is an accepted, pre-existing schema constraint,
-        // not a defect introduced by this fix.
+        // than creating a second one. Because the gap between the two clusters is well over
+        // the session threshold, the merge must NOT take the min/max envelope across them
+        // (that would count the waking hours between the nap and the night as sleep) — it
+        // adds the nap's own stage-covered minutes onto the night's duration instead.
         val insertedAt = Instant.parse("2026-08-11T13:35:00Z")
         val syncWindowStartMs = insertedAt.minusSeconds(300).toEpochMilli()
         val syncWindowEndMs = insertedAt.plusSeconds(300).toEpochMilli()
@@ -308,7 +310,14 @@ class SleepStagePromoterTest {
         val session = sleepRepository.getByDriverAndDate("hume-band-1", sharedDate)
         assertNotNull(session)
 
-        val stages = sleepStageRepository.getStagesForSessionOnce(session!!.id)
+        // The stored span still reflects only the (contiguous) night, not the nap -- but
+        // duration_minutes must include both: 8h night + 30min nap = 510 minutes, not the
+        // ~14.5h envelope from nightStart to napEnd.
+        assertEquals(nightStart, session!!.sleepStartMs)
+        assertEquals(nightEnd, session.sleepEndMs)
+        assertEquals(510, session.durationMinutes)
+
+        val stages = sleepStageRepository.getStagesForSessionOnce(session.id)
         assertEquals(2, stages.size)
         assertTrue(stages.any { it.stage == SleepStage.DEEP })
         assertTrue(stages.any { it.stage == SleepStage.LIGHT })

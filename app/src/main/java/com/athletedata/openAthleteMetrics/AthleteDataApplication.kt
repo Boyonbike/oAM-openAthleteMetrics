@@ -20,6 +20,7 @@ import com.athletedata.openAthleteMetrics.data.db.QuestionDefinitionEntity
 import com.athletedata.openAthleteMetrics.worker.AppStartupWorker
 import com.athletedata.openAthleteMetrics.worker.enqueuePeriodicWidgetRefresh
 import dagger.hilt.android.HiltAndroidApp
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -47,7 +48,11 @@ class AthleteDataApplication : Application(), Configuration.Provider {
     @Inject
     lateinit var questionDefinitionDao: QuestionDefinitionDao
 
-    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val applicationScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, throwable ->
+            Timber.e(throwable, "Unhandled exception in applicationScope")
+        }
+    )
 
     // Whether BleSyncService is (or was just asked to be) running, tracked so we only call
     // start/stop on real edge transitions rather than on every connectionState emission

@@ -122,17 +122,44 @@ class SleepStagePromoter @Inject constructor(
                     // the night's stages — extend its recorded span (not just insert new stage
                     // rows under its id) so duration_minutes doesn't go stale relative to the
                     // fuller, accumulated stage total DailySummaryWorker will later sum.
-                    val mergedStartMs = minOf(existing.sleepStartMs.toEpochMilli(), startMs)
-                    val mergedEndMs = maxOf(existing.sleepEndMs.toEpochMilli(), endMs)
-                    if (mergedStartMs != existing.sleepStartMs.toEpochMilli() ||
-                        mergedEndMs != existing.sleepEndMs.toEpochMilli()
+                    val existingStartMs = existing.sleepStartMs.toEpochMilli()
+                    val existingEndMs = existing.sleepEndMs.toEpochMilli()
+                    val gapMs = when {
+                        startMs > existingEndMs -> startMs - existingEndMs
+                        endMs < existingStartMs -> existingStartMs - endMs
+                        else -> 0L // overlapping
+                    }
+
+                    val mergedStartMs: Long
+                    val mergedEndMs: Long
+                    val mergedDurationMinutes: Int
+                    if (gapMs < effectiveThresholdMs) {
+                        // Contiguous with the existing span — safe to fold into one envelope.
+                        mergedStartMs = minOf(existingStartMs, startMs)
+                        mergedEndMs = maxOf(existingEndMs, endMs)
+                        mergedDurationMinutes = ((mergedEndMs - mergedStartMs) / 60_000L).toInt()
+                    } else {
+                        // Disjoint from the existing span (e.g. an afternoon nap attaching to
+                        // an overnight session that resolves to the same wake date) — taking
+                        // the envelope here would count the waking hours between them as sleep.
+                        // Keep the existing span and add only this group's own stage-covered
+                        // minutes.
+                        mergedStartMs = existingStartMs
+                        mergedEndMs = existingEndMs
+                        val groupMinutes = stages.sumOf { (it.endMs - it.startMs) / 60_000L }.toInt()
+                        mergedDurationMinutes = existing.durationMinutes + groupMinutes
+                    }
+
+                    if (mergedStartMs != existingStartMs ||
+                        mergedEndMs != existingEndMs ||
+                        mergedDurationMinutes != existing.durationMinutes
                     ) {
                         sleepRepository.updateSessionSpan(
                             id = existing.id,
                             date = date,
                             sleepStartMs = Instant.ofEpochMilli(mergedStartMs),
                             sleepEndMs = Instant.ofEpochMilli(mergedEndMs),
-                            durationMinutes = ((mergedEndMs - mergedStartMs) / 60_000L).toInt(),
+                            durationMinutes = mergedDurationMinutes,
                         )
                     }
                     existing.id

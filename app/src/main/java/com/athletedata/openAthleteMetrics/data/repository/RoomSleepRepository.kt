@@ -55,6 +55,9 @@ class RoomSleepRepository @Inject constructor(
     override suspend fun getByDriverAndDate(driverId: String, date: LocalDate): SleepSession? =
         dao.getByDriverAndDate(driverId, date)?.toModel()
 
+    override suspend fun getSessionsForDriverInRange(driverId: String, from: LocalDate, to: LocalDate): List<SleepSession> =
+        dao.getByDriverAndDateRange(driverId, from, to).map { it.toModel() }
+
     override suspend fun updateSessionSpan(
         id: Long,
         date: LocalDate,
@@ -63,7 +66,7 @@ class RoomSleepRepository @Inject constructor(
         durationMinutes: Int,
     ) {
         try {
-            dao.updateSpan(id, sleepStartMs, sleepEndMs, durationMinutes)
+            dao.updateSpan(id, date, sleepStartMs, sleepEndMs, durationMinutes)
             enqueueSummaryWorker(date, workManager)
         } catch (e: Exception) {
             Timber.e(e, "Failed to update sleep session span")

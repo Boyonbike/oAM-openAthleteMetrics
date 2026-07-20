@@ -80,7 +80,6 @@ fun DashboardScreen(
     val scrollBehavior = LocalBottomNavScrollBehavior.current
     val nestedScrollConnection = rememberBottomNavNestedScrollConnection(scrollBehavior)
     val snackbarHostState = remember { SnackbarHostState() }
-    val today = remember { LocalDate.now() }
     var showDatePicker by remember { mutableStateOf(false) }
     var showWeightSheet by remember { mutableStateOf(false) }
     var showCatalogue by remember { mutableStateOf(false) }
@@ -257,7 +256,7 @@ fun DashboardScreen(
     if (showDatePicker) {
         DataPageDatePickerDialog(
             currentDate = uiState.date,
-            today = today,
+            today = LocalDate.now(),
             onConfirm = { date ->
                 viewModel.setDate(date)
                 showDatePicker = false

@@ -1017,7 +1017,7 @@ abstract class AppDatabase : RoomDatabase() {
                     DefaultWidget("HR", 1, 1, 0),
                     DefaultWidget("HRV", 1, 1, 1),
                     DefaultWidget("RHR", 1, 1, 2),
-                    DefaultWidget("SLEEP", 1, 1, 3),
+                    DefaultWidget("SLEEP_SUMMARY_SMALL", 1, 1, 3),
                     DefaultWidget("SPO2", 1, 1, 4),
                     DefaultWidget("STEPS", 1, 1, 5),
                     DefaultWidget("WEIGHT", 2, 1, 6),

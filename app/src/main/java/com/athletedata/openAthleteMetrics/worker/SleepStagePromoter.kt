@@ -28,6 +28,12 @@ import javax.inject.Singleton
 // CHANGED: comment rewritten as app policy; no longer attributes the value to a device protocol doc.
 private const val SESSION_GAP_THRESHOLD_MS = 60 * 60 * 1000L
 
+private fun overlapGapMs(aStartMs: Long, aEndMs: Long, bStartMs: Long, bEndMs: Long): Long = when {
+    aStartMs > bEndMs -> aStartMs - bEndMs
+    aEndMs < bStartMs -> bStartMs - aEndMs
+    else -> 0L // overlapping
+}
+
 data class SleepPromotionResult(
     val datesProcessed: List<LocalDate>,
     val stagesInserted: Int,
@@ -112,11 +118,40 @@ class SleepStagePromoter @Inject constructor(
             val endMs = stages.maxOf { it.endMs }
             // Per the documented SleepSession.date contract, a session is dated by the
             // calendar date of the morning the sleeper woke up — i.e. the local date of
-            // this group's end, not its start.
+            // this group's end, not its start. This is only a preliminary value: if an
+            // earlier, partial promote() call already created a session for this same
+            // physical night under a different date (e.g. it only had pre-midnight stages),
+            // the lookup below finds it by span proximity rather than by this date, and the
+            // date actually persisted may be corrected once the fuller merge is known.
             val date = Instant.ofEpochMilli(endMs).atZone(ZoneId.systemDefault()).toLocalDate()
 
+            var finalDate = date
             val sessionId = runCatching {
-                val existing = sleepRepository.getByDriverAndDate(driverId, date)
+                // Search a small window of nearby dates rather than an exact match on `date`:
+                // a prior partial call for the same night may have stored it under the
+                // adjacent calendar date. A single continuous sleep session can't plausibly
+                // shift its own wake-date determination by more than a day between partial
+                // batches, so +/-1 day is enough. An exact date match always attaches
+                // (preserves the existing same-day-nap-attaches-to-existing-row behaviour,
+                // regardless of the gap between them); a match found only via the widened
+                // window must additionally be within the gap threshold, or it's just an
+                // unrelated session that happens to fall on an adjacent date.
+                val candidates = sleepRepository.getSessionsForDriverInRange(
+                    driverId, date.minusDays(1), date.plusDays(1),
+                )
+                val existing = candidates.firstOrNull { it.date == date }
+                    ?: candidates
+                        .map { candidate ->
+                            val gapMs = overlapGapMs(
+                                startMs, endMs,
+                                candidate.sleepStartMs.toEpochMilli(), candidate.sleepEndMs.toEpochMilli(),
+                            )
+                            candidate to gapMs
+                        }
+                        .filter { (_, gapMs) -> gapMs < effectiveThresholdMs }
+                        .minByOrNull { (_, gapMs) -> gapMs }
+                        ?.first
+
                 if (existing != null) {
                     // A prior promote() call may have created this session from only part of
                     // the night's stages — extend its recorded span (not just insert new stage
@@ -124,11 +159,7 @@ class SleepStagePromoter @Inject constructor(
                     // fuller, accumulated stage total DailySummaryWorker will later sum.
                     val existingStartMs = existing.sleepStartMs.toEpochMilli()
                     val existingEndMs = existing.sleepEndMs.toEpochMilli()
-                    val gapMs = when {
-                        startMs > existingEndMs -> startMs - existingEndMs
-                        endMs < existingStartMs -> existingStartMs - endMs
-                        else -> 0L // overlapping
-                    }
+                    val gapMs = overlapGapMs(startMs, endMs, existingStartMs, existingEndMs)
 
                     val mergedStartMs: Long
                     val mergedEndMs: Long
@@ -150,13 +181,18 @@ class SleepStagePromoter @Inject constructor(
                         mergedDurationMinutes = existing.durationMinutes + groupMinutes
                     }
 
+                    // The true wake date is the local date of the merged end, which may
+                    // correct an earlier partial call's provisional date.
+                    finalDate = Instant.ofEpochMilli(mergedEndMs).atZone(ZoneId.systemDefault()).toLocalDate()
+
                     if (mergedStartMs != existingStartMs ||
                         mergedEndMs != existingEndMs ||
-                        mergedDurationMinutes != existing.durationMinutes
+                        mergedDurationMinutes != existing.durationMinutes ||
+                        finalDate != existing.date
                     ) {
                         sleepRepository.updateSessionSpan(
                             id = existing.id,
-                            date = date,
+                            date = finalDate,
                             sleepStartMs = Instant.ofEpochMilli(mergedStartMs),
                             sleepEndMs = Instant.ofEpochMilli(mergedEndMs),
                             durationMinutes = mergedDurationMinutes,
@@ -201,7 +237,7 @@ class SleepStagePromoter @Inject constructor(
             val rowIds = sleepStageRepository.insertAllOrIgnore(entities)
             stagesInserted += rowIds.count { it != -1L }
             promotedRowIds.addAll(stages.map { it.rowId })
-            datesProcessed.add(date)
+            datesProcessed.add(finalDate)
         }
 
         if (promotedRowIds.isNotEmpty()) {

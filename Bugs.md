@@ -1,37 +1,7 @@
 # Bug Report (Reordered: Severity → Similarity)
 Autonomous read-only bug-hunting pass over the OpenAthleteMetrics codebase. Findings only — nothing has been fixed yet.
 
-## High Severity
-
-### Invalid config value silently breaks a feature
-
-**`data/db/AppDatabase.kt`** — Line 1017 (`MIGRATION_18_19`): the reseeded default layout includes `DefaultWidget("SLEEP", 1, 1, 3)`, but `"SLEEP"` is **not** a valid `WidgetTemplateId`. Since `WidgetLayoutEntity.toModel()` catches the `IllegalArgumentException` from `valueOf()` and returns `null`, this row is silently dropped at render time — every user migrating v18→v19 gets a default layout missing the sleep widget, with a permanently-dead row left in the table. Looks like a copy/paste leftover from the older `MIGRATION_12_13` seed list. Not yet fixed. Suggested fix: change `"SLEEP"` to a valid template id (e.g. `SLEEP_SUMMARY_SMALL`).
-
-## Medium Severity
-
-### Timezone / day-boundary mismatch (seeder-guard variant)
-
-**`data/repository/RoomMetricReadingStagingRepository.kt`** — Lines 105-117 (`hasSeederDataForDate`, `hasSeederReadingsForDateOnce`): same UTC-vs-local day-boundary mismatch as the High-severity finding above, used to guard against re-seeding a date and to drive a "seeder data present" banner. Non-UTC users can get incorrect seeder-guard results near local midnight. Not yet fixed.
-
-**`data/repository/RoomHrReadingRepository.kt`** — Lines 20-24 (`hasSeederDataForDate`): same UTC-day-boundary issue, consumed by `DashboardViewModel.hasSeederDataForDate`. Non-UTC users can see an incorrect "seeder data present" state near local midnight. Not yet fixed.
-
-### Stale `today` across midnight (UI)
-
-**`ui/dailydetail/DailyDetailScreen.kt`** — Line 107: `val today = remember { LocalDate.now() }` is captured once per composition and never refreshed, passed as the upper bound to the date picker's selectable-dates check. If the screen stays composed across midnight, the real current date becomes "after" the stale `today`, incorrectly blocking selection of today's actual date. Not yet fixed. Suggested fix: recompute `today` per dialog open, or refresh via a ticking effect / lifecycle resume callback.
-
-**`ui/overview/DashboardScreen.kt`** — Line 83: same bug as `DailyDetailScreen.kt` — a `remember`-cached `today` goes stale across a midnight rollover while the screen stays composed, incorrectly blocking selection of the real current date in the date picker. Swipe navigation is unaffected since the ViewModel computes `LocalDate.now()` fresh. Not yet fixed.
-
-### Sleep data staleness / fragmentation
-
-**`worker/SleepStagePromoter.kt`** — Lines 118-138 (interacting with 110-117): `date` for a session is derived solely from the *current* promote() call's own group boundary, not from any prior session's stored date. Because previously-promoted staging rows are deleted, a night whose data arrives in multiple batches spanning midnight differently across calls fails to match the existing session's date, creating a second, fragmented `SleepSession` for the same physical night instead of extending the original — despite the code's explicit intent to handle exactly this scenario. Not yet fixed.
-
-**`data/repository/SleepDetailProvider.kt`** — Lines 53-63 (`observeSleepData`): `averagesFlow` and `historyFlow` are each a cold `flow { emit(...) }` that computes once per collection and completes, combined with live sources (`sleepWithStagesFlow`, `summaryRepo.getSummaryForDate`). Once the initial combined value is produced, later re-emissions from the live sources recombine using the *stale* `averages`/`history` values, since those two never re-emit. The multi-night rolling average and 7-day history can silently go stale for as long as the subscription stays alive. Not yet fixed. Suggested fix: recompute averages/history reactively (e.g. via `flatMapLatest`) instead of once up front.
-
-### Unconfigured widget tap is a dead end
-
-**`glance/MetricGlanceWidget.kt`** — Line 274-278: the tile's `clickable` is wired to `OpenMetricAction` unconditionally, passing `templateId?.name.orEmpty()`. When unconfigured, the tile shows "Tap to configure," but the click action receives a blank string and no-ops — nothing launches `WidgetConfigActivity`. Also reachable whenever a persisted template name no longer matches any `WidgetTemplateId` entry (e.g. after a future enum rename), leaving previously-placed widgets stuck with no in-widget recovery. Not yet fixed.
-
-**`glance/OpenMetricAction.kt`** — Line 21: `parameters[templateIdKey]?.takeIf { it.isNotBlank() } ?: return` silently returns with no action when the template id is blank/null — the other half of the dead end above. No fallback branch (e.g. launching `WidgetConfigActivity`) exists for the unconfigured case. Not yet fixed.
+### Medium Severity
 
 ### Dead/unreachable navigation paths
 

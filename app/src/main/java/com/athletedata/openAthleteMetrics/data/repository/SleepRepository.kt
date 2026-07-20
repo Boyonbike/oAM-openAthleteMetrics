@@ -27,9 +27,10 @@ interface SleepRepository {
      * Extends an existing session's span in place (same id) — used by
      * [com.athletedata.openAthleteMetrics.worker.SleepStagePromoter] when new stage rows
      * attach to a session an earlier promote() call already created, so its recorded
-     * duration doesn't go stale relative to the accumulated stage minutes. [date] is the
-     * session's own date (the caller already has it) and is used only to re-enqueue
-     * DailySummaryWorker so `DailySummary.sleepMinutes` picks up the corrected duration.
+     * duration doesn't go stale relative to the accumulated stage minutes. [date] is persisted
+     * (correcting an earlier partial call's date if the fuller merge resolves a different wake
+     * morning) and is also used to re-enqueue DailySummaryWorker so `DailySummary.sleepMinutes`
+     * picks up the corrected duration.
      */
     suspend fun updateSessionSpan(id: Long, date: LocalDate, sleepStartMs: Instant, sleepEndMs: Instant, durationMinutes: Int)
 
@@ -44,6 +45,14 @@ interface SleepRepository {
 
     /** One-shot read keyed by driver + date; used by DeviceSyncProcessor to fetch the existing record before merge. */
     suspend fun getByDriverAndDate(driverId: String, date: LocalDate): SleepSession?
+
+    /**
+     * One-shot read of all sessions for a driver in the inclusive date range [[from], [to]];
+     * used by [com.athletedata.openAthleteMetrics.worker.SleepStagePromoter] to locate a
+     * session a new batch of stages might extend even when it was stored under a different
+     * date by an earlier, partial promote() call.
+     */
+    suspend fun getSessionsForDriverInRange(driverId: String, from: LocalDate, to: LocalDate): List<SleepSession>
 
     /** Deletes all sessions whose source matches [source]. Used by the seeder cleanup flow. */
     suspend fun deleteBySource(source: DataSource)

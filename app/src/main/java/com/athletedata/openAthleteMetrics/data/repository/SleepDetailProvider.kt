@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -50,8 +51,8 @@ class SleepDetailProvider @Inject constructor(
                 }
             }
 
-        val averagesFlow = flow { emit(sleepAverageCalculator.calculate(date)) }
-        val historyFlow = flow { emit(loadDurationHistory(date)) }
+        val averagesFlow = sleepAverageCalculator.observe(date)
+        val historyFlow = observeDurationHistory(date)
 
         return combine(
             sleepWithStagesFlow,
@@ -65,13 +66,15 @@ class SleepDetailProvider @Inject constructor(
 
     suspend fun getSleepDataOnce(date: LocalDate): SleepData? = observeSleepData(date).first()
 
-    private suspend fun loadDurationHistory(date: LocalDate): List<TimestampedReading> =
-        sleepRepo.getSessionsForRange(date.minusDays(6), date).first().map { session ->
-            TimestampedReading(
-                timeLabel = session.date.format(HISTORY_DATE_FMT),
-                value = "%.1f".format(session.durationMinutes / 60.0),
-                unit = "h",
-            )
+    private fun observeDurationHistory(date: LocalDate): Flow<List<TimestampedReading>> =
+        sleepRepo.getSessionsForRange(date.minusDays(6), date).map { sessions ->
+            sessions.map { session ->
+                TimestampedReading(
+                    timeLabel = session.date.format(HISTORY_DATE_FMT),
+                    value = "%.1f".format(session.durationMinutes / 60.0),
+                    unit = "h",
+                )
+            }
         }
 
     private fun buildSleepData(

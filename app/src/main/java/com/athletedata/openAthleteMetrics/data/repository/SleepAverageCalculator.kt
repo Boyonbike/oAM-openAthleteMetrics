@@ -3,7 +3,11 @@ package com.athletedata.openAthleteMetrics.data.repository
 import com.athletedata.openAthleteMetrics.data.model.BaselineMetric
 import com.athletedata.openAthleteMetrics.data.model.DailySummary
 import com.athletedata.openAthleteMetrics.data.model.SleepAverages
-import kotlinx.coroutines.flow.first
+import com.athletedata.openAthleteMetrics.data.model.SleepSession
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -36,7 +40,12 @@ class SleepAverageCalculator @Inject constructor(
         BaselineMetric.SLEEP_AWAKE to DailySummary::sleepAwakeMinutes,
     )
 
-    suspend fun calculate(anchorDate: LocalDate, zone: ZoneId = ZoneId.systemDefault()): SleepAverages {
+    /**
+     * Reactively recomputes averages whenever the underlying sessions/summaries change, rather
+     * than resolving once and going stale for the life of a subscription (e.g. a ViewModel's
+     * `stateIn`) — see [SleepDetailProvider.observeSleepData].
+     */
+    fun observe(anchorDate: LocalDate, zone: ZoneId = ZoneId.systemDefault()): Flow<SleepAverages> = flow {
         val allMetrics = listOf(
             BaselineMetric.SLEEP, BaselineMetric.SLEEP_ONSET, BaselineMetric.SLEEP_WAKE,
         ) + stageMetrics.map { it.first }
@@ -49,9 +58,23 @@ class SleepAverageCalculator @Inject constructor(
         val maxWindowDays = windows.values.maxOf { it.first }
         val rangeStart = anchorDate.minusDays((maxWindowDays - 1).toLong())
 
-        val sessions = sleepRepo.getSessionsForRange(rangeStart, anchorDate).first()
-        val summaries = summaryRepo.getSummariesForRange(rangeStart, anchorDate).first()
+        emitAll(
+            combine(
+                sleepRepo.getSessionsForRange(rangeStart, anchorDate),
+                summaryRepo.getSummariesForRange(rangeStart, anchorDate),
+            ) { sessions, summaries ->
+                buildAverages(anchorDate, zone, windows, sessions, summaries)
+            }
+        )
+    }
 
+    private fun buildAverages(
+        anchorDate: LocalDate,
+        zone: ZoneId,
+        windows: Map<BaselineMetric, Pair<Int, Int>>,
+        sessions: List<SleepSession>,
+        summaries: List<DailySummary>,
+    ): SleepAverages {
         val avgTotalMinutes = run {
             val (windowDays, minDays) = windows.getValue(BaselineMetric.SLEEP)
             val cutoff = anchorDate.minusDays((windowDays - 1).toLong())

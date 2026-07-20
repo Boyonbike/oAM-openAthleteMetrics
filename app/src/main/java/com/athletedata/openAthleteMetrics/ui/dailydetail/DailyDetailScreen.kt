@@ -104,7 +104,6 @@ fun DailyDetailScreen(
     val localDate by viewModel.localDate.collectAsStateWithLifecycle()
     val expandedTiles by viewModel.expandedTiles.collectAsStateWithLifecycle()
     val isEditMode by viewModel.isEditMode.collectAsStateWithLifecycle()
-    val today = remember { LocalDate.now() }
     var categorySheetActivity by remember { mutableStateOf<ActivityUiItem?>(null) }
     var showDatePicker by remember { mutableStateOf(false) }
     val chartExclusionZones = remember { mutableStateMapOf<Any, Rect>() }
@@ -177,7 +176,7 @@ fun DailyDetailScreen(
     if (showDatePicker) {
         DataPageDatePickerDialog(
             currentDate = localDate,
-            today = today,
+            today = LocalDate.now(),
             onConfirm = { date ->
                 viewModel.setDate(date)
                 showDatePicker = false

@@ -388,6 +388,58 @@ class SleepStagePromoterTest {
         assertEquals(setOf(eveningDate, wakeDate), result.datesProcessed.toSet())
     }
 
+    @Test
+    fun `promote merges a night whose stages arrive across two calls spanning midnight differently, instead of creating a second fragmented session`() = runBlocking {
+        // Regression test: batch 1 only has pre-midnight stages, so it provisionally dates
+        // the session by ITS OWN (incomplete) end -- the evening date. Batch 2, in a later
+        // promote() call, carries the rest of the night and resolves to the wake date. The
+        // fix must find and extend the batch-1 session (correcting its stored date) rather
+        // than creating a second row under the wake date.
+        val batch1InsertedAt = Instant.parse("2026-07-01T23:05:00Z")
+        val batch1WindowStartMs = batch1InsertedAt.minusSeconds(300).toEpochMilli()
+        val batch1WindowEndMs = batch1InsertedAt.plusSeconds(300).toEpochMilli()
+        insertStagingRow(
+            SleepStage.LIGHT,
+            startMs = Instant.parse("2026-07-01T22:00:00Z").toEpochMilli(),
+            endMs = Instant.parse("2026-07-01T23:00:00Z").toEpochMilli(),
+            createdAt = batch1InsertedAt,
+        )
+
+        val eveningDate = LocalDate.parse("2026-07-01")
+        val wakeDate = LocalDate.parse("2026-07-02")
+        val firstResult = promoter.promote("hume-band-1", batch1WindowStartMs, batch1WindowEndMs)
+
+        assertEquals(1, firstResult.sessionsCreated)
+        val provisionalSession = sleepRepository.getByDriverAndDate("hume-band-1", eveningDate)
+        assertNotNull(provisionalSession)
+
+        val batch2InsertedAt = Instant.parse("2026-07-02T07:05:00Z")
+        val batch2WindowStartMs = batch2InsertedAt.minusSeconds(300).toEpochMilli()
+        val batch2WindowEndMs = batch2InsertedAt.plusSeconds(300).toEpochMilli()
+        // Contiguous with batch 1's end (23:00) -- the rest of the same physical night.
+        insertStagingRow(
+            SleepStage.DEEP,
+            startMs = Instant.parse("2026-07-01T23:00:00Z").toEpochMilli(),
+            endMs = Instant.parse("2026-07-02T07:00:00Z").toEpochMilli(),
+            createdAt = batch2InsertedAt,
+        )
+        val secondResult = promoter.promote("hume-band-1", batch2WindowStartMs, batch2WindowEndMs)
+
+        // No new session -- the batch-1 row was extended in place, not duplicated.
+        assertEquals(0, secondResult.sessionsCreated)
+        assertNull(sleepRepository.getByDriverAndDate("hume-band-1", eveningDate))
+        val session = sleepRepository.getByDriverAndDate("hume-band-1", wakeDate)
+        assertNotNull(session)
+        assertEquals(provisionalSession!!.id, session!!.id)
+        assertEquals(Instant.parse("2026-07-01T22:00:00Z"), session.sleepStartMs)
+        assertEquals(Instant.parse("2026-07-02T07:00:00Z"), session.sleepEndMs)
+        assertEquals(540, session.durationMinutes)
+
+        val stages = sleepStageRepository.getStagesForSessionOnce(session.id)
+        assertEquals(2, stages.size)
+        assertEquals(listOf(wakeDate), secondResult.datesProcessed)
+    }
+
     // ---------------------------------------------------------------------------
     // Source-level guard: the threshold's justification must be app policy, not a
     // device-specific protocol citation.

@@ -131,6 +131,7 @@ private sealed class GlanceWidgetContent {
     data class SummarySmall(val duration: Duration, val timings: Timings, val stages: Stages) : GlanceWidgetContent()
     data class SummaryLarge(val small: SummarySmall, val hypnogram: HypnogramOnly) : GlanceWidgetContent()
     object Empty : GlanceWidgetContent()
+    object NoData : GlanceWidgetContent()
 }
 
 private val LAST_UPDATED_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
@@ -183,7 +184,7 @@ private suspend fun fetchGlanceContent(templateId: WidgetTemplateId, entryPoint:
         WidgetTemplateId.SLEEP_DURATION, WidgetTemplateId.SLEEP_TIMINGS, WidgetTemplateId.SLEEP_STAGES,
         WidgetTemplateId.SLEEP_HYPNOGRAM, WidgetTemplateId.SLEEP_SUMMARY_SMALL, WidgetTemplateId.SLEEP_SUMMARY_LARGE -> {
             val data = entryPoint.sleepDetailProvider().getSleepDataOnce(today)
-            if (data == null) GlanceWidgetContent.Empty else buildSleepGlanceContent(templateId, data)
+            if (data == null) GlanceWidgetContent.NoData else buildSleepGlanceContent(templateId, data)
         }
         WidgetTemplateId.STARRED_LIFESTYLE_BAR, WidgetTemplateId.CUSTOM_QUESTIONS_BAR, WidgetTemplateId.ACTIVITIES ->
             GlanceWidgetContent.Empty
@@ -280,6 +281,8 @@ private fun MetricWidgetContent(templateId: WidgetTemplateId?, content: GlanceWi
         when {
             templateId == null || content == null || content is GlanceWidgetContent.Empty ->
                 Text(text = "Tap to configure", style = TextStyle(fontSize = 12.sp, color = secondaryText))
+            content is GlanceWidgetContent.NoData ->
+                Text(text = "No sleep data", style = TextStyle(fontSize = 12.sp, color = secondaryText))
             content is GlanceWidgetContent.Simple -> SimpleTileContent(content.data, secondaryText, primaryText)
             content is GlanceWidgetContent.Duration ->
                 SleepStatTileContent("Sleep Duration", content.valueText, content.avgText, secondaryText, primaryText)
@@ -388,7 +391,7 @@ private fun SleepHypnogramTileContent(
     Column {
         Text(text = "Hypnogram", style = TextStyle(fontSize = 12.sp, color = secondaryText))
         if (content.segments.isEmpty()) {
-            Text(text = "No sleep data", style = TextStyle(fontSize = 11.sp, color = secondaryText))
+            Text(text = "No hypnogram data", style = TextStyle(fontSize = 11.sp, color = secondaryText))
         } else {
             GlanceHypnogramBar(content.segments, modifier = GlanceModifier.fillMaxWidth().height(24.dp))
             Row(modifier = GlanceModifier.fillMaxWidth()) {
@@ -416,7 +419,13 @@ private fun GlanceHypnogramBar(segments: List<HypnogramSegment>, modifier: Glanc
     val endMs = segments.maxOf { it.endMs }
     val totalMs = (endMs - startMs).toFloat().coerceAtLeast(1f)
     Row(modifier = modifier) {
+        var prevEndMs = startMs
         segments.forEach { seg ->
+            val gapMs = seg.startMs - prevEndMs
+            if (gapMs > 0) {
+                val gapWidth = availableWidth * (gapMs / totalMs)
+                Box(modifier = GlanceModifier.width(gapWidth).fillMaxHeight()) {}
+            }
             val widthFrac = (seg.endMs - seg.startMs) / totalMs
             val segWidth = (availableWidth * widthFrac).coerceAtLeast(1.dp)
             Box(
@@ -425,6 +434,7 @@ private fun GlanceHypnogramBar(segments: List<HypnogramSegment>, modifier: Glanc
                     .fillMaxHeight()
                     .background(ColorProvider(STAGE_COLORS.getValue(seg.stage))),
             ) {}
+            prevEndMs = seg.endMs
         }
     }
 }

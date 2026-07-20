@@ -675,8 +675,10 @@ private fun SleepHypnogramBody(uiState: GenericWidgetUiState, onClick: () -> Uni
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text(text = "Hypnogram", style = TypographyTitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (data == null || data.hypnogramSegments.isEmpty()) {
+            if (data == null) {
                 Text(text = "No sleep data", style = TypographyMeta, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else if (data.hypnogramSegments.isEmpty()) {
+                Text(text = "No hypnogram data", style = TypographyMeta, color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
                 Hypnogram(
                     segments = data.hypnogramSegments,

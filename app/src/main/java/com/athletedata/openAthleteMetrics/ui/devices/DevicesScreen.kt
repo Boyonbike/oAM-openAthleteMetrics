@@ -288,6 +288,10 @@ fun DevicesScreen(
                 }
 
                 val sortedDevices = remember(devices) { devices.sortedBy { it.displayName } }
+                val savedAddresses = remember(devices) { devices.map { it.bleAddress }.toSet() }
+                val filteredCandidates = remember(discoveredCandidates, savedAddresses) {
+                    discoveredCandidates.filterNot { it.address in savedAddresses }
+                }
 
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
@@ -319,15 +323,15 @@ fun DevicesScreen(
                                     onDisconnect = viewModel::onDisconnectTapped,
                                 )
                             }
-                            items(discoveredCandidates, key = { it.address }) { candidate ->
-                                val hasDuplicateNames = discoveredCandidates.count { it.deviceName == candidate.deviceName } > 1
+                            items(filteredCandidates, key = { it.address }) { candidate ->
+                                val hasDuplicateNames = filteredCandidates.count { it.deviceName == candidate.deviceName } > 1
                                 CandidateCell(
                                     candidate = candidate,
                                     hasDuplicateNames = hasDuplicateNames,
                                     onAdd = { viewModel.onCandidateSelected(candidate) },
                                 )
                             }
-                            if (connectionState !is BleConnectionState.Scanning && discoveredCandidates.isEmpty()) {
+                            if (connectionState !is BleConnectionState.Scanning && filteredCandidates.isEmpty()) {
                                 item {
                                     AddCell(
                                         label = "Add Device",

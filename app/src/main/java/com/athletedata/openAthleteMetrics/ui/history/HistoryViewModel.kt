@@ -211,10 +211,10 @@ class HistoryViewModel @Inject constructor(
     }
 
     /** Called by the tile left/right arrows. Steps by one period in the aggregated point list. */
-    fun stepTileDate(forward: Boolean) {
-        val tiles = metricTiles.value.ifEmpty { return }
-        val points = tiles.first().allPoints.ifEmpty { return }
-        val nextIdx = (tiles.first().selectedIndex + if (forward) 1 else -1)
+    fun stepTileDate(metricKey: String, forward: Boolean) {
+        val tile = metricTiles.value.firstOrNull { it.metricKey == metricKey } ?: return
+        val points = tile.allPoints.ifEmpty { return }
+        val nextIdx = (tile.selectedIndex + if (forward) 1 else -1)
             .coerceIn(0, points.lastIndex)
         _tileDate.value = points[nextIdx].periodStart
     }

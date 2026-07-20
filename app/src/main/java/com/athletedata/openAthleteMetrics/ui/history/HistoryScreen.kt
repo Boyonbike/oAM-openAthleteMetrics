@@ -514,7 +514,7 @@ private fun SelectedValueTilesColumn(
     tileDate: LocalDate,
     regularity: Regularity,
     onRemove: (String) -> Unit,
-    onStepTile: (forward: Boolean) -> Unit,
+    onStepTile: (metricKey: String, forward: Boolean) -> Unit,
 ) {
     if (tiles.isEmpty()) return
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -524,8 +524,8 @@ private fun SelectedValueTilesColumn(
                 tileDate      = tileDate,
                 regularity    = regularity,
                 onRemove      = { onRemove(tile.metricKey) },
-                onStepBack    = { onStepTile(false) },
-                onStepForward = { onStepTile(true) },
+                onStepBack    = { onStepTile(tile.metricKey, false) },
+                onStepForward = { onStepTile(tile.metricKey, true) },
             )
         }
     }

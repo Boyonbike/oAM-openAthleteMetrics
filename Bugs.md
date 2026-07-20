@@ -3,14 +3,6 @@ Autonomous read-only bug-hunting pass over the OpenAthleteMetrics codebase. Find
 
 ### Medium Severity
 
-### UI acts on the wrong target / shows duplicates
-
-**`ui/history/HistoryViewModel.kt`** — Line 214-220 (`stepTileDate`), with `HistoryScreen.kt` line 526-528: always operates on `metricTiles.value.first()` regardless of which tile's arrow was pressed — every tile's step callback is wired to the same handler without tile identity. With 2+ overlaid metrics, pressing the second tile's arrow moves according to the *first* tile's spacing/index. Not yet fixed. Suggested fix: thread the tapped tile's `metricKey` through `onStepTile`.
-
-**`ui/overview/WidgetTapDestinationResolver.kt`** — Line 48-55: the `STARRED_LIFESTYLE_BAR` case checks `questionRepo.getResponsesForDate(date).isEmpty()` for *any* response, regardless of category. If the user answered only custom/habit questions, tapping the Lifestyle widget wrongly navigates to the (mostly empty) detail view instead of the questions entry flow. The sibling `CUSTOM_QUESTIONS_BAR` case correctly filters first. Not yet fixed. Suggested fix: check `responses.any { it.questionId in lifestyleIds }`.
-
-**`ui/devices/DevicesScreen.kt`** — Line 306-329: scan results are never filtered against already-saved devices, so an already-paired device advertising nearby appears twice in the "Add Device" grid — once as a saved cell, once as a candidate. Tapping "ADD" on the duplicate re-triggers `connectToDevice` with whatever driver the scan matched, not guaranteed to be the one already saved. Not yet fixed. Suggested fix: filter `discoveredCandidates` against saved `bleAddress`es before rendering.
-
 ### BLE engine robustness (sync hangs / resource growth)
 
 **`ble/BleEngine.kt`** — Lines 1146-1156, 957-969: return values of `writeCharacteristic`/`writeDescriptor` are never checked. If either returns `false`, the corresponding callback never fires, and in the plain "immediate advance" branch there's no fallback timeout, so the sync permanently hangs until manual disconnect. Not yet fixed. Suggested fix: check the return value and retry/fail fast, and/or add a generic per-command timeout.

@@ -47,7 +47,9 @@ class WidgetTapDestinationResolver @Inject constructor(
             }
             WidgetTemplateId.STARRED_LIFESTYLE_BAR -> {
                 val responses = questionRepo.getResponsesForDate(date).first()
-                if (responses.isEmpty()) {
+                val lifestyleIds = questionRepo.getLifestyleQuestionsOnce().map { it.id }.toSet()
+                val hasLifestyleResponse = responses.any { it.questionId in lifestyleIds }
+                if (!hasLifestyleResponse) {
                     DashboardNavigationEvent.OpenQuestions(date)
                 } else {
                     DashboardNavigationEvent.OpenDailyDetail(date, DailyDetailSection.QUESTIONS)

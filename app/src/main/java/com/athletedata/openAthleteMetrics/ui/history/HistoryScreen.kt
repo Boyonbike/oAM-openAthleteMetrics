@@ -104,7 +104,7 @@ fun HistoryScreen(
     modifier: Modifier = Modifier,
     viewModel: HistoryViewModel = hiltViewModel(),
 ) {
-    LaunchedEffect(initialMetricKey) {
+    LaunchedEffect(initialMetricKey, initialDateString) {
         if (initialMetricKey != null) {
             viewModel.setTarget(initialMetricKey, initialDateString)
             onInitialTargetConsumed()

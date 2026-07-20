@@ -3,12 +3,6 @@ Autonomous read-only bug-hunting pass over the OpenAthleteMetrics codebase. Find
 
 ### Medium Severity
 
-### Dead/unreachable navigation paths
-
-**`ui/nav/NavGraph.kt`** — Lines 66-67, 130-137, 209-213: `showMetricDetail` and `pendingMetricType` are declared and checked but never assigned anywhere — no `DashboardScreen` callback sets them either. `MetricDetailScreen` is completely unreachable dead code. Not yet fixed. Suggested fix: wire a real trigger, or remove the dead state/branch.
-
-**`ui/history/HistoryScreen.kt`** — Line 107-112: `LaunchedEffect(initialMetricKey)` is keyed only on `initialMetricKey`, not `initialDateString`. Since `NavGraph.kt` keeps `Page` composables permanently in composition, re-entering History for the same metric on a different date won't re-fire the effect, so `viewModel.setTarget(...)` never runs with the new date. Currently unreachable since `NavGraph.kt`'s `pendingHistoryMetricKey`/`pendingHistoryDateString` are never assigned — but the defect is real once a caller is wired up. Not yet fixed. Suggested fix: key the effect on both values.
-
 ### Stale in-memory snapshot silently overwrites newer data
 
 **`ui/settings/ProfileTab.kt`** — Lines 97-111 (`saveField`), 141-146, 212, 125: every save path does a read-modify-write against a cached `profile` snapshot (a `StateFlow` backed by an async Room `Flow`) rather than the DB. Two edits committed faster than the write→re-emit round trip (e.g. Height then immediately Date of Birth) cause the second save's `.copy()` to silently revert the first field. Not yet fixed. Suggested fix: perform the merge inside the repository/DAO as a partial update, or serialize saves off a single always-current source of truth.

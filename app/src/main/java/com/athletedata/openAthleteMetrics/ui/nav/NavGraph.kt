@@ -18,14 +18,12 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.data.model.WidgetTemplateId
 import com.athletedata.openAthleteMetrics.glance.WidgetDeepLink
 import com.athletedata.openAthleteMetrics.ui.dailydetail.DailyDetailScreen
 import com.athletedata.openAthleteMetrics.ui.dailydetail.DailyDetailSection
 import com.athletedata.openAthleteMetrics.ui.devices.DevicesScreen
 import com.athletedata.openAthleteMetrics.ui.history.HistoryScreen
-import com.athletedata.openAthleteMetrics.ui.metric.MetricDetailScreen
 import com.athletedata.openAthleteMetrics.ui.overview.DashboardNavigationEvent
 import com.athletedata.openAthleteMetrics.ui.overview.DashboardScreen
 import com.athletedata.openAthleteMetrics.ui.questions.QuestionsScreen
@@ -37,14 +35,6 @@ enum class Page(val label: String) {
     DAILY_DETAIL("Daily Detail"),
     QUESTIONS("Questions"),
     HISTORY("History"),
-}
-
-// Maps dashboard metric-card string keys to MetricType. "SLEEP" is a special case because the
-// dashboard uses a short key while the enum value is SLEEP_STAGE. Unknown keys (e.g. "WEIGHT")
-// return null and fall through to the History pager.
-private fun parseMetricKey(key: String): MetricType? = when (key) {
-    "SLEEP" -> MetricType.SLEEP_STAGE
-    else -> MetricType.entries.find { it.name == key }
 }
 
 // ── Nav graph ─────────────────────────────────────────────────────────────────
@@ -63,8 +53,6 @@ fun AppNavGraph(
 
     var showSettings by remember { mutableStateOf(false) }
     var showDevices by remember { mutableStateOf(false) }
-    var showMetricDetail by remember { mutableStateOf(false) }
-    var pendingMetricType by remember { mutableStateOf<MetricType?>(null) }
     var pendingDailyDetailDate by remember { mutableStateOf<String?>(null) }
     var pendingDailyDetailSection by remember { mutableStateOf<DailyDetailSection?>(null) }
     var pendingDailyDetailMetric by remember { mutableStateOf<String?>(null) }
@@ -127,9 +115,8 @@ fun AppNavGraph(
         else -> currentPage.name
     }
 
-    BackHandler(enabled = backStack.size > 1 || showSettings || showDevices || showMetricDetail) {
+    BackHandler(enabled = backStack.size > 1 || showSettings || showDevices) {
         when {
-            showMetricDetail -> showMetricDetail = false
             showSettings -> { showSettings = false; scrollBehavior.show() }
             showDevices -> { showDevices = false; scrollBehavior.show() }
             backStack.size > 1 -> {
@@ -204,13 +191,6 @@ fun AppNavGraph(
                     showDevices = false
                     scrollBehavior.show()
                 })
-            }
-
-            if (showMetricDetail && pendingMetricType != null) {
-                MetricDetailScreen(
-                    metricType = pendingMetricType!!,
-                    onBack = { showMetricDetail = false },
-                )
             }
 
             BottomNavBar(

@@ -43,7 +43,7 @@
     "mode": "WASM",
     "wasmBase64": "AGFzbQEAAAABBgFgAX8BfwMCAQAHDQEJcGFyc2VfaHJtAAIKBgEEAEEAC",
     "exports": {
-      "parseMetrics": "parse_metrics",
+      "parseSession": "parse_session",
       "parseSleep": null,
       "parseActivity": null
     }

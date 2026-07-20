@@ -121,7 +121,7 @@ class MetricRouter @Inject constructor(
                     val localDate = reading.recordedAt.atZone(zone).toLocalDate() // STEPS-MODE
                     val startMs = localDate.atStartOfDay(zone).toInstant().toEpochMilli() // STEPS-MODE
                     val endMs = localDate.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli() // STEPS-MODE
-                    stepsReadingRepository.deleteDeviceReadingsForDay(startMs, endMs) // STEPS-MODE
+                    stepsReadingRepository.deleteDeviceReadingsForDay(reading.driverId, startMs, endMs) // STEPS-MODE
                     Timber.tag(TAG).d("[STAGE-4 ROUTER] STEPS ABSOLUTE — deleted existing readings for date=%s", localDate) // STEPS-MODE / DPT
                 }
                 stepsReadingRepository.insert(reading.toStepsEntity()) // STEPS-MODE
@@ -139,8 +139,8 @@ class MetricRouter @Inject constructor(
                     val startMs = localDate.atStartOfDay(zone).toInstant().toEpochMilli() // CALORIES-MODE
                     val endMs = localDate.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli() // CALORIES-MODE
                     when (reading.metricType) { // CALORIES-MODE
-                        MetricType.ACTIVE_CALORIES -> activeCalorieReadingRepository.deleteDeviceReadingsForDay(startMs, endMs) // CALORIES-MODE
-                        MetricType.TOTAL_CALORIES -> totalCalorieReadingRepository.deleteDeviceReadingsForDay(startMs, endMs) // CALORIES-MODE
+                        MetricType.ACTIVE_CALORIES -> activeCalorieReadingRepository.deleteDeviceReadingsForDay(reading.driverId, startMs, endMs) // CALORIES-MODE
+                        MetricType.TOTAL_CALORIES -> totalCalorieReadingRepository.deleteDeviceReadingsForDay(reading.driverId, startMs, endMs) // CALORIES-MODE
                         else -> Unit
                     }
                     Timber.tag(TAG).d("[STAGE-4 ROUTER] CALORIES ABSOLUTE — deleted existing reading for date=%s", localDate) // CALORIES-MODE / DPT

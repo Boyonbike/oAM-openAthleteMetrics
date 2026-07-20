@@ -12,6 +12,6 @@ class RoomStepsReadingRepository @Inject constructor(
 ) : BaseRoomReadingRepository<StepsReadingEntity, StepsReadingDao>(), StepsReadingRepository {
     override val readingLabel = "steps"
 
-    override suspend fun deleteDeviceReadingsForDay(startMs: Long, endMs: Long) = // STEPS-MODE
-        dao.deleteBySourceForDay(DataSource.DEVICE, startMs, endMs) // STEPS-MODE
+    override suspend fun deleteDeviceReadingsForDay(driverId: String?, startMs: Long, endMs: Long) = // STEPS-MODE
+        dao.deleteBySourceForDay(DataSource.DEVICE, driverId, startMs, endMs) // STEPS-MODE
 }

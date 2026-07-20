@@ -34,7 +34,7 @@ class RoomUserProfileRepository @Inject constructor(
     /** Called by the weight-sync flow when a new daily weight reading is available. */
     override suspend fun updateWeight(weightKg: Double) {
         try {
-            dao.updateWeight(weightKg, System.currentTimeMillis())
+            dao.upsertWeight(weightKg, System.currentTimeMillis())
         } catch (e: Exception) {
             Timber.e(e, "Failed to update weight in user profile")
             throw e

@@ -9,6 +9,7 @@ import com.athletedata.openAthleteMetrics.data.db.RespirationReadingEntity
 import com.athletedata.openAthleteMetrics.data.db.SpO2ReadingEntity
 import com.athletedata.openAthleteMetrics.data.db.StepsReadingEntity
 import com.athletedata.openAthleteMetrics.data.db.TotalCalorieReadingEntity
+import com.athletedata.openAthleteMetrics.data.db.toLocalStartMs
 import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.BaselineMetric
 import com.athletedata.openAthleteMetrics.data.model.QuestionCategory
@@ -51,7 +52,6 @@ import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
-import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 
@@ -142,8 +142,8 @@ class DailyDetailViewModel @Inject constructor(
 
     val uiState: StateFlow<DailyDetailUiState> = _localDate
         .flatMapLatest { date ->
-            val startMs = date.toEpochMilli()
-            val endMs = date.plusDays(1).toEpochMilli()
+            val startMs = date.toLocalStartMs()
+            val endMs = date.plusDays(1).toLocalStartMs()
 
             val questionsFlow = combine(
                 questionRepo.getResponsesForDate(date),
@@ -369,9 +369,6 @@ private fun ActiveCalorieReadingEntity.toTimestamped() =
 
 private fun TotalCalorieReadingEntity.toTimestamped() =
     TimestampedReading(recordedAt.toLocalTimeLabel(), "%.0f".format(calories), "kcal")
-
-private fun LocalDate.toEpochMilli(): Long =
-    atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
 
 private fun formatDuration(minutes: Int): String {
     val h = minutes / 60

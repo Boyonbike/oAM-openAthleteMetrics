@@ -52,6 +52,7 @@ class ManifestValidatorTest {
     private fun manifest(
         wasmBytes: ByteArray,
         customWasmExport: String?,
+        parseSessionExport: String? = "parseSession",
     ): WasmDriverManifest = WasmDriverManifest(
         id = "manifest-validator-test",
         displayName = "Test",
@@ -83,7 +84,7 @@ class ManifestValidatorTest {
         },
         parsing = ParsingConfig.WasmParsing(
             wasmBytes = wasmBytes,
-            exports = WasmExports(parseMetrics = "parseMetrics"),
+            exports = WasmExports(parseMetrics = "parseMetrics", parseSession = parseSessionExport),
         ),
         specVersion = "2",
     )
@@ -125,6 +126,34 @@ class ManifestValidatorTest {
         assertTrue(
             "expected the magic header error, got: $errors",
             errors[0].contains("magic header"),
+        )
+    }
+
+    // CHANGED: parseSession is now mandatory — the per-packet parseMetrics-only contract has no
+    // live consumer (WasmDriverEngine.callParse() is dead code; only parseSession is ever
+    // dispatched during a live sync), so a manifest declaring only parseMetrics must fail
+    // validation rather than silently parsing zero readings at sync time.
+    @Test
+    fun `validate reports an error when only parseMetrics is declared without parseSession`() {
+        val manifest = manifest(validWasmBytes, customWasmExport = null, parseSessionExport = null)
+
+        val errors = ManifestValidator().validate(manifest)
+
+        assertTrue(
+            "expected an error naming parseSession, got: $errors",
+            errors.any { it.contains("parseSession") },
+        )
+    }
+
+    @Test
+    fun `validate reports no parseSession error when parseSession is declared`() {
+        val manifest = manifest(validWasmBytes, customWasmExport = null, parseSessionExport = "parseSession")
+
+        val errors = ManifestValidator().validate(manifest)
+
+        assertTrue(
+            "did not expect a parseSession error, got: $errors",
+            errors.none { it.contains("parseSession") },
         )
     }
 

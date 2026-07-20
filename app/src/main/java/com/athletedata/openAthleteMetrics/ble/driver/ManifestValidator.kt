@@ -87,8 +87,8 @@ class ManifestValidator {
                         "(expected magic header 0x00 0x61 0x73 0x6D)"
                 }
 
-                if (parsing.exports.parseMetrics.isNullOrBlank() && parsing.exports.parseSession.isNullOrBlank()) {
-                    errors += "parsing.exports.p2arseMetrics must not be blank (or provide parseSession for buffered drivers)"
+                if (parsing.exports.parseSession.isNullOrBlank()) {
+                    errors += "parsing.exports.parseSession must not be blank — parseMetrics-only (per-packet) drivers are not currently supported by the sync pipeline"
                 }
 
                 // CUSTOM strategy: catch a typo'd wasmExport at load time rather than only

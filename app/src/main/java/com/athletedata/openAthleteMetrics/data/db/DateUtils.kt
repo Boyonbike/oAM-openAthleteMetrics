@@ -1,7 +1,7 @@
 package com.athletedata.openAthleteMetrics.data.db
 
 import java.time.LocalDate
-import java.time.ZoneOffset
+import java.time.ZoneId
 
-internal fun LocalDate.toUtcStartMs(): Long =
-    atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+internal fun LocalDate.toLocalStartMs(): Long =
+    atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()

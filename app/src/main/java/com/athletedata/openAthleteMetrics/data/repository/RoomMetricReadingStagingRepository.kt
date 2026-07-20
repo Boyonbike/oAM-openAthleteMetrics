@@ -4,7 +4,7 @@ import androidx.work.WorkManager
 import com.athletedata.openAthleteMetrics.data.db.MetricReadingStagingDao
 import com.athletedata.openAthleteMetrics.data.db.toModel
 import com.athletedata.openAthleteMetrics.data.db.toStagingEntity
-import com.athletedata.openAthleteMetrics.data.db.toUtcStartMs
+import com.athletedata.openAthleteMetrics.data.db.toLocalStartMs
 import com.athletedata.openAthleteMetrics.data.model.DataSource
 import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import com.athletedata.openAthleteMetrics.data.model.MetricType
@@ -75,8 +75,8 @@ class RoomMetricReadingStagingRepository @Inject constructor(
     override fun getReadingsForDay(date: LocalDate, type: MetricType): Flow<List<MetricReading>> =
         dao.getReadingsInRange(
             metricType = type,
-            startMs = date.toUtcStartMs(),
-            endMs = date.plusDays(1).toUtcStartMs(),
+            startMs = date.toLocalStartMs(),
+            endMs = date.plusDays(1).toLocalStartMs(),
         ).map { entities -> entities.map { it.toModel() } }
 
     override fun getReadingsForRange(
@@ -86,8 +86,8 @@ class RoomMetricReadingStagingRepository @Inject constructor(
     ): Flow<List<MetricReading>> =
         dao.getReadingsInRange(
             metricType = type,
-            startMs = from.toUtcStartMs(),
-            endMs = to.plusDays(1).toUtcStartMs(),
+            startMs = from.toLocalStartMs(),
+            endMs = to.plusDays(1).toLocalStartMs(),
         ).map { entities -> entities.map { it.toModel() } }
 
     override fun getLatestReading(type: MetricType): Flow<MetricReading?> =
@@ -105,15 +105,15 @@ class RoomMetricReadingStagingRepository @Inject constructor(
     override fun hasSeederDataForDate(date: LocalDate): Flow<Boolean> =
         dao.countSourceDataInRange(
             source = DataSource.SEEDER,
-            startMs = date.toUtcStartMs(),
-            endMs = date.plusDays(1).toUtcStartMs(),
+            startMs = date.toLocalStartMs(),
+            endMs = date.plusDays(1).toLocalStartMs(),
         ).map { it > 0 }
 
     override suspend fun hasSeederReadingsForDateOnce(date: LocalDate): Boolean =
         dao.countSourceDataInRangeOnce(
             source = DataSource.SEEDER,
-            startMs = date.toUtcStartMs(),
-            endMs = date.plusDays(1).toUtcStartMs(),
+            startMs = date.toLocalStartMs(),
+            endMs = date.plusDays(1).toLocalStartMs(),
         ) > 0
 
     override suspend fun getPendingSleepStages(

@@ -53,8 +53,9 @@ import com.patrykandpatrick.vico.core.cartesian.data.CartesianChartModelProducer
 import com.patrykandpatrick.vico.core.cartesian.data.CartesianValueFormatter
 import com.patrykandpatrick.vico.core.cartesian.data.lineSeries
 import com.patrykandpatrick.vico.core.cartesian.layer.CartesianLayerDimensions
+import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneOffset
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import kotlin.math.roundToLong
@@ -289,7 +290,7 @@ private fun MetricChart(
         modelProducer.runTransaction {
             lineSeries {
                 val dataMap = chartData.associate { point ->
-                    val date = LocalDate.ofEpochDay(point.timestampMs / 86_400_000L)
+                    val date = Instant.ofEpochMilli(point.timestampMs).atZone(ZoneId.systemDefault()).toLocalDate()
                     ChronoUnit.DAYS.between(fromDate, date).toInt() to point.value
                 }.toMutableMap()
 

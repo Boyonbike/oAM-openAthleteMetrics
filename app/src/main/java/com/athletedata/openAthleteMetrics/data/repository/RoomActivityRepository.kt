@@ -4,7 +4,7 @@ import androidx.work.WorkManager
 import com.athletedata.openAthleteMetrics.data.db.ActivityDao
 import com.athletedata.openAthleteMetrics.data.db.toEntity
 import com.athletedata.openAthleteMetrics.data.db.toModel
-import com.athletedata.openAthleteMetrics.data.db.toUtcStartMs
+import com.athletedata.openAthleteMetrics.data.db.toLocalStartMs
 import com.athletedata.openAthleteMetrics.data.model.Activity
 import com.athletedata.openAthleteMetrics.data.model.DataSource
 import com.athletedata.openAthleteMetrics.data.model.UserCategory
@@ -85,19 +85,19 @@ class RoomActivityRepository @Inject constructor(
 
     override fun getActivitiesForDate(date: LocalDate): Flow<List<Activity>> =
         dao.getActivitiesInRange(
-            startMs = date.toUtcStartMs(),
-            endMs = date.plusDays(1).toUtcStartMs(),
+            startMs = date.toLocalStartMs(),
+            endMs = date.plusDays(1).toLocalStartMs(),
         ).map { entities -> entities.map { it.toModel() } }
 
     override fun getActivitiesForRange(from: LocalDate, to: LocalDate): Flow<List<Activity>> =
         dao.getActivitiesInRange(
-            startMs = from.toUtcStartMs(),
-            endMs = to.plusDays(1).toUtcStartMs(),
+            startMs = from.toLocalStartMs(),
+            endMs = to.plusDays(1).toLocalStartMs(),
         ).map { entities -> entities.map { it.toModel() } }
 
     override suspend fun getActivitiesForDateOnce(date: LocalDate): List<Activity> =
         dao.getActivitiesInRangeOnce(
-            startMs = date.toUtcStartMs(),
-            endMs = date.plusDays(1).toUtcStartMs(),
+            startMs = date.toLocalStartMs(),
+            endMs = date.plusDays(1).toLocalStartMs(),
         ).map { it.toModel() }
 }

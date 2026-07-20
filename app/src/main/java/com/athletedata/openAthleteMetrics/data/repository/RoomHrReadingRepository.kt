@@ -2,7 +2,7 @@ package com.athletedata.openAthleteMetrics.data.repository
 
 import com.athletedata.openAthleteMetrics.data.db.HrReadingDao
 import com.athletedata.openAthleteMetrics.data.db.HrReadingEntity
-import com.athletedata.openAthleteMetrics.data.db.toUtcStartMs
+import com.athletedata.openAthleteMetrics.data.db.toLocalStartMs
 import com.athletedata.openAthleteMetrics.data.model.DataSource
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -18,8 +18,8 @@ class RoomHrReadingRepository @Inject constructor(
     override val readingLabel = "HR"
 
     override fun hasSeederDataForDate(date: LocalDate): Flow<Boolean> {
-        val startMs = date.toUtcStartMs()
-        val endMs = date.plusDays(1).toUtcStartMs()
+        val startMs = date.toLocalStartMs()
+        val endMs = date.plusDays(1).toLocalStartMs()
         return dao.countSourceDataInRange(DataSource.SEEDER, startMs, endMs).map { it > 0 }
     }
 }

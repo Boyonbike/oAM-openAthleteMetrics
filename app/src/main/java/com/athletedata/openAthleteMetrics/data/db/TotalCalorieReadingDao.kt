@@ -28,7 +28,9 @@ interface TotalCalorieReadingDao : BaseReadingDao<TotalCalorieReadingEntity> {
     @Query("SELECT * FROM total_calorie_readings WHERE recorded_at >= :startMs AND recorded_at < :endMs ORDER BY recorded_at ASC")
     override suspend fun getReadingsInRangeOnce(startMs: Long, endMs: Long): List<TotalCalorieReadingEntity>
 
-    // CALORIES-MODE: used by ABSOLUTE mode to remove stale same-day readings before inserting the latest.
-    @Query("DELETE FROM total_calorie_readings WHERE source = :source AND recorded_at >= :startMs AND recorded_at < :endMs")
-    suspend fun deleteBySourceForDay(source: DataSource, startMs: Long, endMs: Long) // CALORIES-MODE
+    // CALORIES-MODE: used by ABSOLUTE mode to remove stale same-day readings before inserting the
+    // latest. Scoped by driver_id in addition to source so that syncing one driver's ABSOLUTE
+    // readings for a day doesn't delete another driver's device-sourced readings for that day.
+    @Query("DELETE FROM total_calorie_readings WHERE source = :source AND driver_id = :driverId AND recorded_at >= :startMs AND recorded_at < :endMs")
+    suspend fun deleteBySourceForDay(source: DataSource, driverId: String?, startMs: Long, endMs: Long) // CALORIES-MODE
 }

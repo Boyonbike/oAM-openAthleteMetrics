@@ -12,6 +12,6 @@ class RoomActiveCalorieReadingRepository @Inject constructor(
 ) : BaseRoomReadingRepository<ActiveCalorieReadingEntity, ActiveCalorieReadingDao>(), ActiveCalorieReadingRepository {
     override val readingLabel = "active calorie"
 
-    override suspend fun deleteDeviceReadingsForDay(startMs: Long, endMs: Long) = // CALORIES-MODE
-        dao.deleteBySourceForDay(DataSource.DEVICE, startMs, endMs) // CALORIES-MODE
+    override suspend fun deleteDeviceReadingsForDay(driverId: String?, startMs: Long, endMs: Long) = // CALORIES-MODE
+        dao.deleteBySourceForDay(DataSource.DEVICE, driverId, startMs, endMs) // CALORIES-MODE
 }

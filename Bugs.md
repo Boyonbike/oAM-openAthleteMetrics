@@ -21,12 +21,6 @@ Autonomous read-only bug-hunting pass over the OpenAthleteMetrics codebase. Find
 
 **`glance/MetricGlanceWidget.kt`** — Lines 80-95 (`provideGlance`): no error handling wraps any of the suspend/Flow calls. If any throw, `provideGlance` never reaches `provideContent`, silently freezing the widget on its last-rendered state with no error surfaced or retried. Not yet fixed.
 
-### BLE engine minor issues
-
-**`ble/BleEngine.kt`** — Lines 547-552 vs. `dispatchPostStreamParse()` (1277-1378): `triggerSync()` logs and discards leftover `reassemblyBuffers` content before clearing it, but the EOS-based path never inspects or logs `reassemblyBuffers` at all — any mid-assembly partial fragment at end-of-stream is silently dropped with no diagnostic trace. Not yet fixed. Suggested fix: mirror the discard-and-log handling in `dispatchPostStreamParse()`.
-
-**`ble/BleEngine.kt`** — Line 349 (`acknowledgeSyncComplete()`): when transitioning back to `Connected`, the displayed `packetsReceived` resets to `0`, but the internal `packetCount` field is never reset — the next notification continues incrementing from the old count, so the UI-visible packet counter can jump to a large stale-looking number after an acknowledged sync. Not yet fixed. Suggested fix: reset `packetCount = 0` in `acknowledgeSyncComplete()`.
-
 ### NavGraph minor issues
 
 **`ui/nav/NavGraph.kt`** — Line 114: `intent.getStringExtra(WidgetDeepLink.EXTRA_DATE)?.let(LocalDate::parse)` isn't wrapped in a try/catch. A stale or malformed date string (e.g. from an old widget instance after a format change) throws `DateTimeParseException` uncaught inside the `LaunchedEffect`, crashing the composition. Not yet fixed. Suggested fix: `runCatching { LocalDate.parse(it) }.getOrNull() ?: LocalDate.now()`.

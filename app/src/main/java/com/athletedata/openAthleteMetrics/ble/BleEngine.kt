@@ -365,6 +365,7 @@ class BleEngine @Inject constructor(
         if (activeGatt != null) {
             // Passive-stream drivers never disconnect for a sync — the link is still live,
             // so a manual re-sync tap can keep flushing whatever streams in next.
+            packetCount = 0
             _connectionState.value = BleConnectionState.Connected(address, driverName)
         } else {
             // EOS-based drivers close the GATT link once dispatchPostStreamParse() finishes
@@ -1371,6 +1372,13 @@ class BleEngine @Inject constructor(
         activeGatt = null
 
         _connectionState.value = BleConnectionState.Parsing(address)
+
+        reassemblyBuffers.forEach { (uuid, buf) ->
+            if (buf.isNotEmpty()) {
+                Timber.w("BleEngine: Discarding incomplete packet on $uuid: ${buf.size} bytes")
+            }
+        }
+        reassemblyBuffers.clear()
 
         val frames = synchronized(sessionCache) { sessionCache.toList() }
 

@@ -113,7 +113,7 @@ class DailyDetailViewModel @Inject constructor(
     fun onTileReordered(fromIndex: Int, toIndex: Int) {
         val current = (_optimisticTileOrder.value
             ?: (uiState.value as? DailyDetailUiState.Success)?.tileOrder
-            ?: DEFAULT_TILE_ORDER).toMutableList()
+            ?: DEFAULT_TILE_ORDER).sortedBy { it.sortOrder }.toMutableList()
         if (fromIndex !in current.indices || toIndex !in current.indices) return
         val moved = current.removeAt(fromIndex)
         current.add(toIndex, moved)

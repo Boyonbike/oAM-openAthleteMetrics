@@ -73,9 +73,10 @@ class QuestionsViewModel @Inject constructor(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     fun saveResponse(questionId: Long, value: String) {
+        val date = localDate.value
         viewModelScope.launch {
             try {
-                repo.upsertResponse(questionId, localDate.value, value)
+                repo.upsertResponse(questionId, date, value)
             } catch (e: Exception) {
                 Timber.e(e, "Failed to save response for question $questionId")
                 _errors.tryEmit("Failed to save")
@@ -84,9 +85,10 @@ class QuestionsViewModel @Inject constructor(
     }
 
     fun clearResponse(questionId: Long) {
+        val date = localDate.value
         viewModelScope.launch {
             try {
-                repo.clearResponse(questionId, localDate.value)
+                repo.clearResponse(questionId, date)
             } catch (e: Exception) {
                 Timber.e(e, "Failed to clear response for question $questionId")
             }

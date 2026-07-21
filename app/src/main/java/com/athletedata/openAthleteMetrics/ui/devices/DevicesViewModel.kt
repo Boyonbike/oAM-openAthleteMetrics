@@ -136,7 +136,8 @@ class DevicesViewModel @Inject constructor(
 
     fun onDeviceCellTapped(device: Device) {
         val current = connectionState.value
-        if (current !is BleConnectionState.Idle && current !is BleConnectionState.Error) return
+        if (current !is BleConnectionState.Idle && current !is BleConnectionState.Error &&
+            current !is BleConnectionState.GattCacheError) return
         val manifest = driverRegistry.allDrivers().find { it.id == device.driverId }
         if (manifest == null) {
             viewModelScope.launch {

@@ -43,6 +43,7 @@ fun PillSelector(
             .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f))
             .padding(2.dp)
             .drawBehind {
+                if (tabs.isEmpty()) return@drawBehind
                 val anim = continuousIndex.coerceIn(0f, (tabs.lastIndex).toFloat())
                 val lo = anim.toInt().coerceIn(0, tabs.lastIndex)
                 val hi = (lo + 1).coerceAtMost(tabs.lastIndex)

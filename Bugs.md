@@ -7,10 +7,6 @@ Autonomous read-only bug-hunting pass over the OpenAthleteMetrics codebase. Find
 
 ### Medium Severity
 
-### Data-integrity gaps at the DB layer
-
-**`data/db/HrReadingEntity.kt`** — Line 13: the unique index on `["driver_id", "recorded_at"]` is meant to deduplicate readings, but `driver_id` is nullable and SQLite treats every `NULL` as distinct — so `MANUAL`/`SEEDER`-sourced readings (always `driver_id = null`) get **no** duplicate protection. The seeder works around this with an app-level check, but any other manual-entry path without the same guard can accumulate duplicates. Same pattern recurs in `HrvReadingEntity.kt`, `SpO2ReadingEntity.kt`, `RespirationReadingEntity.kt`, `SkinTempReadingEntity.kt`, `StepsReadingEntity.kt`, `BloodPressureReadingEntity.kt`, `GlucoseReadingEntity.kt`, `ActiveCalorieReadingEntity.kt`, `TotalCalorieReadingEntity.kt`, `ActivityEntity.kt`, `SleepSessionEntity.kt`, and `MetricReadingStagingEntity.kt`. Not yet fixed. Suggested fix: enforce a non-null sentinel `driver_id` for manual/seeder rows, or perform an explicit existence check before insert.
-
 ### Migration / schema seeding gaps
 
 **`di/DatabaseModule.kt`** — Lines 169-197: migrations start at `MIGRATION_2_3` with no `MIGRATION_1_2` and no `.fallbackToDestructiveMigration()`, despite `AppDatabase.kt`'s schema-history comment confirming version 1 was a real prior schema. Any installed copy still on schema v1 hits Room's "no migration found" exception at database-open time with no recovery path short of clearing app data. Not yet fixed.

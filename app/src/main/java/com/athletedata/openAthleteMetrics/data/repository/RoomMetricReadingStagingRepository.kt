@@ -62,6 +62,17 @@ class RoomMetricReadingStagingRepository @Inject constructor(
                 source = DataSource.MANUAL,
                 createdAt = Instant.now(),
             ).toStagingEntity()
+            // driver_id is null for manual entries, so the DB's unique index on
+            // (driver_id, metric_type, recorded_at) can't dedupe them — SQLite treats every
+            // NULL as distinct. Guard explicitly, mirroring upsertAccumulator's exact-key lookup.
+            val existing = dao.getByDriverTypeAndDate(entity.driverId, entity.metricType, entity.recordedAt)
+            if (existing != null) {
+                Timber.w(
+                    "Duplicate manual entry guarded: %s at %s already exists, skipping insert",
+                    entity.metricType, entity.recordedAt,
+                )
+                return
+            }
             dao.insert(entity)
             val date = reading.recordedAt.toLocalDate()
             Timber.tag("data-pathway-tracker").d("[STAGE-6 DB-WRITE] enqueueing DailySummaryWorker for date=%s (local tz=%s)", date, ZoneId.systemDefault()) // TZ-FIX

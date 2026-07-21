@@ -3,14 +3,6 @@ Autonomous read-only bug-hunting pass over the OpenAthleteMetrics codebase. Find
 
 ### Medium Severity
 
-### BLE engine robustness (sync hangs / resource growth)
-
-**`ble/BleEngine.kt`** — Lines 1146-1156, 957-969: return values of `writeCharacteristic`/`writeDescriptor` are never checked. If either returns `false`, the corresponding callback never fires, and in the plain "immediate advance" branch there's no fallback timeout, so the sync permanently hangs until manual disconnect. Not yet fixed. Suggested fix: check the return value and retry/fail fast, and/or add a generic per-command timeout.
-
-**`ble/BleEngine.kt`** — Lines 390-401 (`handleNotification`): `reassemblyBuffers[characteristicUuid]` grows via `existing + bytes` with no max-size cap or per-characteristic timeout. A misbehaving device sending undersized fragments indefinitely grows this buffer unbounded, risking OOM/crash and a possible throw when handed to WASM's fixed-size linear memory. Not yet fixed. Suggested fix: cap the buffer and drop/reset with a warning if exceeded.
-
-**`ble/BleEngine.kt`** — Line 337 (`disconnect()`), 1294-1296: `activeGatt?.disconnect()` has no timeout waiting for the callback that releases the native GATT client. If the callback never arrives (known on some OEM stacks), the GATT client leaks (Android caps concurrent clients per app) and internal state stays stuck referencing a supposedly-disconnected device. Not yet fixed. Suggested fix: add a bounded timeout that force-calls `closeGatt()` if the callback doesn't arrive.
-
 ### Uncaught exception / never-invoked cleanup
 
 **`glance/WidgetConfigActivity.kt`** — Lines 85-99 (`onTemplateSelected`): the launched coroutine has no try/catch around `getGlanceIdBy`, `updateAppWidgetState`, or `MetricGlanceWidget().update(...)`. Any exception here is uncaught (no app-wide `CoroutineExceptionHandler` exists), crashing the process instead of degrading gracefully — defeating the `setResult(RESULT_CANCELED)` set earlier specifically to let the host discard the widget cleanly. Not yet fixed.

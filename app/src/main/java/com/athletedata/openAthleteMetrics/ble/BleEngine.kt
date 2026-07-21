@@ -8,6 +8,7 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.bluetooth.BluetoothStatusCodes
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
@@ -98,6 +99,9 @@ class BleEngine @Inject constructor(
         private const val MAX_RETRIES = 3
         private const val STREAM_QUIESCENCE_MS = 3_000L
         private const val SILENT_SYNC_TIMEOUT_MS = 15_000L
+        private const val WRITE_ACK_TIMEOUT_MS = 8_000L
+        private const val DISCONNECT_TIMEOUT_MS = 5_000L
+        private const val MAX_REASSEMBLY_BUFFER_BYTES = 65_536
 
     }
 
@@ -141,6 +145,7 @@ class BleEngine @Inject constructor(
     @Volatile private var quiescenceJob: Job? = null
     @Volatile private var gattCacheRefreshAttempted = false
     @Volatile private var silentSyncTimeoutJob: Job? = null
+    @Volatile private var writeAckTimeoutJob: Job? = null
 
     // per-command await-reply state. Written on Main (executeNextSyncCommand),
     // read on the BLE callback thread (onCharacteristicChanged). @Volatile for visibility;
@@ -168,6 +173,7 @@ class BleEngine @Inject constructor(
     private var activeGatt: BluetoothGatt? = null
     private var bleScanner: android.bluetooth.le.BluetoothLeScanner? = null
     private var scanTimeoutJob: Job? = null
+    private var disconnectTimeoutJob: Job? = null
     private var retryCount = 0
     private var retryJob: Job? = null
     private val notifySetupQueue = ArrayDeque<String>()
@@ -321,6 +327,8 @@ class BleEngine @Inject constructor(
         retryJob = null
         silentSyncTimeoutJob?.cancel()
         silentSyncTimeoutJob = null
+        writeAckTimeoutJob?.cancel()
+        writeAckTimeoutJob = null
         gattCacheRefreshAttempted = false
         quiescenceJob?.cancel()
         quiescenceJob = null
@@ -337,6 +345,17 @@ class BleEngine @Inject constructor(
         scope.launch { @Suppress("MissingPermission") activeGatt?.disconnect() }
         // activeManifest / activeDeviceAddress are cleared by gattCallback
         // when userDisconnecting == true
+        disconnectTimeoutJob?.cancel()
+        disconnectTimeoutJob = scope.launch {
+            delay(DISCONNECT_TIMEOUT_MS.milliseconds)
+            if (userDisconnecting && activeGatt != null) {
+                Timber.w("BleEngine: disconnect callback did not arrive within ${DISCONNECT_TIMEOUT_MS}ms for $address — forcing closeGatt()")
+                closeGatt()
+                activeManifest = null
+                activeDeviceAddress = null
+                _connectionState.value = BleConnectionState.Idle
+            }
+        }
     }
 
     fun acknowledgeSyncComplete() {
@@ -393,6 +412,15 @@ class BleEngine @Inject constructor(
         val maxPayload = negotiatedMtu - 3
         val existing = reassemblyBuffers[characteristicUuid] ?: ByteArray(0)
         val accumulated = existing + bytes
+
+        if (accumulated.size > MAX_REASSEMBLY_BUFFER_BYTES) {
+            Timber.w(
+                "BleEngine: reassembly buffer for %s exceeded %d bytes (got %d) — dropping oversized frame",
+                characteristicUuid, MAX_REASSEMBLY_BUFFER_BYTES, accumulated.size,
+            )
+            reassemblyBuffers[characteristicUuid] = ByteArray(0)
+            return
+        }
         reassemblyBuffers[characteristicUuid] = accumulated
 
         // A fragment smaller than the max ATT payload is the terminal fragment.
@@ -614,6 +642,10 @@ class BleEngine @Inject constructor(
     private fun connect(device: BluetoothDevice, manifest: WasmDriverManifest, resetRetries: Boolean) {
         silentSyncTimeoutJob?.cancel()
         silentSyncTimeoutJob = null
+        writeAckTimeoutJob?.cancel()
+        writeAckTimeoutJob = null
+        disconnectTimeoutJob?.cancel()
+        disconnectTimeoutJob = null
         activeManifest = manifest
         activeDeviceAddress = device.address
         if (resetRetries) {
@@ -665,6 +697,8 @@ class BleEngine @Inject constructor(
                         gatt.requestMtu(MTU_REQUEST)
                     }
                     newState == BluetoothProfile.STATE_DISCONNECTED && userDisconnecting -> {
+                        disconnectTimeoutJob?.cancel()
+                        disconnectTimeoutJob = null
                         Timber.d("BleEngine: user-initiated disconnect complete")
                         Timber.tag(TAG).d("[CONN] disconnected address=%s user-initiated", gatt.device.address)
                         closeGatt()
@@ -736,6 +770,8 @@ class BleEngine @Inject constructor(
             status: Int,
         ) {
             scope.launch {
+                writeAckTimeoutJob?.cancel()
+                writeAckTimeoutJob = null
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     Timber.w(
                         "BleEngine: CCCD write failed for characteristic=${descriptor.characteristic.uuid} status=$status"
@@ -851,6 +887,8 @@ class BleEngine @Inject constructor(
             status: Int,
         ) {
             scope.launch {
+                writeAckTimeoutJob?.cancel()
+                writeAckTimeoutJob = null
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     Timber.e(
                         "BleEngine: write to ${characteristic.uuid} failed (command $commandIndex) status=$status — scheduling retry"
@@ -964,15 +1002,35 @@ class BleEngine @Inject constructor(
         val char = findCharacteristic(uuid) ?: return false
         gatt.setCharacteristicNotification(char, true)
         val descriptor = char.getDescriptor(UUID.fromString(CCCD_UUID)) ?: return false
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            gatt.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+        val writeOk = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            gatt.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) ==
+                BluetoothStatusCodes.SUCCESS
         } else {
             @Suppress("DEPRECATION")
             descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
             @Suppress("DEPRECATION")
             gatt.writeDescriptor(descriptor)
         }
+        if (!writeOk) {
+            Timber.w("BleEngine: writeDescriptor failed synchronously for $uuid — no onDescriptorWrite callback will arrive")
+            return false
+        }
+        armWriteAckWatchdog()
         return true
+    }
+
+    // Fallback for OEM stacks that accept a write synchronously but never invoke
+    // onCharacteristicWrite/onDescriptorWrite. Armed right after a successful write;
+    // cancelled at the top of both callbacks once the real event arrives.
+    private fun armWriteAckWatchdog() {
+        writeAckTimeoutJob?.cancel()
+        writeAckTimeoutJob = scope.launch {
+            delay(WRITE_ACK_TIMEOUT_MS.milliseconds)
+            if (activeGatt == null) return@launch
+            Timber.e("BleEngine: no write-ack callback within ${WRITE_ACK_TIMEOUT_MS}ms (command $commandIndex) — forcing retry")
+            closeGatt()
+            scheduleRetry()
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -1147,18 +1205,30 @@ class BleEngine @Inject constructor(
                     }
                 }
                 Timber.tag(TAG).d("[SYNC] write[%d] char=%s bytes=%s", commandIndex, charUuid, bytes.toHexString())
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val writeOk = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     activeGatt?.writeCharacteristic(
                         char,
                         bytes,
                         BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT,
-                    )
+                    ) == BluetoothStatusCodes.SUCCESS
                 } else {
                     @Suppress("DEPRECATION")
                     char.value = bytes
                     @Suppress("DEPRECATION")
-                    activeGatt?.writeCharacteristic(char)
+                    activeGatt?.writeCharacteristic(char) ?: false
                 }
+                if (!writeOk) {
+                    Timber.e("BleEngine: writeCharacteristic failed synchronously for $charUuid (command $commandIndex) — no callback will arrive, failing fast")
+                    awaitReplyDeferred = null
+                    awaitReplyCharUuid = null
+                    awaitEndOfStreamDeferred = null
+                    awaitEndOfStreamCharUuid = null
+                    awaitEndOfStreamStrategy = null
+                    awaitEndOfStreamArmedAtMs = 0L
+                    scope.launch { closeGatt(); scheduleRetry() }
+                    return
+                }
+                armWriteAckWatchdog()
                 // onCharacteristicWrite advances commandIndex (with await logic if deferred is set)
             }
             is SyncCommand.EnableNotify -> {

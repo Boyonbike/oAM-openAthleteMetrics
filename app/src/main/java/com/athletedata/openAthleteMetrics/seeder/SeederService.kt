@@ -215,7 +215,7 @@ class SeederService @Inject constructor(
     }
 
     private fun computeIllnessDays(dates: List<LocalDate>, rng: Random): Set<LocalDate> {
-        if (dates.size < 5) return emptySet()
+        if (dates.size < 6) return emptySet()
         val duration = rng.nextInt(2) + 2
         val startIdx = rng.nextInt(dates.size - duration - 2) + 2
         return (0 until duration).map { dates[startIdx + it] }.toSet()

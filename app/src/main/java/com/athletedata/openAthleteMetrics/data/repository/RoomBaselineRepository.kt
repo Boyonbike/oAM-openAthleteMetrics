@@ -37,7 +37,7 @@ class RoomBaselineRepository @Inject constructor(
             val summaries = dailySummaryRepository.getSummariesForRange(from, to).first()
             val values = summaries.mapNotNull { valueFor(metric, it) }
 
-            if (values.size < minDays) {
+            if (values.isEmpty() || values.size < minDays) {
                 Timber.d(
                     "BaselineRepository: only %d/%d days of %s data in window — leaving existing baseline in place",
                     values.size, minDays, metric,

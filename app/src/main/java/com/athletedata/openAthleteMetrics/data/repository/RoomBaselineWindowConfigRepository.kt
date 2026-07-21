@@ -35,7 +35,7 @@ class RoomBaselineWindowConfigRepository @Inject constructor(
             BaselineWindowConfigEntity(
                 metricType = metric,
                 windowDays = windowDays,
-                minimumDays = minimumDays,
+                minimumDays = minimumDays.coerceAtLeast(1),
                 updatedAt = Instant.now().toEpochMilli(),
             )
         )

@@ -33,7 +33,7 @@ class DataStoreSettingsRepository @Inject constructor(
     override fun getThemePreference(): Flow<ThemePreference> =
         dataStore.data.map { prefs ->
             val raw = prefs[THEME_KEY] ?: ThemePreference.SYSTEM.name
-            ThemePreference.valueOf(raw)
+            runCatching { ThemePreference.valueOf(raw) }.getOrDefault(ThemePreference.SYSTEM)
         }
 
     /**

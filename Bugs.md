@@ -1,14 +1,11 @@
 # Bug Report (Reordered: Severity → Similarity)
 
+please go to bugs.md, find the first group of bugs identify them in the code, ensure they exist then plan a fix, after a fix is done remove the ting     
+from the bugs.md file and commit the changes to git including a suitable commit message. Do not remove this message from the dugs.md file.  clear?
+
 Autonomous read-only bug-hunting pass over the OpenAthleteMetrics codebase. Findings only — nothing has been fixed yet.
 
 ### Medium Severity
-
-### Worker / seeder correctness
-
-**`worker/DailySummaryWorker.kt`** — Lines 72-239: the entire `doWork()` body, including `LocalDate.parse(dateStr)`, is wrapped in one broad catch that unconditionally returns `Result.retry()`. This doesn't distinguish transient failures from permanent ones (malformed date, logic/null-pointer bug, schema mismatch) — a permanent failure retries forever under WorkManager's backoff, silently consuming battery/CPU indefinitely. Not yet fixed. Suggested fix: catch parse/programmer errors separately and return `Result.failure()`.
-
-**`seeder/SeederService.kt`** — Lines 132-186: if an exception is thrown partway through a date's insert sequence, the catch block records the date as failed but doesn't roll back writes already committed. A subsequent run's `alreadySeeded` check sees the partial data and treats the date as fully seeded, permanently skipping repair. Not yet fixed.
 
 ### Data-integrity gaps at the DB layer
 

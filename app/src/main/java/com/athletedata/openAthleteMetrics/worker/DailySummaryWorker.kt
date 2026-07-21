@@ -33,6 +33,7 @@ import timber.log.Timber
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.format.DateTimeParseException
 
 /**
  * Aggregates one day's worth of raw readings into a [DailySummary] row.
@@ -69,8 +70,14 @@ class DailySummaryWorker @AssistedInject constructor(
         // STEPS-MODE: read from WorkManager input; absent → DELTA (preserves existing behaviour).
         val stepsMode = StepsMode.valueOf(inputData.getString(KEY_STEPS_MODE) ?: StepsMode.DELTA.name) // STEPS-MODE
 
+        val date = try {
+            LocalDate.parse(dateStr)
+        } catch (e: DateTimeParseException) {
+            Timber.tag(TAG).e(e, "[STAGE-7 SUMMARY-WORKER] malformed date=%s — failing permanently", dateStr) // DPT
+            return Result.failure()
+        }
+
         return try {
-            val date = LocalDate.parse(dateStr)
             Timber.tag(TAG).d("[STAGE-7 SUMMARY-WORKER] started for date=%s", dateStr) // DPT
 
             // ── Time boundaries ───────────────────────────────────────────────
@@ -232,6 +239,12 @@ class DailySummaryWorker @AssistedInject constructor(
             Timber.tag(TAG).d("[STAGE-7 SUMMARY-WORKER] complete — avgHr=%s restingHr=%s avgHrv=%s steps=%s sleepMin=%s", // DPT
                 avgHrBpm, restingHrBpm, avgHrvMs, steps, sleepMinutes) // DPT
             Result.success()
+        } catch (e: NullPointerException) {
+            Timber.tag(TAG).e(e, "[STAGE-7 SUMMARY-WORKER] programmer error for date=%s — failing permanently", dateStr) // DPT
+            Result.failure()
+        } catch (e: IllegalStateException) {
+            Timber.tag(TAG).e(e, "[STAGE-7 SUMMARY-WORKER] programmer error for date=%s — failing permanently", dateStr) // DPT
+            Result.failure()
         } catch (e: Exception) {
             Timber.tag(TAG).e("[STAGE-7 SUMMARY-WORKER] ERROR — %s", e.message) // DPT
             Timber.e(e, "DailySummaryWorker failed for date $dateStr")

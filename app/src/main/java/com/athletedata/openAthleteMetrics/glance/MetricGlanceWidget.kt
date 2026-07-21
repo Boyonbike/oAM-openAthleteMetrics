@@ -55,6 +55,7 @@ import com.athletedata.openAthleteMetrics.ui.theme.LightTextPrimary
 import com.athletedata.openAthleteMetrics.ui.theme.LightTextSecondary
 import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.flow.first
+import timber.log.Timber
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -81,13 +82,19 @@ class MetricGlanceWidget : GlanceAppWidget() {
         val entryPoint = EntryPointAccessors.fromApplication(context.applicationContext, WidgetDataEntryPoint::class.java)
         val prefs = getAppWidgetState(context, PreferencesGlanceStateDefinition, id)
         val templateId = prefs[TEMPLATE_ID_KEY]?.let { name -> WidgetTemplateId.entries.find { it.name == name } }
-        val content = templateId?.let { fetchGlanceContent(it, entryPoint) }
-        val themePreference = entryPoint.settingsRepository().getThemePreference().first()
-        val darkTheme = when (themePreference) {
-            ThemePreference.DARK -> true
-            ThemePreference.LIGHT -> false
-            ThemePreference.SYSTEM -> context.isSystemInNightMode()
-        }
+
+        val (content, darkTheme) = runCatching {
+            val content = templateId?.let { fetchGlanceContent(it, entryPoint) }
+            val themePreference = entryPoint.settingsRepository().getThemePreference().first()
+            val darkTheme = when (themePreference) {
+                ThemePreference.DARK -> true
+                ThemePreference.LIGHT -> false
+                ThemePreference.SYSTEM -> context.isSystemInNightMode()
+            }
+            content to darkTheme
+        }.onFailure { e ->
+            Timber.e(e, "Failed to load glance content for widget $id (template=$templateId)")
+        }.getOrDefault(null to context.isSystemInNightMode())
 
         provideContent {
             MetricWidgetContent(templateId, content, darkTheme)
@@ -147,12 +154,13 @@ private suspend fun fetchGlanceContent(templateId: WidgetTemplateId, entryPoint:
             val binding = WidgetTemplates.bindingsFor(templateId).first()
             val summary = entryPoint.dailySummaryRepository().getSummaryForDate(today).first()
             val resolved = resolveDataSource(binding.key, WidgetDataContext(today, summary, null, null, 0))
+            val valueText = formatSingleMetricValue(binding.decimalPlaces, resolved)
             GlanceWidgetContent.Simple(
                 MetricWidgetData(
                     label = binding.label,
-                    valueText = formatSingleMetricValue(binding.decimalPlaces, resolved),
+                    valueText = valueText,
                     unit = binding.unitSuffix,
-                    lastUpdatedText = summary?.computedAt?.let(::formatLastUpdated),
+                    lastUpdatedText = valueText?.let { summary?.computedAt?.let(::formatLastUpdated) },
                 ),
             )
         }
@@ -161,23 +169,25 @@ private suspend fun fetchGlanceContent(templateId: WidgetTemplateId, entryPoint:
             // overnight data (see OvernightHrvCalculator) — matches the in-app bespoke pipeline's
             // three-way state without needing sleepRepo/baselineRepo for a value+label tile.
             val summary = entryPoint.dailySummaryRepository().getSummaryForDate(today).first()
+            val valueText = summary?.overnightHrvMs?.let { "%.0f".format(it) }
             GlanceWidgetContent.Simple(
                 MetricWidgetData(
                     label = "HRV",
-                    valueText = summary?.overnightHrvMs?.let { "%.0f".format(it) },
+                    valueText = valueText,
                     unit = "ms",
-                    lastUpdatedText = summary?.computedAt?.let(::formatLastUpdated),
+                    lastUpdatedText = valueText?.let { summary?.computedAt?.let(::formatLastUpdated) },
                 ),
             )
         }
         WidgetTemplateId.WEIGHT -> {
             val dailyContext = entryPoint.dailyContextRepository().getForDate(today).first()
+            val valueText = dailyContext?.weightKg?.let { "%.1f".format(it) }
             GlanceWidgetContent.Simple(
                 MetricWidgetData(
                     label = "Weight",
-                    valueText = dailyContext?.weightKg?.let { "%.1f".format(it) },
+                    valueText = valueText,
                     unit = "kg",
-                    lastUpdatedText = dailyContext?.updatedAt?.let(::formatLastUpdated),
+                    lastUpdatedText = valueText?.let { dailyContext?.updatedAt?.let(::formatLastUpdated) },
                 ),
             )
         }

@@ -5,12 +5,6 @@ from the bugs.md file and commit the changes to git including a suitable commit 
 
 Autonomous read-only bug-hunting pass over the OpenAthleteMetrics codebase. Findings only — nothing has been fixed yet.
 
-### Medium Severity
-
-### Backup / privacy configuration
-
-**`AndroidManifest.xml`** — Line 50-52: `android:allowBackup="true"` plus unmodified boilerplate `data_extraction_rules.xml`/`backup_rules.xml` mean the entire Room database (HR, HRV, SpO2, blood pressure, glucose, sleep-stage readings) plus DataStore preferences are included in Android's default Auto Backup with no filtering — a privacy-relevant gap for a health-data app that should have deliberate include/exclude rules (or `allowBackup="false"`). Not yet fixed.
-
 ## Low Severity
 
 ### Unvalidated input causes crash or invalid stored value

@@ -26,6 +26,7 @@ import com.athletedata.openAthleteMetrics.data.model.WidgetTemplates
 import com.athletedata.openAthleteMetrics.ui.theme.AthleteDataAppTheme
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
+import timber.log.Timber
 
 /**
  * Per-instance configuration: launched by the OS widget host at add-time (declared via
@@ -84,17 +85,23 @@ class WidgetConfigActivity : ComponentActivity() {
 
     private fun onTemplateSelected(templateId: WidgetTemplateId) {
         lifecycleScope.launch {
-            val glanceId = GlanceAppWidgetManager(this@WidgetConfigActivity).getGlanceIdBy(appWidgetId)
-            updateAppWidgetState(this@WidgetConfigActivity, glanceId) { prefs ->
-                prefs[TEMPLATE_ID_KEY] = templateId.name
-            }
-            MetricGlanceWidget().update(this@WidgetConfigActivity, glanceId)
+            try {
+                val glanceId = GlanceAppWidgetManager(this@WidgetConfigActivity).getGlanceIdBy(appWidgetId)
+                updateAppWidgetState(this@WidgetConfigActivity, glanceId) { prefs ->
+                    prefs[TEMPLATE_ID_KEY] = templateId.name
+                }
+                MetricGlanceWidget().update(this@WidgetConfigActivity, glanceId)
 
-            setResult(
-                RESULT_OK,
-                Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId),
-            )
-            finish()
+                setResult(
+                    RESULT_OK,
+                    Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId),
+                )
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to apply widget template $templateId for widget $appWidgetId")
+                // setResult(RESULT_CANCELED) from onCreate remains in effect.
+            } finally {
+                finish()
+            }
         }
     }
 }

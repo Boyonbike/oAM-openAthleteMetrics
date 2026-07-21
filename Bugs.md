@@ -1,13 +1,8 @@
 # Bug Report (Reordered: Severity → Similarity)
+
 Autonomous read-only bug-hunting pass over the OpenAthleteMetrics codebase. Findings only — nothing has been fixed yet.
 
 ### Medium Severity
-
-### Uncaught exception / never-invoked cleanup
-
-**`glance/WidgetConfigActivity.kt`** — Lines 85-99 (`onTemplateSelected`): the launched coroutine has no try/catch around `getGlanceIdBy`, `updateAppWidgetState`, or `MetricGlanceWidget().update(...)`. Any exception here is uncaught (no app-wide `CoroutineExceptionHandler` exists), crashing the process instead of degrading gracefully — defeating the `setResult(RESULT_CANCELED)` set earlier specifically to let the host discard the widget cleanly. Not yet fixed.
-
-**`AthleteDataApplication.kt`** — Lines 94-98: `onTerminate()` calls `bleEngine.shutdown()`/`syncProcessor.shutdown()`, but `Application.onTerminate()` is documented to never be invoked on real devices — only in the emulator. In production, the BLE engine and sync processor never get a chance to shut down gracefully. Latent resource-leak/cleanup gap. Not yet fixed.
 
 ### Worker / seeder correctness
 

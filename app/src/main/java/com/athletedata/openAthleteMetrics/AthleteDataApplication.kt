@@ -96,6 +96,11 @@ class AthleteDataApplication : Application(), Configuration.Provider {
             .setWorkerFactory(workerFactory)
             .build()
 
+    // Best-effort only: Application.onTerminate() is documented to never fire on real
+    // devices (emulator/test-only). An ON_STOP-based alternative was considered and
+    // rejected: BleSyncService keeps bleEngine/syncProcessor alive while the app is
+    // backgrounded during an active sync (see observeBleSyncService() below), so
+    // shutting them down on backgrounding would break in-flight syncs.
     override fun onTerminate() {
         bleEngine.shutdown()
         syncProcessor.shutdown()

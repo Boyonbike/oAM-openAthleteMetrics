@@ -98,8 +98,14 @@ fun AppNavGraph(
     LaunchedEffect(widgetIntent) {
         val intent = widgetIntent ?: return@LaunchedEffect
         val templateId = intent.getStringExtra(WidgetDeepLink.EXTRA_TEMPLATE_ID)
-            ?.let { name -> WidgetTemplateId.entries.find { it.name == name } } ?: return@LaunchedEffect
-        val date = intent.getStringExtra(WidgetDeepLink.EXTRA_DATE)?.let(LocalDate::parse) ?: LocalDate.now()
+            ?.let { name -> WidgetTemplateId.entries.find { it.name == name } }
+        if (templateId == null) {
+            onWidgetIntentConsumed()
+            return@LaunchedEffect
+        }
+        val date = intent.getStringExtra(WidgetDeepLink.EXTRA_DATE)
+            ?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+            ?: LocalDate.now()
         when (val event = viewModel.resolveWidgetTap(templateId, date)) {
             is DashboardNavigationEvent.OpenDailyDetail -> onOpenDailyDetailAtSection(event.date, event.section, event.metricKey)
             is DashboardNavigationEvent.OpenQuestions -> onNavigateToQuestions(event.date)

@@ -7,12 +7,6 @@ Autonomous read-only bug-hunting pass over the OpenAthleteMetrics codebase. Find
 
 ### Medium Severity
 
-### Migration / schema seeding gaps
-
-**`di/DatabaseModule.kt`** — Lines 169-197: migrations start at `MIGRATION_2_3` with no `MIGRATION_1_2` and no `.fallbackToDestructiveMigration()`, despite `AppDatabase.kt`'s schema-history comment confirming version 1 was a real prior schema. Any installed copy still on schema v1 hits Room's "no migration found" exception at database-open time with no recovery path short of clearing app data. Not yet fixed.
-
-**`data/db/AppDatabase.kt`** — No `RoomDatabase.Callback`/`onCreate` hook is registered anywhere, and `widget_layout` is only ever populated inside migrations. A brand-new install that creates the database fresh at version 19 never runs any migration, so `widget_layout` starts empty and the dashboard has zero default widgets until manually added. Not yet fixed. Suggested fix: seed the default layout via `RoomDatabase.Callback.onCreate()` in addition to migration-time reseeding, or check-and-seed at app startup.
-
 ### Backup / privacy configuration
 
 **`AndroidManifest.xml`** — Line 50-52: `android:allowBackup="true"` plus unmodified boilerplate `data_extraction_rules.xml`/`backup_rules.xml` mean the entire Room database (HR, HRV, SpO2, blood pressure, glucose, sleep-stage readings) plus DataStore preferences are included in Android's default Auto Backup with no filtering — a privacy-relevant gap for a health-data app that should have deliberate include/exclude rules (or `allowBackup="false"`). Not yet fixed.

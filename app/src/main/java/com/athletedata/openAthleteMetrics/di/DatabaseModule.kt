@@ -2,6 +2,8 @@ package com.athletedata.openAthleteMetrics.di
 
 import android.content.Context
 import androidx.room.Room
+import androidx.room.RoomDatabase
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.athletedata.openAthleteMetrics.data.db.ActiveCalorieReadingDao
 import com.athletedata.openAthleteMetrics.data.db.ActivityDao
 import com.athletedata.openAthleteMetrics.data.db.AppDatabase
@@ -194,6 +196,26 @@ abstract class DatabaseModule {
                 AppDatabase.MIGRATION_17_18,
                 AppDatabase.MIGRATION_18_19,
             )
+            // MIGRATION_1_2 was never authored and the true v1->v2 schema diff is undocumented
+            // (see AppDatabase's schema-history comment). Rather than guess at it, destructively
+            // reset only databases still stuck on the original v1 schema so they recover via
+            // onCreate seeding below instead of crashing on open with "no migration found".
+            .fallbackToDestructiveMigrationFrom(dropAllTables = true, 1)
+            .addCallback(object : RoomDatabase.Callback() {
+                override fun onCreate(db: SupportSQLiteDatabase) {
+                    super.onCreate(db)
+                    // Migrations never run for a brand-new install (Room creates tables at the
+                    // current version directly), so widget_layout is otherwise left empty and
+                    // the dashboard has no default widgets. Seed the same default layout that
+                    // MIGRATION_18_19 seeds for upgrading installs.
+                    AppDatabase.DEFAULT_WIDGET_LAYOUT.forEach { (template, colSpan, rowSpan, order) ->
+                        db.execSQL(
+                            "INSERT INTO widget_layout (template_id, col_span, row_span, sequence_order) VALUES (?, ?, ?, ?)",
+                            arrayOf(template, colSpan, rowSpan, order)
+                        )
+                    }
+                }
+            })
             .build()
 
         @Provides @Singleton

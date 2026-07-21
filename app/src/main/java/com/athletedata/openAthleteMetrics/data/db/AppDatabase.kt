@@ -992,7 +992,25 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        private data class DefaultWidget(val templateId: String, val colSpan: Int, val rowSpan: Int, val sequenceOrder: Int)
+        internal data class DefaultWidget(val templateId: String, val colSpan: Int, val rowSpan: Int, val sequenceOrder: Int)
+
+        /**
+         * Single source of truth for the default dashboard layout, shared by [MIGRATION_18_19]
+         * and the fresh-install `onCreate` seeding in `DatabaseModule` (Room only runs
+         * migrations on upgrade, never on a brand-new database).
+         */
+        internal val DEFAULT_WIDGET_LAYOUT = listOf(
+            DefaultWidget("HR", 1, 1, 0),
+            DefaultWidget("HRV", 1, 1, 1),
+            DefaultWidget("RHR", 1, 1, 2),
+            DefaultWidget("SLEEP_SUMMARY_SMALL", 1, 1, 3),
+            DefaultWidget("SPO2", 1, 1, 4),
+            DefaultWidget("STEPS", 1, 1, 5),
+            DefaultWidget("WEIGHT", 2, 1, 6),
+            DefaultWidget("STARRED_LIFESTYLE_BAR", 2, 1, 7),
+            DefaultWidget("CUSTOM_QUESTIONS_BAR", 2, 1, 8),
+            DefaultWidget("ACTIVITIES", 2, 1, 9),
+        )
 
         // Replaces widget_layout's widget_type/size/extra_id discriminator columns with
         // template_id/col_span/row_span for the skyline-packer grid rewrite. No per-row
@@ -1013,19 +1031,7 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                     """.trimIndent()
                 )
-                val defaults = listOf(
-                    DefaultWidget("HR", 1, 1, 0),
-                    DefaultWidget("HRV", 1, 1, 1),
-                    DefaultWidget("RHR", 1, 1, 2),
-                    DefaultWidget("SLEEP_SUMMARY_SMALL", 1, 1, 3),
-                    DefaultWidget("SPO2", 1, 1, 4),
-                    DefaultWidget("STEPS", 1, 1, 5),
-                    DefaultWidget("WEIGHT", 2, 1, 6),
-                    DefaultWidget("STARRED_LIFESTYLE_BAR", 2, 1, 7),
-                    DefaultWidget("CUSTOM_QUESTIONS_BAR", 2, 1, 8),
-                    DefaultWidget("ACTIVITIES", 2, 1, 9),
-                )
-                defaults.forEach { (template, colSpan, rowSpan, order) ->
+                DEFAULT_WIDGET_LAYOUT.forEach { (template, colSpan, rowSpan, order) ->
                     db.execSQL(
                         "INSERT INTO widget_layout (template_id, col_span, row_span, sequence_order) VALUES (?, ?, ?, ?)",
                         arrayOf(template, colSpan, rowSpan, order)

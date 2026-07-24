@@ -41,6 +41,7 @@ import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.data.model.RawPayload
 import com.athletedata.openAthleteMetrics.data.model.SleepSession
 import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
+import com.athletedata.openAthleteMetrics.data.repository.MetricStatsBackfillCoordinator
 import com.athletedata.openAthleteMetrics.data.repository.RawDeviceDataRepository
 import com.athletedata.openAthleteMetrics.worker.enqueueSummaryWorker
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -90,6 +91,7 @@ class BleEngine @Inject constructor(
     private val rawDeviceDataRepository: RawDeviceDataRepository,
     private val metricRouter: MetricRouter,
     private val workManager: WorkManager,
+    private val metricStatsBackfillCoordinator: MetricStatsBackfillCoordinator,
 ) {
     companion object {
         private const val TAG = "data-pathway-tracker" // DPT
@@ -484,6 +486,10 @@ class BleEngine @Inject constructor(
                             Timber.tag(TAG).d("[STAGE-6 DB-WRITE] enqueuing DailySummaryWorker for date=%s stepsMode=%s", date, manifestStepsMode) // DPT / STEPS-MODE
                             enqueueSummaryWorker(date, workManager, manifestStepsMode) // STEPS-MODE
                         }
+                        // AFFECTED-DATES: a reconnecting device can dump buffered historical
+                        // readings, not just "today" — treat every drained date as a potential
+                        // backfill source for metric_daily_stats, not only the live per-date write.
+                        metricStatsBackfillCoordinator.enqueueSpanRecompute(datesToProcess)
                     }
                 }
             }
@@ -591,6 +597,7 @@ class BleEngine @Inject constructor(
                 Timber.tag(TAG).d("[STAGE-6 SYNC] enqueueing DailySummaryWorker for date=%s", date) // AFFECTED-DATES
                 enqueueSummaryWorker(date, workManager, manifestStepsMode) // AFFECTED-DATES
             } // AFFECTED-DATES
+            metricStatsBackfillCoordinator.enqueueSpanRecompute(datesToEnqueue) // AFFECTED-DATES
         }
     }
 
@@ -1455,6 +1462,7 @@ class BleEngine @Inject constructor(
                         date, manifest.stepsMode)
                     enqueueSummaryWorker(date, workManager, manifest.stepsMode)
                 }
+                metricStatsBackfillCoordinator.enqueueSpanRecompute(datesToProcess)
                 postStreamDisconnecting = false
             }
         }

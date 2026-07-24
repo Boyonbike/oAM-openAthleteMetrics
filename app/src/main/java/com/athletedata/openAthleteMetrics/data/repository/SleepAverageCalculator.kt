@@ -23,8 +23,8 @@ private const val NOON_MINUTES = 720
  * window/minimum via [BaselineWindowConfigRepository] (override → [com.athletedata.openAthleteMetrics.data.model.BaselineFallbackDefaults]
  * → global setting), so a user override on one sleep metric doesn't affect the others.
  *
- * Deliberately separate from [BaselineRepository]/[RoomBaselineRepository]: these are plain
- * averages for display, not mean±SD baseline bands, and are computed on demand rather than
+ * Deliberately separate from the mean±SD baseline-band system (`metric_daily_stats`): these
+ * are plain averages for display, not baseline bands, and are computed on demand rather than
  * persisted or recalculated by a worker.
  */
 class SleepAverageCalculator @Inject constructor(

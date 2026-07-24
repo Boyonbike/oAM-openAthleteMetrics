@@ -34,9 +34,27 @@ android {
         // AGP 9+ automatically propagates this Java target to the Kotlin JVM target
     }
 
+    // Without this, Robolectric's simulated AssetManager sees none of AGP's merged
+    // resources/assets for unit tests (needed by MigrationTestHelper's schema-json lookup below).
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true  // exposes BuildConfig.DEBUG for the seeder guard
+    }
+
+    // Exposes the exported Room schema JSONs (app/schemas) to Robolectric-based unit tests so
+    // MigrationTestHelper can validate a real MIGRATION_x_y against them. Robolectric's simulated
+    // AssetManager (via testOptions.unitTests.isIncludeAndroidResources above) only sees assets
+    // merged into the *debug* variant itself (per AGP's generated test_config.properties -- there
+    // is no separate "unit test only" merged-assets set) -- so this must be the `debug` source
+    // set, not `test`. Scoped to `debug` (not `main`), these never ship in a release build.
+    sourceSets {
+        getByName("debug") {
+            assets.srcDirs("$projectDir/schemas")
+        }
     }
 }
 
@@ -134,6 +152,13 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.json)
     testImplementation(libs.robolectric)
+    // Migration testing: MigrationTestHelper (room-testing) + InstrumentationRegistry (test:core),
+    // the latter supported by Robolectric under plain JVM unit tests.
+    testImplementation(libs.androidx.room.testing)
+    testImplementation(libs.androidx.test.core)
+    // WorkManager testing: TestListenableWorkerBuilder / WorkManagerTestInitHelper, for
+    // exercising MetricStatsRecomputeWorker/DailySummaryWorker synchronously in Robolectric.
+    testImplementation(libs.androidx.work.testing)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

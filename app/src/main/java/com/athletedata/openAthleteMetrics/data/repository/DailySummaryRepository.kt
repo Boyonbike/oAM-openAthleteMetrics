@@ -23,6 +23,9 @@ interface DailySummaryRepository {
     /** One-shot read for a specific date; used by DailySummaryWorker before writing. */
     suspend fun getSummaryForDateOnce(date: LocalDate): DailySummary?
 
+    /** Most recent date with a summary row, or null if empty. Bounds backfill-span recompute. */
+    suspend fun getLatestDateOnce(): LocalDate?
+
     /** Deletes all summary rows; called after seeder data is cleared so stale summaries don't linger. */
     suspend fun deleteAll()
 }

@@ -21,11 +21,11 @@ import com.athletedata.openAthleteMetrics.data.model.TimestampedReading
 import com.athletedata.openAthleteMetrics.data.model.UserCategory
 import com.athletedata.openAthleteMetrics.data.repository.ActiveCalorieReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.ActivityRepository
-import com.athletedata.openAthleteMetrics.data.repository.BaselineRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailyContextRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailySummaryRepository
 import com.athletedata.openAthleteMetrics.data.repository.HrReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.HrvReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.MetricDailyStatsReader
 import com.athletedata.openAthleteMetrics.data.repository.QuestionRepository
 import com.athletedata.openAthleteMetrics.data.repository.RespirationReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.SettingsRepository
@@ -63,7 +63,7 @@ class DailyDetailViewModel @Inject constructor(
     private val questionRepo: QuestionRepository,
     private val sleepRepo: SleepRepository,
     private val sleepDetailProvider: SleepDetailProvider,
-    private val baselineRepo: BaselineRepository,
+    private val metricDailyStatsReader: MetricDailyStatsReader,
     private val hrRepo: HrReadingRepository,
     private val hrvRepo: HrvReadingRepository,
     private val spo2Repo: SpO2ReadingRepository,
@@ -167,7 +167,7 @@ class DailyDetailViewModel @Inject constructor(
             val hrvSectionFlow: Flow<HrvSectionState> = combine(
                 sleepRepo.getSessionForDate(date),
                 summaryRepo.getSummaryForDate(date),
-                baselineRepo.observeRange(BaselineMetric.HRV),
+                metricDailyStatsReader.observeBaselineRange(BaselineMetric.HRV, date),
             ) { session, summary, baseline ->
                 if (session == null) return@combine HrvSectionState.NoSleepSession
                 val hrvStartMs = session.sleepStartMs.toEpochMilli()

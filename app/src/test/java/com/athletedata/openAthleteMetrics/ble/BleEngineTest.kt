@@ -29,6 +29,7 @@ import com.athletedata.openAthleteMetrics.data.model.DataSource
 import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
+import com.athletedata.openAthleteMetrics.data.repository.MetricStatsBackfillCoordinator
 import com.athletedata.openAthleteMetrics.data.repository.RawDeviceDataRepository
 import io.mockk.coEvery
 import io.mockk.coVerifyOrder
@@ -68,6 +69,7 @@ class BleEngineTest {
     private lateinit var rawDeviceDataRepository: RawDeviceDataRepository
     private lateinit var metricRouter: MetricRouter
     private lateinit var workManager: WorkManager
+    private lateinit var metricStatsBackfillCoordinator: MetricStatsBackfillCoordinator
     private lateinit var engine: BleEngine
     // CHANGED: named (not anonymous) so tests can drive its virtual clock directly via
     // testDispatcher.scheduler.advanceTimeBy(...) + runCurrent().
@@ -88,6 +90,7 @@ class BleEngineTest {
         rawDeviceDataRepository = mockk(relaxed = true)
         metricRouter = mockk(relaxed = true)
         workManager = mockk(relaxed = true)
+        metricStatsBackfillCoordinator = mockk(relaxed = true)
 
         engine = BleEngine(
             context = mockk<Context>(relaxed = true),
@@ -99,6 +102,7 @@ class BleEngineTest {
             rawDeviceDataRepository = rawDeviceDataRepository,
             metricRouter = metricRouter,
             workManager = workManager,
+            metricStatsBackfillCoordinator = metricStatsBackfillCoordinator,
         )
     }
 

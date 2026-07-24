@@ -44,6 +44,8 @@ class RoomDailySummaryRepository @Inject constructor(
     override suspend fun getSummaryForDateOnce(date: LocalDate): DailySummary? =
         dao.getSummaryForDateOnce(date)?.toModel()
 
+    override suspend fun getLatestDateOnce(): LocalDate? = dao.getLatestDateOnce()
+
     override suspend fun deleteAll() {
         try {
             dao.deleteAll()

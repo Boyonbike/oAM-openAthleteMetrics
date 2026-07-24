@@ -44,6 +44,14 @@ interface DailySummaryDao {
     @Query("SELECT * FROM daily_summary WHERE date = :date LIMIT 1")
     suspend fun getSummaryForDateOnce(date: LocalDate): DailySummaryEntity?
 
+    /**
+     * Most recent date with a summary row, or null if empty. Used to bound backfill-span
+     * recompute so it never reaches past the last date with actual data — deliberately not
+     * [java.time.LocalDate.now], which would be wrong for a device whose sync lags "today".
+     */
+    @Query("SELECT MAX(date) FROM daily_summary")
+    suspend fun getLatestDateOnce(): LocalDate?
+
     /** Deletes all rows; called after seeder data is cleared. */
     @Query("DELETE FROM daily_summary")
     suspend fun deleteAll()

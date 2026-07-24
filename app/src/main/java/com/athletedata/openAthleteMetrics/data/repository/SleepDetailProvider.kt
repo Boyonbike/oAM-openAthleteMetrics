@@ -1,6 +1,8 @@
 package com.athletedata.openAthleteMetrics.data.repository
 
+import com.athletedata.openAthleteMetrics.data.db.MetricDailyStatsEntity
 import com.athletedata.openAthleteMetrics.data.db.SleepStageEntity
+import com.athletedata.openAthleteMetrics.data.model.BaselineMetric
 import com.athletedata.openAthleteMetrics.data.model.DailySummary
 import com.athletedata.openAthleteMetrics.data.model.HypnogramSegment
 import com.athletedata.openAthleteMetrics.data.model.SleepAverages
@@ -36,6 +38,7 @@ class SleepDetailProvider @Inject constructor(
     private val sleepStageRepo: SleepStageRepository,
     private val sleepAverageCalculator: SleepAverageCalculator,
     private val summaryRepo: DailySummaryRepository,
+    private val metricDailyStatsReader: MetricDailyStatsReader,
 ) {
 
     fun observeSleepData(date: LocalDate): Flow<SleepData?> {
@@ -51,7 +54,7 @@ class SleepDetailProvider @Inject constructor(
                 }
             }
 
-        val averagesFlow = sleepAverageCalculator.observe(date)
+        val averagesFlow = observeAverages(date)
         val historyFlow = observeDurationHistory(date)
 
         return combine(
@@ -65,6 +68,45 @@ class SleepDetailProvider @Inject constructor(
     }
 
     suspend fun getSleepDataOnce(date: LocalDate): SleepData? = observeSleepData(date).first()
+
+    /**
+     * SLEEP/SLEEP_DEEP/SLEEP_LIGHT/SLEEP_REM/SLEEP_AWAKE read from the point-in-time
+     * `metric_daily_stats` table (parity with [SleepAverageCalculator]'s live computation
+     * verified by SleepDetailProviderParityTest). SLEEP_ONSET/SLEEP_WAKE have no stored row
+     * (circular time-of-day means, out of scope for that table — see CalculatorModule) and
+     * stay on the live calculator.
+     */
+    private fun observeAverages(date: LocalDate): Flow<SleepAverages> {
+        val storedFlow = combine(
+            metricDailyStatsReader.observeFresh(BaselineMetric.SLEEP, date),
+            metricDailyStatsReader.observeFresh(BaselineMetric.SLEEP_DEEP, date),
+            metricDailyStatsReader.observeFresh(BaselineMetric.SLEEP_LIGHT, date),
+            metricDailyStatsReader.observeFresh(BaselineMetric.SLEEP_REM, date),
+            metricDailyStatsReader.observeFresh(BaselineMetric.SLEEP_AWAKE, date),
+        ) { sleep, deep, light, rem, awake -> StoredSleepStats(sleep, deep, light, rem, awake) }
+
+        return combine(sleepAverageCalculator.observe(date), storedFlow) { live, stored ->
+            SleepAverages(
+                // .toInt() (truncating), not roundToInt(), to match SleepAverageCalculator's
+                // own truncating average().toInt()/avgMinutes.toInt() display convention.
+                avgTotalMinutes = stored.sleep?.mean?.toInt(),
+                avgOnsetTime = live.avgOnsetTime,
+                avgWakeTime = live.avgWakeTime,
+                avgDeepMinutes = stored.deep?.mean?.toInt(), avgDeepPct = stored.deep?.meanPct,
+                avgLightMinutes = stored.light?.mean?.toInt(), avgLightPct = stored.light?.meanPct,
+                avgRemMinutes = stored.rem?.mean?.toInt(), avgRemPct = stored.rem?.meanPct,
+                avgAwakeMinutes = stored.awake?.mean?.toInt(), avgAwakePct = stored.awake?.meanPct,
+            )
+        }
+    }
+
+    private data class StoredSleepStats(
+        val sleep: MetricDailyStatsEntity?,
+        val deep: MetricDailyStatsEntity?,
+        val light: MetricDailyStatsEntity?,
+        val rem: MetricDailyStatsEntity?,
+        val awake: MetricDailyStatsEntity?,
+    )
 
     private fun observeDurationHistory(date: LocalDate): Flow<List<TimestampedReading>> =
         sleepRepo.getSessionsForRange(date.minusDays(6), date).map { sessions ->

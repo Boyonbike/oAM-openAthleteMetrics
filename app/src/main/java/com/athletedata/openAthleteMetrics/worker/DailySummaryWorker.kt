@@ -21,12 +21,11 @@ import com.athletedata.openAthleteMetrics.data.db.SleepStageDao
 import com.athletedata.openAthleteMetrics.data.db.SpO2ReadingDao
 import com.athletedata.openAthleteMetrics.data.db.StepsReadingDao
 import com.athletedata.openAthleteMetrics.data.db.TotalCalorieReadingDao
-import com.athletedata.openAthleteMetrics.data.model.BaselineMetric
 import com.athletedata.openAthleteMetrics.data.model.DailySummary
 import com.athletedata.openAthleteMetrics.data.model.DataSource
 import com.athletedata.openAthleteMetrics.data.model.SleepStage
-import com.athletedata.openAthleteMetrics.data.repository.BaselineRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailySummaryRepository
+import com.athletedata.openAthleteMetrics.data.repository.MetricDailyStatsWriter
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import timber.log.Timber
@@ -62,7 +61,7 @@ class DailySummaryWorker @AssistedInject constructor(
     private val sleepStageDao: SleepStageDao,
     private val dailySummaryRepository: DailySummaryRepository,
     private val overnightHrvCalculator: OvernightHrvCalculator,
-    private val baselineRepository: BaselineRepository,
+    private val metricDailyStatsWriter: MetricDailyStatsWriter,
 ) : CoroutineWorker(context, workerParams) {
 
     override suspend fun doWork(): Result {
@@ -232,9 +231,9 @@ class DailySummaryWorker @AssistedInject constructor(
                 )
             )
 
-            // Baseline has no periodic job — recalculate on-demand once per metric now
-            // that the day's summary is up to date.
-            BaselineMetric.entries.forEach { metric -> baselineRepository.recalculate(metric) }
+            // metric_daily_stats: per-day, point-in-time write anchored to this worker's own
+            // `date`/`zone` (never now()).
+            metricDailyStatsWriter.write(date, zone)
 
             Timber.tag(TAG).d("[STAGE-7 SUMMARY-WORKER] complete — avgHr=%s restingHr=%s avgHrv=%s steps=%s sleepMin=%s", // DPT
                 avgHrBpm, restingHrBpm, avgHrvMs, steps, sleepMinutes) // DPT

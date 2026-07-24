@@ -5,11 +5,13 @@ package com.athletedata.openAthleteMetrics.data.model
  * [MetricType] (which models raw BLE reading routing and has no SLEEP value —
  * sleep duration comes from daily_summary, not a routed reading type).
  *
- * SLEEP_DEEP/SLEEP_LIGHT/SLEEP_REM/SLEEP_AWAKE/SLEEP_ONSET/SLEEP_WAKE exist only to let
- * [com.athletedata.openAthleteMetrics.data.repository.SleepAverageCalculator] reuse the
- * window/minimum resolution in [com.athletedata.openAthleteMetrics.data.repository.BaselineWindowConfigRepository]
- * for plain display averages — they are not part of the mean±SD baseline-band system
- * (see [RoomBaselineRepository.valueFor] no-op branch).
+ * HR/HRV/RHR/SLEEP/SPO2/STEPS plus the four sleep-stage metrics (SLEEP_DEEP/LIGHT/REM/AWAKE)
+ * are all part of the mean±SD baseline-band system: each is computed into `metric_daily_stats`
+ * (mean/std_dev) by a [com.athletedata.openAthleteMetrics.data.repository.MetricStatsCalculator].
+ * SLEEP_ONSET/SLEEP_WAKE are the two deferred exceptions — they stay on the live
+ * [com.athletedata.openAthleteMetrics.data.repository.SleepAverageCalculator] as a
+ * time-of-day average rather than a numeric mean/std_dev fit, so they never populate a
+ * `metric_daily_stats` row.
  */
 enum class BaselineMetric {
     HR, HRV, RHR, SLEEP, SPO2, STEPS,

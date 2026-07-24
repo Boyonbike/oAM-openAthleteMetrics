@@ -1,0 +1,318 @@
+ ▐▛███▜▌   Claude Code v2.1.217
+▝▜█████▛▘  Sonnet 5 · Claude Pro
+  ▘▘ ▝▝    ~/StudioProjects/OAM
+
+
+❯ CONTEXT                                                                       
+  oAM (Open Athlete Metrics), local-first Android athlete tracker.              
+  On-disk package: com.athletedata.openAthleteMetrics.                          
+  Kotlin, Jetpack Compose, MVVM, Room, Hilt, Coroutines, Flow, WorkManager.     
+  BLE drivers are JSON manifests with embedded base64 WASM run via Chicory;     
+  plugin-only.                                                                  
+  Multiple physical BLE devices on one phone.                                   
+  Paste the Master Plan and MVP Build Spec before this prompt.                  
+                                                                                
+  This is a READ-ONLY RECON to lock two upcoming sessions: (5) syncing multiple 
+  devices                                                                       
+  SEQUENTIALLY — one at a time, primary first, reusing the single-connection    
+  engine (NOT                                                                   
+  concurrent connections); (6) background/unattended sync via WorkManager +     
+  CompanionDeviceManager. Do not edit any code. Findings only, file:line        
+  throughout.                                                                   
+                                                                                
+  INVESTIGATE AND REPORT                                                        
+                                                                                
+  1. SINGLE-SYNC LIFECYCLE (end to end)                                         
+     - Trace one device sync start-to-finish in BleEngine: connect,             
+  notification handling                                                         
+       (handleNotification), how end-of-stream is detected (awaitEndOfStream or 
+  equivalent),                                                                  
+       and disconnect. Give the exact call sequence + file:line.                
+     - Single-connection state: activeGatt, activeManifest, activeDeviceAddress 
+  — confirm all                                                                 
+       singular. Confirm startScan() gating (idle/error only).                  
+                                                                                
+  2. SYNC TRIGGERING / QUEUING                                                  
+     - How is a full sync invoked from (a) autoConnectOnStartup and (b) the     
+  manual                                                                        
+       onSyncTapped path? Is there any existing queue/orchestration, or is each 
+  a one-shot?                                                                   
+     - What would a "run an ordered list of devices, one after another"         
+  orchestrator wrap —                                                           
+       the connect/sync/disconnect unit, or something higher? Identify the      
+  exact seam.                                                                   
+                                                                                
+  3. REASSEMBLY BUFFER SAFETY                                                   
+     - reassemblyBuffers: how keyed, and exactly where/when cleared. Confirm    
+  they are cleared                                                              
+       on disconnect / between connections, so strictly-sequential runs cannot  
+  bleed one                                                                     
+       device's packets into another's. file:line for the clear.                
+                                                                                
+  4. CONNECTION STATE & SERVICE                                                 
+     - BleConnectionState: shape, the single StateFlow, and who observes it     
+  (UI/service).                                                                 
+     - BleSyncService: lifecycle (how started/stopped), the notification        
+  content and how it                                                            
+       is updated — the seam for a per-device "Syncing X (n of m)" progress     
+  notification.                                                                 
+                                                                                
+  5. WORKMANAGER SETUP (for session 6)                                          
+     - How existing Workers (AppStartupWorker, WidgetRefreshWorker,             
+  DailySummaryWorker) are                                                       
+       registered and scheduled. Is there a Hilt WorkerFactory / custom         
+  Configuration? Where                                                          
+       would a new periodic background-sync Worker slot in?                     
+     - Confirm there is NO existing periodic BLE sync worker today.             
+                                                                                
+  6. BOOTSTRAP & PLATFORM                                                       
+     - Where/when autoConnectOnStartup is triggered at process start (to avoid  
+  double-firing                                                                 
+       with a new background scheduler).                                        
+     - Android minSdk / targetSdk (build.gradle.kts) — relevant to              
+  CompanionDeviceManager                                                        
+       association/observation and background-BLE limits.                       
+     - Reconfirm there is ZERO CompanionDeviceManager usage anywhere, and       
+  report the current                                                            
+       scan/pairing entry points (startScan and its callers) where an           
+  association step would                                                        
+       later attach.                                                            
+                                                                                
+  OUTPUT                                                                        
+  - Findings report in Markdown. Lead with a short "facts sessions 5 & 6 must   
+  embed" list                                                                   
+    (the orchestrator seam; the reassembly-clear guarantee; the BleSyncService  
+  notification                                                                  
+    seam; the WorkManager registration pattern; minSdk/targetSdk; the           
+  startup-trigger site).                                                        
+    Then a section per item above with file:line evidence. No code changes.     
+
+● I'll delegate this to a research agent since it requires tracing code across
+  many files with file:line precision — I'll run it in the foreground since the
+  report itself is the deliverable you need back.
+
+● Agent(BLE sync lifecycle recon for sessions 5&6)
+  ⎿  Done (26 tool uses · 108.2k tokens · 3m 24s)
+  (ctrl+o to expand)
+
+● Let me spot-check a handful of the load-bearing file:line claims before
+  handing this over, since these numbers will lock design decisions.
+
+  Searched for 2 patterns, ran 1 shell command (ctrl+o to expand)
+
+● All the load-bearing line numbers check out exactly against the source (state
+  fields, reassembly-buffer clears, SDK versions). The third grep just hit a
+  shell globbing quirk — rerunning it directly.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Confirmed: zero CompanionDeviceManager usage anywhere, and the core function
+  line numbers match exactly. The report is solid. Here it is:
+
+  Findings Report: BLE Multi-Device Sync & Background Scheduling Recon
+
+  Facts sessions 5 & 6 must embed
+
+  - Orchestrator seam: No queue/orchestration abstraction exists anywhere. A
+  sequential-device orchestrator is a new component sitting above BleEngine,
+  driving fun connectToDevice(bleAddress: String, manifest: WasmDriverManifest)
+  at BleEngine.kt:237 one device at a time, observing val connectionState: 
+  StateFlow<BleConnectionState> at BleEngine.kt:188 for a terminal state, then
+  calling fun disconnect() at BleEngine.kt:325 before advancing.
+  connectToDevice()/connect() have no internal reentrancy gate — only callers
+  (autoConnectOnStartup, DevicesViewModel) currently self-gate. An orchestrator
+  must supply its own gate, or calling it again mid-cycle will clobber
+  activeGatt/activeManifest/activeDeviceAddress and orphan the previous
+  BluetoothGatt.
+  - Reassembly-buffer-clear guarantee: reassemblyBuffers (BleEngine.kt:131,
+  keyed by characteristic UUID only, not per-device) is cleared at disconnect()
+  (:346), triggerSync() (:587), unconditionally at the top of every connect()
+  (:678), and in dispatchPostStreamParse() (:1388). Sequential runs cannot leak
+  packets between devices — provided the orchestrator never re-enters
+  connectToDevice() before the prior cycle's disconnect/parse has actually
+  completed (same caveat as above).
+  - BleSyncService notification seam: buildNotification() at
+  BleSyncService.kt:51-59 currently emits a static "Syncing device…" string;
+  onStartCommand's intent param is unused (line 35). This is the seam for a
+  future "Syncing X (n of m)" notification, but it needs a data path added first
+  (Intent extras, or the service observing BleEngine state itself).
+  - WorkManager registration pattern: One-time work uses enqueueUniqueWork +
+  ExistingWorkPolicy (AppStartupWorker.kt:39-45); periodic uses
+  enqueueUniquePeriodicWork + ExistingPeriodicWorkPolicy
+  (WidgetRefreshWorker.kt:42-49, 30-min interval). Hilt wiring:
+  AthleteDataApplication implements Configuration.Provider, injects
+  HiltWorkerFactory (AthleteDataApplication.kt:94-97); default WorkManager
+  initializer is removed in AndroidManifest.xml:142-151. No existing Worker uses
+  Constraints — a background-sync Worker would be the first. No periodic 
+  BLE-sync Worker exists today (confirmed by grep).
+  - minSdk/targetSdk: minSdk = 26, targetSdk = 36, compileSdk = 37 —
+  app/build.gradle.kts:11,15,16 (verified directly). targetSdk 36 already
+  enforces Android 12+ BLE runtime permissions and Android 14
+  foreground-service-type (connectedDevice, already declared).
+  - Startup-trigger site: bleEngine.autoConnectOnStartup() fires exactly once,
+  unconditionally, from MainActivity.onCreate() at MainActivity.kt:34 — not from
+  Application.onCreate() or any Worker. A background scheduler must coordinate
+  with this Activity-driven trigger to avoid double-firing.
+
+  ---
+  1. Single-sync lifecycle (end to end)
+
+  State fields — confirmed singular (verified directly against source):
+  - activeManifest: WasmDriverManifest? — BleEngine.kt:112
+  - activeDeviceAddress: String? — BleEngine.kt:113
+  - activeGatt: BluetoothGatt? — BleEngine.kt:175
+
+  One @Singleton BleEngine instance holds exactly one of each — no per-device
+  collections.
+
+  Call sequence for one full sync:
+  1. connectToDevice(bleAddress, manifest) (:237) → connect(device, manifest, 
+  resetRetries = true) (:246).
+  2. connect() (:650-693): clears accumulators + reassemblyBuffers.clear()
+  (:678), sets Connecting state (:686), device.connectGatt(...) (:688).
+  3. onConnectionStateChange (:698) → STATE_CONNECTED → gatt.requestMtu(...)
+  (:705).
+  4. onMtuChanged (:738) → gatt.discoverServices() (:747).
+  5. onServicesDiscovered (:751) → builds notify queue →
+  enableNextNotification() (:771).
+  6. enableNextNotification() (:997) drains queue → beginSyncCommandExecution()
+  (:1004).
+  7. beginSyncCommandExecution() (:1049) sets Syncing (:1052) →
+  executeNextSyncCommand() (:1065).
+  8. executeNextSyncCommand() (:1114) walks Write/EnableNotify/Delay commands,
+  arming awaitReplyDeferred/awaitEndOfStreamDeferred (:1176-1214).
+  9. Notifications arrive via onCharacteristicChanged (:807, :850) → checked
+  against awaitEndOfStreamStrategy (:826, :869) → forwarded to
+  notificationChannel (:137).
+  10. A dedicated consumer coroutine (init, :212-218) drains the channel and
+  calls handleNotification(characteristicUuid, bytes) (:412) — appends into
+  reassemblyBuffers[uuid] (:427), detects completion when a fragment is shorter
+  than negotiatedMtu - 3 (:431), persists raw packets immediately (:452-456).
+  11. End-of-stream detection: (a) driver-declared awaitEndOfStream resolved in
+  onCharacteristicWrite's aesDeferred branch (:932-982), setting
+  endOfStreamReceived = true (:977); (b) fallback quiescence/silent-sync timers
+  when no strategy is declared (:467 gate, :1130).
+  12. All commands done + EOS received → dispatchPostStreamParse() (:1360):
+  closes GATT (:1377-1379), clears reassemblyBuffers (:1388), parses
+  sessionCache, enqueues DailySummaryWorker, sets SyncComplete (:1453).
+  Passive-stream drivers (no EOS) stay Connected until manual disconnect()
+  (:325) or acknowledgeSyncComplete() (:363).
+  13. Re-sync of an already-connected device goes through triggerSync() (:506)
+  directly, clearing reassemblyBuffers again (:587).
+
+  startScan() gating (:261-323): line 264 returns early unless current state is
+  Idle/Error/GattCacheError — scanning is blocked while
+  connected/connecting/syncing. connectToDevice()/connect() themselves have no 
+  equivalent internal gate — this is the key gap an orchestrator must fill.
+
+  ---
+  2. Sync triggering / queuing
+
+  (a) Startup: MainActivity.onCreate() → autoConnectOnStartup(). This picks the
+  most-recently-synced/seen device (maxByOrNull { lastSyncMs ?: lastSeenMs ?: 0L
+  }, :230) — there is no "primary device" concept in the Device model (only
+  lastSeenMs/lastSyncMs/lastBatteryPct). Session 5's "primary first" ordering
+  needs a new field.
+
+  (b) Manual tap: DevicesViewModel.onSyncTapped() → bleEngine.startSync(),
+  documented as fire-and-forget on the engine's app-scoped coroutine scope — not
+  awaitable/chainable by a caller.
+
+  Auto-sync-on-connect: a separate init-block collector (:199-208) calls
+  triggerSync() on every Connecting → Connected transition regardless of UI
+  screen.
+
+  No existing queue/orchestration abstraction (confirmed by repo grep —
+  ble/sync/ only contains single-device helpers: DeviceSyncProcessor,
+  DeviceReprocessor, SleepMerger, SyncSummary, SyncValidator, MetricRouter).
+
+  Exact seam: wrap connectToDevice() (:237) + observe connectionState (:188) to
+  a terminal state + call disconnect()/acknowledgeSyncComplete() — this must
+  live above BleEngine (new orchestrator class or Service), since BleEngine's
+  API and state are single-device by design.
+
+  ---
+  3. Reassembly buffer safety
+
+  reassemblyBuffers: MutableMap<String, ByteArray> (:131) is keyed by
+  characteristic UUID only — one map per engine singleton, not per-device.
+  Verified clear sites: disconnect() (:346), triggerSync() (:587), connect()
+  (:678, unconditional on every connection attempt including retries),
+  dispatchPostStreamParse() (:1388). Safe for sequential runs as long as the
+  orchestrator never re-enters connectToDevice() before the prior device's
+  disconnect/parse has completed.
+
+  DeviceReprocessor.kt has no reassembly buffer — it reconstructs frames from
+  already-persisted raw rows and is documented as "must only be called when BLE
+  is idle" (offline reprocessing, not live-stream).
+
+  ---
+  4. Connection state & service
+
+  BleConnectionState (ble/BleConnectionState.kt, sealed class, 9 variants: Idle,
+  Scanning, Connecting, Connected, Syncing, Parsing, SyncComplete, 
+  Disconnected, Error, GattCacheError). Single StateFlow: BleEngine.kt:188.
+
+  Observers: AthleteDataApplication.observeBleSyncService() (:117),
+  DevicesViewModel.connectionState (re-exposed),
+  NavHostViewModel.connectionState, NavGraph.kt:49, BottomNavBar.kt,
+  DevicesScreen.kt.
+
+  BleSyncService (ble/BleSyncService.kt): unbound (onBind returns null, :28)
+  foreground Service with no sync logic of its own — pure FGS lifetime anchor.
+  Started via AthleteDataApplication.startBleSyncService() (:144-155,
+  ContextCompat.startForegroundService) whenever state enters {Connecting, 
+  Connected, Syncing, Parsing, SyncComplete}; stopped via stopBleSyncService()
+  (:157-160) after a 5s debounce to survive transient reconnect blips.
+  Notification built in buildNotification() (:51-59) — static text, intent
+  extras unused — this is the seam for per-device progress.
+
+  ---
+  5. WorkManager setup (session 6)
+
+  - AppStartupWorker: one-time, enqueueUniqueWork("app_startup", KEEP, ...)
+  (:39-45).
+  - WidgetRefreshWorker: periodic 30-min,
+  enqueueUniquePeriodicWork("widget_refresh", KEEP, ...) (:42-49).
+  - DailySummaryWorker: one-time, per-date,
+  enqueueUniqueWork("daily_summary_$date", REPLACE, ...) (:267-283).
+  - MetricStatsRecomputeWorker: one-time, similar pattern.
+
+  Hilt: AthleteDataApplication is Configuration.Provider, injects
+  HiltWorkerFactory, exposes workManagerConfiguration (:94-97); default
+  initializer removed in manifest (:142-151). No Worker uses Constraints today.
+  A new periodic sync Worker would be a @HiltWorker CoroutineWorker in worker/,
+  registered via PeriodicWorkRequestBuilder + enqueueUniquePeriodicWork, called
+  once from AthleteDataApplication.onCreate() alongside the existing enqueue
+  calls (:90-91). Confirmed: no periodic BLE-sync Worker exists today.
+
+  ---
+  6. Bootstrap & platform
+
+  autoConnectOnStartup() fires once per MainActivity.onCreate()
+  (MainActivity.kt:34), gated only by its own internal connectionState != Idle
+  check (BleEngine.kt:227) — not by Application.onCreate() or any Worker.
+
+  minSdk = 26, targetSdk = 36, compileSdk = 37 (app/build.gradle.kts:11,15,16,
+  verified directly).
+
+  Zero CompanionDeviceManager usage — repo-wide grep for CompanionDeviceManager,
+  CompanionDevice, .associate( returns no matches (verified directly).
+
+  Current scan/pairing entry points, where a future CDM association step would
+  attach:
+  - DevicesViewModel.onAddDeviceTapped() → bleEngine.startScan() (:261,
+  verified) — the only current caller of startScan().
+  - DevicesViewModel.onCandidateSelected() → connectToCandidate() → stopScan() +
+  connectToDevice().
+  - DevicesViewModel.onDeviceCellTapped() → direct reconnect to a known device,
+  bypassing scanning.
+
+  ---
+  Bottom line for session 5: the biggest gap isn't the reassembly buffer (that's
+  already clean) — it's that connectToDevice()/connect() have zero internal
+  reentrancy protection, and there's no "primary device" concept in the data
+  model. Both need solving before an orchestrator can safely walk an ordered
+  device list.
+
+✻ Brewed for 4m 55s

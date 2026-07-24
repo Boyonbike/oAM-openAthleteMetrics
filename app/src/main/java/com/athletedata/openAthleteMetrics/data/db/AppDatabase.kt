@@ -30,7 +30,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *  16 — replaced daily_summary.morning_hrv_ms with overnight_hrv_ms (overnight-window HRV
  *       computed in a later change; old morning values are not reinterpreted)
  *  17 — added baseline_range table for computed per-metric baseline ranges (mean ± 1 SD
- *       over a rolling window; see BaselineRepository)
+ *       over a rolling window)
  *  18 — added baseline_window_config table for per-BaselineMetric overrides of the
  *       baseline rolling window and minimum-days requirement (window_days/minimum_days
  *       nullable so either can be overridden independently; see BaselineWindowConfigRepository)
@@ -40,6 +40,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *       not persisted); table is dropped and recreated, reseeded with the same 10-widget
  *       default layout as MIGRATION_12_13 — existing custom placements/sizes are not
  *       migrated (acceptable per product decision)
+ *  20 — added metric_daily_stats table: one row per (day, BaselineMetric) holding a
+ *       trailing-window mean/std-dev computed by a MetricStatsCalculator; additive only,
+ *       not yet read or written by any app code (see MetricDailyStatsEntity)
+ *  21 — dropped baseline_range: superseded by metric_daily_stats (per-day, point-in-time),
+ *       which the baseline-band UI now reads exclusively; RoomBaselineRepository/BaselineDao/
+ *       BaselineEntity removed
  */
 @Database(
     entities = [
@@ -66,10 +72,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SleepStageEntity::class,
         WidgetLayoutEntity::class,
         UserProfileEntity::class,
-        BaselineEntity::class,
         BaselineWindowConfigEntity::class,
+        MetricDailyStatsEntity::class,
     ],
-    version = 19,
+    version = 21,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -101,9 +107,9 @@ abstract class AppDatabase : RoomDatabase() {
     /** Provides DAO access to the single-row athlete profile table. */
     abstract fun userProfileDao(): UserProfileDao
 
-    abstract fun baselineDao(): BaselineDao
-
     abstract fun baselineWindowConfigDao(): BaselineWindowConfigDao
+
+    abstract fun metricDailyStatsDao(): MetricDailyStatsDao
 
     companion object {
         const val DATABASE_NAME = "athlete_data.db"
@@ -1037,6 +1043,34 @@ abstract class AppDatabase : RoomDatabase() {
                         arrayOf(template, colSpan, rowSpan, order)
                     )
                 }
+            }
+        }
+
+        val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `metric_daily_stats` (
+                        `summary_date`  TEXT NOT NULL,
+                        `metric_type`   TEXT NOT NULL,
+                        `mean`          REAL,
+                        `std_dev`       REAL,
+                        `mean_pct`      REAL,
+                        `sample_count`  INTEGER NOT NULL,
+                        `window_days`   INTEGER NOT NULL,
+                        `minimum_days`  INTEGER NOT NULL,
+                        `config_hash`   TEXT NOT NULL,
+                        `computed_at`   INTEGER NOT NULL,
+                        PRIMARY KEY(`summary_date`, `metric_type`)
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DROP TABLE IF EXISTS `baseline_range`")
             }
         }
     }

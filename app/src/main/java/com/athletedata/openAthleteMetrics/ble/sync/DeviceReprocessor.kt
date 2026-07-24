@@ -15,6 +15,7 @@ import com.athletedata.openAthleteMetrics.data.model.SleepSession
 import com.athletedata.openAthleteMetrics.data.model.SyncSession
 import com.athletedata.openAthleteMetrics.data.model.SyncStatus
 import com.athletedata.openAthleteMetrics.data.repository.ActivityRepository
+import com.athletedata.openAthleteMetrics.data.repository.MetricStatsBackfillCoordinator
 import com.athletedata.openAthleteMetrics.data.repository.RawDeviceDataRepository
 import com.athletedata.openAthleteMetrics.data.repository.SleepRepository
 import com.athletedata.openAthleteMetrics.data.repository.SyncSessionRepository
@@ -40,6 +41,7 @@ class DeviceReprocessor @Inject constructor(
     private val validator: SyncValidator,
     private val workManager: WorkManager,
     private val sleepStagePromoter: SleepStagePromoter,
+    private val metricStatsBackfillCoordinator: MetricStatsBackfillCoordinator,
 ) {
     /**
      * Re-parses all stored raw BLE payloads for [device] received since [since],
@@ -185,6 +187,12 @@ class DeviceReprocessor @Inject constructor(
 
             // Enqueue summary workers for metric + activity dates (sleep dates already triggered by insertOrReplace).
             (metricDates + activityDates).forEach { enqueueSummaryWorker(it, workManager) }
+
+            // metric_daily_stats span recompute: reprocessed dates are, by definition, a
+            // backfill/correction of already-stored data — unlike the enqueueSummaryWorker call
+            // above, this needs the full union including sleepDates, since sleep-derived metrics
+            // (SLEEP, SLEEP_DEEP/LIGHT/REM/AWAKE) are affected too.
+            metricStatsBackfillCoordinator.enqueueSpanRecompute(allDates)
 
             onProgress(1f)
 

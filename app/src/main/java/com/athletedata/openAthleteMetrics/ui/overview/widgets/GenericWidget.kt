@@ -52,10 +52,10 @@ import com.athletedata.openAthleteMetrics.data.model.WidgetLayoutHint
 import com.athletedata.openAthleteMetrics.data.model.WidgetTemplateId
 import com.athletedata.openAthleteMetrics.data.model.toLabel
 import com.athletedata.openAthleteMetrics.data.repository.ActivityRepository
-import com.athletedata.openAthleteMetrics.data.repository.BaselineRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailyContextRepository
 import com.athletedata.openAthleteMetrics.data.repository.DailySummaryRepository
 import com.athletedata.openAthleteMetrics.data.repository.HrvReadingRepository
+import com.athletedata.openAthleteMetrics.data.repository.MetricDailyStatsReader
 import com.athletedata.openAthleteMetrics.data.repository.QuestionRepository
 import com.athletedata.openAthleteMetrics.data.repository.ResolvedValue
 import com.athletedata.openAthleteMetrics.data.repository.SleepDetailProvider
@@ -149,7 +149,7 @@ class GenericWidgetViewModel @Inject constructor(
     private val questionRepo: QuestionRepository,
     private val sleepRepo: SleepRepository,
     private val sleepDetailProvider: SleepDetailProvider,
-    private val baselineRepo: BaselineRepository,
+    private val metricDailyStatsReader: MetricDailyStatsReader,
     private val hrvRepo: HrvReadingRepository,
 ) : ViewModel() {
 
@@ -212,7 +212,7 @@ class GenericWidgetViewModel @Inject constructor(
         combine(
             sleepRepo.getSessionForDate(date),
             summaryRepo.getSummaryForDate(date),
-            baselineRepo.observeRange(BaselineMetric.HRV),
+            metricDailyStatsReader.observeBaselineRange(BaselineMetric.HRV, date),
         ) { session, summary, baseline ->
             if (session == null) {
                 GenericWidgetUiState.HrvMetric.NoSleepSession

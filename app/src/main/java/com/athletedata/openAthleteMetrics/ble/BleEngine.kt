@@ -111,6 +111,10 @@ class BleEngine @Inject constructor(
 
     private var activeManifest: WasmDriverManifest? = null
     private var activeDeviceAddress: String? = null
+    // Numeric physical devices.id for the active connection (NOT the driver id).
+    // Resolved at triggerSync() start (the devices row is guaranteed to exist by then);
+    // cleared alongside activeDeviceAddress.
+    private var activeDeviceId: Long? = null
     private var syncStartedAt: Instant = Instant.now()
 
     private val pendingMetrics = LinkedHashMap<Pair<MetricType, Long>, MetricReading>()
@@ -355,6 +359,7 @@ class BleEngine @Inject constructor(
                 closeGatt()
                 activeManifest = null
                 activeDeviceAddress = null
+                activeDeviceId = null
                 _connectionState.value = BleConnectionState.Idle
             }
         }
@@ -378,6 +383,7 @@ class BleEngine @Inject constructor(
             // tap goes through a real reconnect + full sync command sequence.
             activeManifest = null
             activeDeviceAddress = null
+            activeDeviceId = null
             _connectionState.value = BleConnectionState.Idle
         }
     }
@@ -507,6 +513,9 @@ class BleEngine @Inject constructor(
         if (_connectionState.value !is BleConnectionState.Connected) return null
         val manifest = activeManifest ?: return null
         val address = activeDeviceAddress ?: return null
+        // Resolve the physical device (numeric devices.id), not the driver, once per sync —
+        // the devices row is guaranteed to exist by sync time (findOrCreateDevice runs upstream).
+        activeDeviceId = deviceRepository.getDeviceByAddress(address)?.id
         val capturedPacketCount = packetCount
         // REMOVED: early-sync-warning
         quiescenceJob?.cancel()
@@ -712,6 +721,7 @@ class BleEngine @Inject constructor(
                         closeGatt()
                         activeManifest = null
                         activeDeviceAddress = null
+                        activeDeviceId = null
                         _connectionState.value = BleConnectionState.Idle
                     }
                     // intentional post-stream disconnect — parse is in progress, skip retry.
@@ -1279,6 +1289,7 @@ class BleEngine @Inject constructor(
             _connectionState.value = BleConnectionState.Disconnected(address, "Max retries exceeded")
             activeManifest = null
             activeDeviceAddress = null
+            activeDeviceId = null
             retryCount = 0
             return
         }
@@ -1339,7 +1350,8 @@ class BleEngine @Inject constructor(
         val stepsMode = activeManifest?.stepsMode ?: StepsMode.DELTA // STEPS-MODE
         val caloriesMode = activeManifest?.caloriesMode ?: CaloriesMode.DELTA // CALORIES-MODE / METRIC-OWNERSHIP
         val syncIntervalMs = activeManifest?.syncIntervalMs // CHANGED
-        metricRouter.route(reading, stepsMode, caloriesMode, syncIntervalMs) // STEPS-MODE / CALORIES-MODE / CHANGED
+        // Stamp the physical device (numeric devices.id), not the driver, onto the reading.
+        metricRouter.route(reading.copy(deviceId = activeDeviceId), stepsMode, caloriesMode, syncIntervalMs) // STEPS-MODE / CALORIES-MODE / CHANGED
         val date = reading.recordedAt.atZone(ZoneId.systemDefault()).toLocalDate()
         synchronized(affectedDates) { affectedDates.add(date) }
     }

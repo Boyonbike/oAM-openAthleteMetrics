@@ -16,6 +16,7 @@ import java.time.LocalDate
  * @property durationMinutes Derived: `(sleepEndMs - sleepStartMs) / 60_000`.
  * @property source Who produced this session record.
  * @property driverId Populated by the device driver; null for manual/seeder rows.
+ * @property deviceId Physical device (numeric devices.id) this session came from; not the driver.
  */
 data class SleepSession(
     val id: Long = 0,
@@ -25,4 +26,5 @@ data class SleepSession(
     val durationMinutes: Int,
     val source: DataSource,
     val driverId: String? = null,
+    val deviceId: Long? = null,
 )

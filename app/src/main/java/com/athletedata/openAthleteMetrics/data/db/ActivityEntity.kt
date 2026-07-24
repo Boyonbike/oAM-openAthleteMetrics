@@ -44,6 +44,9 @@ data class ActivityEntity(
     val steps: Int? = null,
     @ColumnInfo(name = "hr_zones_json")
     val hrZonesJson: String? = null,
+    // Physical device (numeric devices.id), not the driver.
+    @ColumnInfo(name = "device_id")
+    val deviceId: Long? = null,
 )
 
 // ── Mappers ──────────────────────────────────────────────────────────────────
@@ -66,6 +69,7 @@ fun ActivityEntity.toModel() = Activity(
     distanceMeters = distanceMeters,
     steps = steps,
     hrZonesJson = hrZonesJson,
+    deviceId = deviceId,
 )
 
 fun Activity.toEntity() = ActivityEntity(
@@ -86,4 +90,5 @@ fun Activity.toEntity() = ActivityEntity(
     distanceMeters = distanceMeters,
     steps = steps,
     hrZonesJson = hrZonesJson,
+    deviceId = deviceId,
 )

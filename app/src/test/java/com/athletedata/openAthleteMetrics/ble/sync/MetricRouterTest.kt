@@ -2,6 +2,7 @@ package com.athletedata.openAthleteMetrics.ble.sync
 
 import com.athletedata.openAthleteMetrics.ble.driver.CaloriesMode
 import com.athletedata.openAthleteMetrics.ble.driver.StepsMode
+import com.athletedata.openAthleteMetrics.data.db.HrReadingEntity
 import com.athletedata.openAthleteMetrics.data.model.DataSource
 import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import com.athletedata.openAthleteMetrics.data.model.MetricType
@@ -16,10 +17,16 @@ import com.athletedata.openAthleteMetrics.data.repository.SkinTempReadingReposit
 import com.athletedata.openAthleteMetrics.data.repository.SpO2ReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.StepsReadingRepository
 import com.athletedata.openAthleteMetrics.data.repository.TotalCalorieReadingRepository
+import io.mockk.Runs
+import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.just
 import io.mockk.mockk
+import io.mockk.slot
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -270,5 +277,41 @@ class MetricRouterTest {
         router.route(readingOf(MetricType.STEPS, 2000.01, "count"))
 
         coVerify(exactly = 0) { stepsReadingRepository.insert(any()) }
+    }
+
+    // ---------------------------------------------------------------------------
+    // deviceId (physical devices.id, not the driver) rides through on MetricReading
+    // and must land on the persisted entity via the toXEntity()/toStagingEntity()
+    // mappers -- route()/routeAllForceReplace() take no separate device parameter.
+    // ---------------------------------------------------------------------------
+
+    @Test
+    fun `route carries deviceId from MetricReading into the typed HR entity`() = runBlocking {
+        val captured = slot<HrReadingEntity>()
+        coEvery { hrReadingRepository.insert(capture(captured)) } just Runs
+
+        router.route(readingOf(MetricType.HR, 60.0, "bpm").copy(deviceId = 99L))
+
+        assertEquals(99L, captured.captured.deviceId)
+    }
+
+    @Test
+    fun `route preserves a null deviceId into the typed HR entity`() = runBlocking {
+        val captured = slot<HrReadingEntity>()
+        coEvery { hrReadingRepository.insert(capture(captured)) } just Runs
+
+        router.route(readingOf(MetricType.HR, 60.0, "bpm"))
+
+        assertNull(captured.captured.deviceId)
+    }
+
+    @Test
+    fun `route carries deviceId into staging for a fall-through metric type`() = runBlocking {
+        val captured = slot<MetricReading>()
+        coEvery { stagingRepository.insert(capture(captured)) } just Runs
+
+        router.route(readingOf(MetricType.DISTANCE, 307440.0, "m").copy(deviceId = 42L))
+
+        assertEquals(42L, captured.captured.deviceId)
     }
 }

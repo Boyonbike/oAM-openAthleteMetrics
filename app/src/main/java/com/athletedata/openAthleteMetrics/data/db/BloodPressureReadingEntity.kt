@@ -26,6 +26,9 @@ data class BloodPressureReadingEntity(
     val confidence: Float? = null,
     @ColumnInfo(name = "meta_json")
     val metaJson: String? = null,
+    // Physical device (numeric devices.id), not the driver.
+    @ColumnInfo(name = "device_id")
+    val deviceId: Long? = null,
     val systolic: Int,
     val diastolic: Int,
 )
@@ -40,6 +43,7 @@ fun MetricReading.toBloodPressureEntityOrNull(): BloodPressureReadingEntity? {
         recordedAt = recordedAt, createdAt = createdAt,
         source = source, driverId = driverId,
         confidence = confidence, metaJson = metaJson,
+        deviceId = deviceId,
         systolic = value.toInt(),
         diastolic = diastolic,
     )

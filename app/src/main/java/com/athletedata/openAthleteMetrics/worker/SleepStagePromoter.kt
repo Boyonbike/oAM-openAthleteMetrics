@@ -52,6 +52,7 @@ class SleepStagePromoter @Inject constructor(
         syncWindowStartMs: Long,
         syncWindowEndMs: Long,
         sessionGapThresholdMs: Long? = null, // CHANGED: per-driver override; null -> app default
+        deviceId: Long? = null, // physical device (numeric devices.id), not the driver
     ): SleepPromotionResult = withContext(Dispatchers.IO) {
         val errors = mutableListOf<String>()
         val effectiveThresholdMs = sessionGapThresholdMs ?: SESSION_GAP_THRESHOLD_MS // CHANGED
@@ -208,6 +209,8 @@ class SleepStagePromoter @Inject constructor(
                             durationMinutes = ((endMs - startMs) / 60_000L).toInt(),
                             source          = DataSource.DEVICE,
                             driverId        = driverId,
+                            // Physical device (numeric devices.id), not the driver.
+                            deviceId        = deviceId,
                         )
                     )
                     sessionsCreated++

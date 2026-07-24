@@ -445,6 +445,45 @@ class SleepStagePromoterTest {
     // device-specific protocol citation.
     // ---------------------------------------------------------------------------
 
+    // ---------------------------------------------------------------------------
+    // deviceId (physical devices.id, not the driver): threaded through by both
+    // callers and set only on the new-session SleepSession row, never sleep_stages.
+    // ---------------------------------------------------------------------------
+
+    @Test
+    fun `promote sets device_id from the deviceId parameter on a newly created session`() = runBlocking {
+        val sleepStart = Instant.parse("2026-07-01T22:00:00Z")
+        val sleepEnd = Instant.parse("2026-07-01T22:30:00Z")
+        val insertedAt = Instant.parse("2026-07-02T07:00:00Z")
+        val syncWindowStartMs = Instant.parse("2026-07-02T06:55:00Z").toEpochMilli()
+        val syncWindowEndMs = Instant.parse("2026-07-02T07:05:00Z").toEpochMilli()
+
+        insertStagingRow(SleepStage.DEEP, sleepStart.toEpochMilli(), sleepEnd.toEpochMilli(), insertedAt)
+
+        promoter.promote("hume-band-1", syncWindowStartMs, syncWindowEndMs, deviceId = 55L)
+
+        val session = sleepRepository.getByDriverAndDate("hume-band-1", LocalDate.parse("2026-07-01"))
+        assertNotNull(session)
+        assertEquals(55L, session!!.deviceId)
+    }
+
+    @Test
+    fun `promote leaves device_id null when no deviceId parameter is supplied`() = runBlocking {
+        val sleepStart = Instant.parse("2026-07-01T22:00:00Z")
+        val sleepEnd = Instant.parse("2026-07-01T22:30:00Z")
+        val insertedAt = Instant.parse("2026-07-02T07:00:00Z")
+        val syncWindowStartMs = Instant.parse("2026-07-02T06:55:00Z").toEpochMilli()
+        val syncWindowEndMs = Instant.parse("2026-07-02T07:05:00Z").toEpochMilli()
+
+        insertStagingRow(SleepStage.DEEP, sleepStart.toEpochMilli(), sleepEnd.toEpochMilli(), insertedAt)
+
+        promoter.promote("hume-band-1", syncWindowStartMs, syncWindowEndMs)
+
+        val session = sleepRepository.getByDriverAndDate("hume-band-1", LocalDate.parse("2026-07-01"))
+        assertNotNull(session)
+        assertNull(session!!.deviceId)
+    }
+
     @Test
     fun `SleepStagePromoter source does not attribute the session gap threshold to Hume Band's protocol`() {
         val sourceFile = java.io.File("src/main/java/com/athletedata/openAthleteMetrics/worker/SleepStagePromoter.kt")

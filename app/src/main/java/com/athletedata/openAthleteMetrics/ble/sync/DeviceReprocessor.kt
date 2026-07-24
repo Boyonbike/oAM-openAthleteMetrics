@@ -134,13 +134,16 @@ class DeviceReprocessor @Inject constructor(
                 // Pass stepsMode and caloriesMode so reprocessing respects the same
                 // accumulation semantics as the live sync path. // POST-AUDIT-FIX
                 metricRouter.routeAllForceReplace( // POST-AUDIT-FIX
-                    readings = acceptedReadings, // POST-AUDIT-FIX
+                    // Stamp the physical device (numeric devices.id), not the driver.
+                    readings = acceptedReadings.map { it.copy(deviceId = device.id) }, // POST-AUDIT-FIX
                     stepsMode = manifest.stepsMode, // POST-AUDIT-FIX
                     caloriesMode = manifest.caloriesMode, // POST-AUDIT-FIX
                     syncIntervalMs = manifest.syncIntervalMs, // CHANGED
                 ) // POST-AUDIT-FIX
-                mergedSessions.forEach { sleepRepository.insertOrReplace(it) }
-                activityRepository.replaceAllFromDevice(acceptedActivities)
+                // Stamp after merge — the merge base row may be a pre-existing null-device DB row.
+                mergedSessions.forEach { sleepRepository.insertOrReplace(it.copy(deviceId = device.id)) }
+                // This path bypasses SyncActivityUseCase, so stamp directly here.
+                activityRepository.replaceAllFromDevice(acceptedActivities.map { it.copy(deviceId = device.id) })
             }
 
             val totalAccepted = acceptedReadings.size + acceptedSessions.size + acceptedActivities.size
@@ -160,6 +163,7 @@ class DeviceReprocessor @Inject constructor(
                 syncWindowStartMs = since.toEpochMilli(),
                 syncWindowEndMs = reprocessEndedAt.toEpochMilli(),
                 sessionGapThresholdMs = manifest.sessionGapThresholdMs, // CHANGED
+                deviceId = device.id, // physical device (numeric devices.id), not the driver
             )
 
             val recordsReplaced = acceptedReadings.size + mergedSessions.size + activitiesReplaced

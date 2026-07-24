@@ -32,6 +32,9 @@ data class SleepSessionEntity(
     val source: DataSource,
     @ColumnInfo(name = "driver_id")
     val driverId: String? = null,
+    // Physical device (numeric devices.id), not the driver.
+    @ColumnInfo(name = "device_id")
+    val deviceId: Long? = null,
 )
 
 // ── Mappers ──────────────────────────────────────────────────────────────────
@@ -44,6 +47,7 @@ fun SleepSessionEntity.toModel() = SleepSession(
     durationMinutes = durationMinutes,
     source = source,
     driverId = driverId,
+    deviceId = deviceId,
 )
 
 fun SleepSession.toEntity() = SleepSessionEntity(
@@ -54,4 +58,5 @@ fun SleepSession.toEntity() = SleepSessionEntity(
     durationMinutes = durationMinutes,
     source = source,
     driverId = driverId,
+    deviceId = deviceId,
 )

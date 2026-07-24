@@ -25,6 +25,9 @@ data class StepsReadingEntity(
     val confidence: Float? = null,
     @ColumnInfo(name = "meta_json")
     val metaJson: String? = null,
+    // Physical device (numeric devices.id), not the driver.
+    @ColumnInfo(name = "device_id")
+    val deviceId: Long? = null,
     @ColumnInfo(name = "cumulative_steps")
     val cumulativeSteps: Int,
 )
@@ -35,5 +38,6 @@ fun MetricReading.toStepsEntity() = StepsReadingEntity(
     recordedAt = recordedAt, createdAt = createdAt,
     source = source, driverId = driverId,
     confidence = confidence, metaJson = metaJson,
+    deviceId = deviceId,
     cumulativeSteps = value.toInt(),
 )

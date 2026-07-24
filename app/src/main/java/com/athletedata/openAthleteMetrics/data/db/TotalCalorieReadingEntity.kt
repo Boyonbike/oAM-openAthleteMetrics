@@ -26,6 +26,9 @@ data class TotalCalorieReadingEntity(
     val confidence: Float? = null,
     @ColumnInfo(name = "meta_json")
     val metaJson: String? = null,
+    // Physical device (numeric devices.id), not the driver.
+    @ColumnInfo(name = "device_id")
+    val deviceId: Long? = null,
     val calories: Double,
 )
 
@@ -35,5 +38,6 @@ fun MetricReading.toTotalCalorieEntity() = TotalCalorieReadingEntity(
     recordedAt = recordedAt, createdAt = createdAt,
     source = source, driverId = driverId,
     confidence = confidence, metaJson = metaJson,
+    deviceId = deviceId,
     calories = value,
 )

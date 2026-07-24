@@ -130,8 +130,11 @@ class DeviceSyncProcessor @Inject constructor(
             val mergedSessions = buildMergedSessions(acceptedSessions)
             val activitiesSkipped =
                 appDatabase.withTransaction {
-                    mergedSessions.forEach { sleepRepository.insertOrReplace(it) }
-                    val skipped = syncActivityUseCase.execute(acceptedActivities)
+                    // Stamp the physical device (numeric devices.id), not the driver, after
+                    // merge — the merge base row may be a pre-existing null-device DB row.
+                    mergedSessions.forEach { sleepRepository.insertOrReplace(it.copy(deviceId = device.id)) }
+                    // Stamp activities before the use case; execute()'s signature is unchanged.
+                    val skipped = syncActivityUseCase.execute(acceptedActivities.map { it.copy(deviceId = device.id) })
                     // rawPayloads is empty when packets were persisted on arrival (Fix 18);
                     // non-empty only on the legacy path where BleEngine held them in memory.
                     rawDeviceDataRepository.insertAll(result.rawPayloads, syncSessionId)
@@ -178,6 +181,7 @@ class DeviceSyncProcessor @Inject constructor(
                 syncWindowStartMs = result.syncStartedAt.toEpochMilli(),
                 syncWindowEndMs = result.syncEndedAt.toEpochMilli(),
                 sessionGapThresholdMs = driverManifest?.sessionGapThresholdMs, // CHANGED
+                deviceId = device.id, // physical device (numeric devices.id), not the driver
             )
 
             schedulePrune()

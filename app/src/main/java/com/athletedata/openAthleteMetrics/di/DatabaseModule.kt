@@ -192,6 +192,7 @@ abstract class DatabaseModule {
                 AppDatabase.MIGRATION_18_19,
                 AppDatabase.MIGRATION_19_20,
                 AppDatabase.MIGRATION_20_21,
+                AppDatabase.MIGRATION_21_22,
             )
             // MIGRATION_1_2 was never authored and the true v1->v2 schema diff is undocumented
             // (see AppDatabase's schema-history comment). Rather than guess at it, destructively

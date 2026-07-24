@@ -25,6 +25,9 @@ data class GlucoseReadingEntity(
     val confidence: Float? = null,
     @ColumnInfo(name = "meta_json")
     val metaJson: String? = null,
+    // Physical device (numeric devices.id), not the driver.
+    @ColumnInfo(name = "device_id")
+    val deviceId: Long? = null,
     val value: Double,
     /** Either "mmol" or "mg_dl". */
     val unit: String,
@@ -36,6 +39,7 @@ fun MetricReading.toGlucoseEntity() = GlucoseReadingEntity(
     recordedAt = recordedAt, createdAt = createdAt,
     source = source, driverId = driverId,
     confidence = confidence, metaJson = metaJson,
+    deviceId = deviceId,
     value = value,
     unit = unit,
 )

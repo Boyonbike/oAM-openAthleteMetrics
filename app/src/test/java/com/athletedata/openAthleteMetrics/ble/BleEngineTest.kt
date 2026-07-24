@@ -26,16 +26,21 @@ import com.athletedata.openAthleteMetrics.ble.sync.ValidationResult
 import com.athletedata.openAthleteMetrics.ble.wasm.SessionFrame
 import com.athletedata.openAthleteMetrics.ble.wasm.WasmParseResult
 import com.athletedata.openAthleteMetrics.data.model.DataSource
+import com.athletedata.openAthleteMetrics.data.model.Device
 import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
 import com.athletedata.openAthleteMetrics.data.repository.MetricStatsBackfillCoordinator
 import com.athletedata.openAthleteMetrics.data.repository.RawDeviceDataRepository
+import io.mockk.Runs
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.coVerifyOrder
 import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkStatic
+import io.mockk.slot
 import io.mockk.unmockkStatic
 import io.mockk.verify
 import kotlinx.coroutines.CompletableDeferred
@@ -44,10 +49,12 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
+import junit.framework.TestCase.assertEquals
 import junit.framework.TestCase.assertNull
 import junit.framework.TestCase.assertTrue
 import org.junit.After
@@ -608,5 +615,115 @@ class BleEngineTest {
         assertTrue("enqueueUniqueWork was not called", enqueueLatch.await(5, TimeUnit.SECONDS))
         assertTrue("isQuiescent must be set once the legacy timer fires", getPrivateField("isQuiescent") as Boolean)
         verify(exactly = 1) { workManager.enqueueUniqueWork(any(), any(), any<OneTimeWorkRequest>()) }
+    }
+
+    // ---------------------------------------------------------------------------
+    // deviceId (physical devices.id, not the driver): triggerSync() resolves it via
+    // DeviceRepository.getDeviceByAddress, and routeReading() stamps it onto every
+    // MetricReading before it reaches MetricRouter.
+    // ---------------------------------------------------------------------------
+
+    @Test
+    fun `triggerSync resolves the physical device id from activeDeviceAddress via DeviceRepository`() = runBlocking {
+        val resolvedDevice = Device(
+            id = 77L,
+            bleAddress = "AA:BB:CC:DD:EE:FF",
+            driverId = "test-driver",
+            displayName = "Test",
+        )
+        coEvery { deviceRepository.getDeviceByAddress("AA:BB:CC:DD:EE:FF") } returns resolvedDevice
+
+        setPrivateField("activeManifest", testManifest())
+        setPrivateField("activeDeviceAddress", "AA:BB:CC:DD:EE:FF")
+        @Suppress("UNCHECKED_CAST")
+        val connectionStateFlow = getPrivateField("_connectionState") as MutableStateFlow<BleConnectionState>
+        connectionStateFlow.value = BleConnectionState.Connected("AA:BB:CC:DD:EE:FF", "Test", 0, false)
+
+        // Only the device-id resolution at the top of triggerSync() is under test here;
+        // downstream sync-command execution against fully-mocked collaborators is exercised
+        // elsewhere, so any exception past that point is irrelevant to this assertion.
+        runCatching { engine.triggerSync() }
+
+        coVerify { deviceRepository.getDeviceByAddress("AA:BB:CC:DD:EE:FF") }
+        assertEquals(77L, getPrivateField("activeDeviceId"))
+    }
+
+    @Test
+    fun `triggerSync leaves activeDeviceId null when no matching device row exists`() = runBlocking {
+        coEvery { deviceRepository.getDeviceByAddress("AA:BB:CC:DD:EE:FF") } returns null
+
+        setPrivateField("activeManifest", testManifest())
+        setPrivateField("activeDeviceAddress", "AA:BB:CC:DD:EE:FF")
+        @Suppress("UNCHECKED_CAST")
+        val connectionStateFlow = getPrivateField("_connectionState") as MutableStateFlow<BleConnectionState>
+        connectionStateFlow.value = BleConnectionState.Connected("AA:BB:CC:DD:EE:FF", "Test", 0, false)
+
+        runCatching { engine.triggerSync() }
+
+        assertNull(getPrivateField("activeDeviceId"))
+    }
+
+    @Test
+    fun `dispatchPostStreamParse threads activeDeviceId into the reading passed to MetricRouter`() {
+        val reading = MetricReading(
+            metricType = MetricType.HR,
+            value = 60.0,
+            unit = "bpm",
+            recordedAt = Instant.parse("2026-06-15T12:00:00Z"),
+            createdAt = Instant.now(),
+            source = DataSource.DEVICE,
+            driverId = "test-driver",
+        )
+        coEvery { driverRegistry.parseSession(any(), any()) } returns WasmParseResult.Success(listOf(reading))
+        every { validator.validateReadings(any()) } returns listOf(ValidationResult.Accepted(reading))
+        coEvery { syncProcessor.process(any(), any()) } returns mockk<SyncSummary>(relaxed = true)
+
+        val captured = slot<MetricReading>()
+        val routeLatch = CountDownLatch(1)
+        coEvery { metricRouter.route(capture(captured), any(), any(), any()) } answers {
+            routeLatch.countDown()
+        }
+
+        setPrivateField("activeManifest", testManifest())
+        setPrivateField("activeDeviceAddress", "AA:BB:CC:DD:EE:FF")
+        setPrivateField("activeDeviceId", 55L)
+        addSessionFrame(SessionFrame("notify", "0x01", byteArrayOf(1, 2, 3)))
+
+        invokeDispatchPostStreamParse()
+
+        assertTrue("metricRouter.route was not called", routeLatch.await(5, TimeUnit.SECONDS))
+        assertEquals(55L, captured.captured.deviceId)
+    }
+
+    @Test
+    fun `dispatchPostStreamParse leaves deviceId null on the routed reading when no device is resolved`() {
+        val reading = MetricReading(
+            metricType = MetricType.HR,
+            value = 60.0,
+            unit = "bpm",
+            recordedAt = Instant.parse("2026-06-15T12:00:00Z"),
+            createdAt = Instant.now(),
+            source = DataSource.DEVICE,
+            driverId = "test-driver",
+        )
+        coEvery { driverRegistry.parseSession(any(), any()) } returns WasmParseResult.Success(listOf(reading))
+        every { validator.validateReadings(any()) } returns listOf(ValidationResult.Accepted(reading))
+        coEvery { syncProcessor.process(any(), any()) } returns mockk<SyncSummary>(relaxed = true)
+
+        val captured = slot<MetricReading>()
+        val routeLatch = CountDownLatch(1)
+        coEvery { metricRouter.route(capture(captured), any(), any(), any()) } answers {
+            routeLatch.countDown()
+        }
+
+        setPrivateField("activeManifest", testManifest())
+        setPrivateField("activeDeviceAddress", "AA:BB:CC:DD:EE:FF")
+        // activeDeviceId left at its default null.
+        addSessionFrame(SessionFrame("notify", "0x01", byteArrayOf(1, 2, 3)))
+
+        invokeDispatchPostStreamParse()
+
+        assertTrue("metricRouter.route was not called", routeLatch.await(5, TimeUnit.SECONDS))
+        assertNull(captured.captured.deviceId)
     }
 }

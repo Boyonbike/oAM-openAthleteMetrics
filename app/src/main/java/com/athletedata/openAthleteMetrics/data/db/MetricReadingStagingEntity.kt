@@ -41,6 +41,9 @@ data class MetricReadingStagingEntity(
     val confidence: Float? = null,
     @ColumnInfo(name = "meta_json")
     val metaJson: String? = null,
+    // Physical device (numeric devices.id), not the driver.
+    @ColumnInfo(name = "device_id")
+    val deviceId: Long? = null,
 )
 
 // ── Mappers ──────────────────────────────────────────────────────────────────
@@ -56,6 +59,7 @@ fun MetricReadingStagingEntity.toModel() = MetricReading(
     driverId = driverId,
     confidence = confidence,
     metaJson = metaJson,
+    deviceId = deviceId,
 )
 
 fun MetricReading.toStagingEntity() = MetricReadingStagingEntity(
@@ -69,4 +73,5 @@ fun MetricReading.toStagingEntity() = MetricReadingStagingEntity(
     driverId = driverId,
     confidence = confidence,
     metaJson = metaJson,
+    deviceId = deviceId,
 )

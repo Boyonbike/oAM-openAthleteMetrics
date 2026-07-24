@@ -46,6 +46,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *  21 — dropped baseline_range: superseded by metric_daily_stats (per-day, point-in-time),
  *       which the baseline-band UI now reads exclusively; RoomBaselineRepository/BaselineDao/
  *       BaselineEntity removed
+ *  22 — added nullable device_id (INTEGER) column to 13 reading/session/activity tables
+ *       (physical devices.id, not the driver); backfilled from devices.id where driver_id
+ *       maps to exactly one device row. Additive only — no index changes; existing
+ *       driver_id-based unique/dedup indexes are unchanged.
  */
 @Database(
     entities = [
@@ -75,7 +79,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BaselineWindowConfigEntity::class,
         MetricDailyStatsEntity::class,
     ],
-    version = 21,
+    version = 22,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -1071,6 +1075,133 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_20_21 = object : Migration(20, 21) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("DROP TABLE IF EXISTS `baseline_range`")
+            }
+        }
+
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // --- Add nullable device_id (physical devices.id, NOT the driver) to 13 tables ---
+                db.execSQL("ALTER TABLE `hr_readings` ADD COLUMN `device_id` INTEGER")
+                db.execSQL("ALTER TABLE `hrv_readings` ADD COLUMN `device_id` INTEGER")
+                db.execSQL("ALTER TABLE `spo2_readings` ADD COLUMN `device_id` INTEGER")
+                db.execSQL("ALTER TABLE `respiration_readings` ADD COLUMN `device_id` INTEGER")
+                db.execSQL("ALTER TABLE `skin_temp_readings` ADD COLUMN `device_id` INTEGER")
+                db.execSQL("ALTER TABLE `steps_readings` ADD COLUMN `device_id` INTEGER")
+                db.execSQL("ALTER TABLE `blood_pressure_readings` ADD COLUMN `device_id` INTEGER")
+                db.execSQL("ALTER TABLE `glucose_readings` ADD COLUMN `device_id` INTEGER")
+                db.execSQL("ALTER TABLE `active_calorie_readings` ADD COLUMN `device_id` INTEGER")
+                db.execSQL("ALTER TABLE `total_calorie_readings` ADD COLUMN `device_id` INTEGER")
+                db.execSQL("ALTER TABLE `metric_readings_staging` ADD COLUMN `device_id` INTEGER")
+                db.execSQL("ALTER TABLE `sleep_sessions` ADD COLUMN `device_id` INTEGER")
+                db.execSQL("ALTER TABLE `activities` ADD COLUMN `device_id` INTEGER")
+
+                // --- Backfill: only when driver_id maps to EXACTLY ONE device row. ---
+                // devices.driver_id is NOT unique (two physical units can share a driver_id),
+                // so a plain join is unsafe; ambiguous/orphaned/null-driver rows stay NULL.
+                db.execSQL(
+                    """
+                    UPDATE `hr_readings`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `hr_readings`.driver_id)
+                    WHERE `hr_readings`.driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `hr_readings`.driver_id) = 1
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `hrv_readings`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `hrv_readings`.driver_id)
+                    WHERE `hrv_readings`.driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `hrv_readings`.driver_id) = 1
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `spo2_readings`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `spo2_readings`.driver_id)
+                    WHERE `spo2_readings`.driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `spo2_readings`.driver_id) = 1
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `respiration_readings`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `respiration_readings`.driver_id)
+                    WHERE `respiration_readings`.driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `respiration_readings`.driver_id) = 1
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `skin_temp_readings`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `skin_temp_readings`.driver_id)
+                    WHERE `skin_temp_readings`.driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `skin_temp_readings`.driver_id) = 1
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `steps_readings`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `steps_readings`.driver_id)
+                    WHERE `steps_readings`.driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `steps_readings`.driver_id) = 1
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `blood_pressure_readings`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `blood_pressure_readings`.driver_id)
+                    WHERE `blood_pressure_readings`.driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `blood_pressure_readings`.driver_id) = 1
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `glucose_readings`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `glucose_readings`.driver_id)
+                    WHERE `glucose_readings`.driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `glucose_readings`.driver_id) = 1
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `active_calorie_readings`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `active_calorie_readings`.driver_id)
+                    WHERE `active_calorie_readings`.driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `active_calorie_readings`.driver_id) = 1
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `total_calorie_readings`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `total_calorie_readings`.driver_id)
+                    WHERE `total_calorie_readings`.driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `total_calorie_readings`.driver_id) = 1
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `metric_readings_staging`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `metric_readings_staging`.driver_id)
+                    WHERE `metric_readings_staging`.driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `metric_readings_staging`.driver_id) = 1
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `sleep_sessions`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `sleep_sessions`.driver_id)
+                    WHERE `sleep_sessions`.driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `sleep_sessions`.driver_id) = 1
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `activities`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `activities`.driver_id)
+                    WHERE `activities`.driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `activities`.driver_id) = 1
+                    """.trimIndent()
+                )
             }
         }
     }

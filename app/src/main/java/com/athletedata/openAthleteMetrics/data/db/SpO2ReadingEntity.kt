@@ -25,6 +25,9 @@ data class SpO2ReadingEntity(
     val confidence: Float? = null,
     @ColumnInfo(name = "meta_json")
     val metaJson: String? = null,
+    // Physical device (numeric devices.id), not the driver.
+    @ColumnInfo(name = "device_id")
+    val deviceId: Long? = null,
     val percentage: Double,
 )
 
@@ -34,5 +37,6 @@ fun MetricReading.toSpO2Entity() = SpO2ReadingEntity(
     recordedAt = recordedAt, createdAt = createdAt,
     source = source, driverId = driverId,
     confidence = confidence, metaJson = metaJson,
+    deviceId = deviceId,
     percentage = value,
 )

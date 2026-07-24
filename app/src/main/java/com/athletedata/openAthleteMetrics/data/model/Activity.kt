@@ -27,6 +27,7 @@ import java.time.Instant
  * @property hrZonesJson      Heart-rate zone breakdown as a JSON array, e.g.
  *                            `[{"zone":1,"seconds":120},{"zone":2,"seconds":300}]`;
  *                            null if device did not provide it.
+ * @property deviceId         Physical device (numeric devices.id) this activity came from; not the driver.
  */
 data class Activity(
     val id: Long = 0,
@@ -46,4 +47,5 @@ data class Activity(
     val distanceMeters: Double? = null,
     val steps: Int? = null,
     val hrZonesJson: String? = null,
+    val deviceId: Long? = null,
 )

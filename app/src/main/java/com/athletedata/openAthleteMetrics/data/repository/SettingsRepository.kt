@@ -38,4 +38,10 @@ interface SettingsRepository {
 
     /** Persists the baseline window choice. */
     suspend fun setBaselineWindowDays(days: Int)
+
+    /** Whether the user has permanently dismissed the "switch primary device" confirmation dialog. Defaults to false. */
+    fun getRestarConfirmDismissed(): Flow<Boolean>
+
+    /** Persists the user's "don't show again" choice for the re-star confirmation dialog. */
+    suspend fun setRestarConfirmDismissed(dismissed: Boolean)
 }

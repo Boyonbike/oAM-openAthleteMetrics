@@ -3,6 +3,7 @@ package com.athletedata.openAthleteMetrics.data.repository
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.glance.appwidget.updateAll
@@ -85,11 +86,21 @@ class DataStoreSettingsRepository @Inject constructor(
         }
     }
 
+    override fun getRestarConfirmDismissed(): Flow<Boolean> =
+        dataStore.data.map { prefs -> prefs[RESTAR_CONFIRM_DISMISSED_KEY] ?: false }
+
+    override suspend fun setRestarConfirmDismissed(dismissed: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[RESTAR_CONFIRM_DISMISSED_KEY] = dismissed
+        }
+    }
+
     private companion object {
-        val THEME_KEY                    = stringPreferencesKey("theme_preference")
-        val HISTORY_METRIC_KEY           = stringPreferencesKey("history_metric_key")
-        val DAILY_DETAIL_TILE_CONFIG_KEY = stringPreferencesKey("daily_detail_tile_config")
-        val BASELINE_WINDOW_DAYS_KEY     = intPreferencesKey("baseline_window_days")
+        val THEME_KEY                      = stringPreferencesKey("theme_preference")
+        val HISTORY_METRIC_KEY             = stringPreferencesKey("history_metric_key")
+        val DAILY_DETAIL_TILE_CONFIG_KEY   = stringPreferencesKey("daily_detail_tile_config")
+        val BASELINE_WINDOW_DAYS_KEY       = intPreferencesKey("baseline_window_days")
+        val RESTAR_CONFIRM_DISMISSED_KEY   = booleanPreferencesKey("restar_confirm_dismissed")
 
         fun encodeTileConfig(configs: List<TileConfig>): String {
             val arr = JSONArray()

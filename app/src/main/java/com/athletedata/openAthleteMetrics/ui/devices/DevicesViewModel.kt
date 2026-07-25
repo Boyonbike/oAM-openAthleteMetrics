@@ -12,6 +12,7 @@ import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
 import com.athletedata.openAthleteMetrics.ble.sync.DeviceReprocessor
 import com.athletedata.openAthleteMetrics.data.model.Device
 import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
+import com.athletedata.openAthleteMetrics.data.repository.SettingsRepository
 import com.athletedata.openAthleteMetrics.data.repository.SyncSessionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -60,6 +61,7 @@ class DevicesViewModel @Inject constructor(
     private val bleEngine: BleEngine,
     private val deviceReprocessor: DeviceReprocessor,
     private val syncSessionRepository: SyncSessionRepository,
+    private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
 
     val devices: StateFlow<List<Device>> = deviceRepository.getAllDevices()
@@ -100,6 +102,13 @@ class DevicesViewModel @Inject constructor(
     // ADDED: interrupted-sync-message
     private val _syncInterrupted = MutableStateFlow(SyncInterruptedState(show = false))
     val syncInterrupted: StateFlow<SyncInterruptedState> = _syncInterrupted.asStateFlow()
+
+    val restarConfirmDismissed: StateFlow<Boolean> = settingsRepository.getRestarConfirmDismissed()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = false,
+        )
 
     init {
         // CHANGE 1: default to Device tab if either drivers or devices exist
@@ -159,6 +168,19 @@ class DevicesViewModel @Inject constructor(
         }
         if (isThisDevice) bleEngine.disconnect()
         viewModelScope.launch { deviceRepository.delete(device) }
+    }
+
+    fun onStarTapped(device: Device) {
+        if (device.isPrimary) return
+        viewModelScope.launch { deviceRepository.setPrimary(device.id) }
+    }
+
+    fun onAutoSyncToggled(device: Device, enabled: Boolean) {
+        viewModelScope.launch { deviceRepository.setAutoSync(device.id, enabled) }
+    }
+
+    fun onRestarConfirmDismissedChanged(dismissed: Boolean) {
+        viewModelScope.launch { settingsRepository.setRestarConfirmDismissed(dismissed) }
     }
 
     fun onSyncTapped() {

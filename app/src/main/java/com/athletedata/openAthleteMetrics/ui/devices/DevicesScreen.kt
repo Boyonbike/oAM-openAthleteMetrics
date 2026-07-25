@@ -29,11 +29,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Bluetooth
 import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -42,6 +45,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -53,6 +57,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -93,6 +98,7 @@ fun DevicesScreen(
     // ADDED: interrupted-sync-message
     val syncInterrupted by viewModel.syncInterrupted.collectAsStateWithLifecycle()
     val discoveredCandidates by viewModel.discoveredCandidates.collectAsStateWithLifecycle()
+    val restarConfirmDismissed by viewModel.restarConfirmDismissed.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -105,6 +111,7 @@ fun DevicesScreen(
     var deviceToRemove by remember { mutableStateOf<Device?>(null) }
     var deviceToShowActions by remember { mutableStateOf<Device?>(null) }
     var deviceToReprocess by remember { mutableStateOf<Device?>(null) }
+    var deviceToRestar by remember { mutableStateOf<Device?>(null) }
     // REMOVED: early-sync-warning
 
     val filePicker = rememberLauncherForActivityResult(
@@ -246,6 +253,36 @@ fun DevicesScreen(
         )
     }
 
+    deviceToRestar?.let { device ->
+        var dontShowAgain by remember { mutableStateOf(false) }
+        AlertDialog(
+            onDismissRequest = { deviceToRestar = null },
+            title = { Text("Switch primary device") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "Switching the primary device will change which device's data is " +
+                        "displayed throughout the app to ${device.displayName}."
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = dontShowAgain, onCheckedChange = { dontShowAgain = it })
+                        Text("Don't show this again")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (dontShowAgain) viewModel.onRestarConfirmDismissedChanged(true)
+                    viewModel.onStarTapped(device)
+                    deviceToRestar = null
+                }) { Text("Continue") }
+            },
+            dismissButton = {
+                TextButton(onClick = { deviceToRestar = null }) { Text("Back") }
+            },
+        )
+    }
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background,
@@ -321,6 +358,14 @@ fun DevicesScreen(
                                     },
                                     onLongPress = { deviceToShowActions = device },
                                     onDisconnect = viewModel::onDisconnectTapped,
+                                    onStarTapped = {
+                                        when {
+                                            device.isPrimary -> Unit
+                                            restarConfirmDismissed -> viewModel.onStarTapped(device)
+                                            else -> deviceToRestar = device
+                                        }
+                                    },
+                                    onAutoSyncToggled = { enabled -> viewModel.onAutoSyncToggled(device, enabled) },
                                 )
                             }
                             items(filteredCandidates, key = { it.address }) { candidate ->
@@ -335,7 +380,6 @@ fun DevicesScreen(
                                 item {
                                     AddCell(
                                         label = "Add Device",
-                                        sublabel = if (sortedDevices.isNotEmpty()) "Multi-device not yet supported" else null,
                                     ) {
                                         when {
                                             !BlePermissionHelper.allGranted(context) ->
@@ -501,6 +545,8 @@ private fun DeviceCell(
     onSync: () -> Unit,
     onLongPress: () -> Unit,
     onDisconnect: () -> Unit,
+    onStarTapped: () -> Unit,
+    onAutoSyncToggled: (Boolean) -> Unit,
 ) {
     val isConnecting = (connectionState as? BleConnectionState.Connecting)?.deviceAddress == device.bleAddress
     val isActive = when (connectionState) {
@@ -592,6 +638,19 @@ private fun DeviceCell(
                 textAlign = TextAlign.Center,
                 maxLines = 1,
             )
+            if (device.lastBatteryPct != null) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Battery: ${device.lastBatteryPct}%",
+                    style = TypographyMeta,
+                    color = if (device.lastBatteryPct <= 20)
+                        MaterialTheme.colorScheme.error
+                    else
+                        MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                )
+            }
             if (streamState != null && streamState.packetsReceived > 0) {
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
@@ -626,21 +685,33 @@ private fun DeviceCell(
             }
         }
 
-        // Battery % top-left — always shown when known
-        if (device.lastBatteryPct != null) {
-            Text(
-                text = "${device.lastBatteryPct}%",
-                style = TypographyMeta,
-                color = if (device.lastBatteryPct <= 20)
-                    MaterialTheme.colorScheme.error
+        // Primary-device star top-left
+        IconButton(
+            onClick = onStarTapped,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .size(32.dp),
+        ) {
+            Icon(
+                imageVector = if (device.isPrimary) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                contentDescription = if (device.isPrimary) "Primary device" else "Set as primary device",
+                modifier = Modifier.size(20.dp),
+                tint = if (device.isPrimary)
+                    MaterialTheme.colorScheme.primary
                 else
-                    MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(start = 6.dp, top = 6.dp),
-                maxLines = 1,
+                    MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+
+        // Auto-sync toggle bottom-left
+        Switch(
+            checked = device.autoSyncEnabled,
+            onCheckedChange = onAutoSyncToggled,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .scale(0.7f)
+                .padding(start = 4.dp, bottom = 2.dp),
+        )
 
         // Disconnect icon top-right — only when connected
         if (isActive) {

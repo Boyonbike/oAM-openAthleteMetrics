@@ -20,6 +20,7 @@ import com.athletedata.openAthleteMetrics.data.db.AppDatabase
 import com.athletedata.openAthleteMetrics.data.db.QuestionDefinitionDao
 import com.athletedata.openAthleteMetrics.data.db.QuestionDefinitionEntity
 import com.athletedata.openAthleteMetrics.worker.AppStartupWorker
+import com.athletedata.openAthleteMetrics.worker.BackgroundSyncWorker
 import com.athletedata.openAthleteMetrics.worker.enqueuePeriodicWidgetRefresh
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -100,6 +101,7 @@ class AthleteDataApplication : Application(), Configuration.Provider {
         }
         AppStartupWorker.enqueue(WorkManager.getInstance(this))
         enqueuePeriodicWidgetRefresh(WorkManager.getInstance(this))
+        BackgroundSyncWorker.enqueue(WorkManager.getInstance(this))
     }
 
     override val workManagerConfiguration: Configuration

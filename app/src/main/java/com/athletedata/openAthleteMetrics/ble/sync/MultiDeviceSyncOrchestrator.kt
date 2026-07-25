@@ -46,18 +46,27 @@ class MultiDeviceSyncOrchestrator @Inject constructor(
     // Fire-and-forget entry point (mirrors BleEngine.startSync()/triggerSync()) for callers
     // (MainActivity) that shouldn't tie the run's lifetime to their own scope.
     fun startAutoSync() {
+        scope.launch { runIfIdle() }
+    }
+
+    // Shared gate: the single arbiter serializing MainActivity's startup trigger,
+    // BackgroundSyncWorker's periodic runs, and CompanionPresenceSyncTrigger's
+    // presence-observation wake-ups. Callers that own their own coroutine (e.g. a Worker's
+    // doWork()) should await this directly rather than startAutoSync(), so the caller knows
+    // when the run (or the "already busy" no-op) actually finished. Returns true if this
+    // call actually ran a sync, false if it was skipped because another run was active.
+    suspend fun runIfIdle(): Boolean {
         if (!isRunning.compareAndSet(false, true)) {
             Timber.tag(TAG).i("MultiDeviceSyncOrchestrator: run already in progress, ignoring request")
-            return
+            return false
         }
-        scope.launch {
-            try {
-                runSequentialSync()
-            } finally {
-                _progress.value = null
-                isRunning.set(false)
-            }
+        try {
+            runSequentialSync()
+        } finally {
+            _progress.value = null
+            isRunning.set(false)
         }
+        return true
     }
 
     suspend fun runSequentialSync() {

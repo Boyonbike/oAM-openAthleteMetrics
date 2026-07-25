@@ -45,6 +45,15 @@
          .json files via SAF file picker; no declaration
          required -->
 
+    <!-- CompanionDeviceManager: association is requested at pairing time so a CDM-associated
+         band can wake the app via presence observation (API 33+) without an active scan; not
+         required hardware, degrades gracefully on devices without it. -->
+    <uses-feature
+        android:name="android.software.companion_device_setup"
+        android:required="false" />
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_RUN_IN_BACKGROUND" />
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
+
     <application
         android:name=".AthleteDataApplication"
         android:allowBackup="false"
@@ -70,6 +79,17 @@
             android:name=".ble.BleSyncService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+
+        <!-- API 33+ only (CompanionDeviceService itself requires it); on lower API levels
+             BackgroundSyncWorker's periodic cadence is the sole background trigger. -->
+        <service
+            android:name=".ble.companion.SyncCompanionDeviceService"
+            android:exported="true"
+            android:permission="android.permission.BIND_COMPANION_DEVICE_SERVICE">
+            <intent-filter>
+                <action android:name="android.companion.CompanionDeviceService" />
+            </intent-filter>
+        </service>
 
         <!-- Milestone 1: trivial static Glance widget proving the plumbing works. -->
         <receiver

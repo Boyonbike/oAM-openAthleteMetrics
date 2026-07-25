@@ -98,6 +98,15 @@ class RoomDeviceRepository @Inject constructor(
         }
     }
 
+    override suspend fun setCdmAssociated(bleAddress: String, associated: Boolean) {
+        try {
+            dao.setCdmAssociated(bleAddress, associated)
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to set device CDM association state")
+            throw e
+        }
+    }
+
     override fun observePrimary(): Flow<Device?> =
         dao.observePrimary().map { it?.toModel() }
 

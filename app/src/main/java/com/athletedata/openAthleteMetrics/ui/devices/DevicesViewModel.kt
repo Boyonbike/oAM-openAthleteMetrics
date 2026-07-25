@@ -1,11 +1,13 @@
 package com.athletedata.openAthleteMetrics.ui.devices
 
+import android.content.IntentSender
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.athletedata.openAthleteMetrics.ble.BleConnectionState
 import com.athletedata.openAthleteMetrics.ble.BleEngine
 import com.athletedata.openAthleteMetrics.ble.DiscoveredCandidate
+import com.athletedata.openAthleteMetrics.ble.companion.CompanionDeviceAssociator
 import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
 import com.athletedata.openAthleteMetrics.ble.driver.DriverStorage
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
@@ -62,6 +64,7 @@ class DevicesViewModel @Inject constructor(
     private val deviceReprocessor: DeviceReprocessor,
     private val syncSessionRepository: SyncSessionRepository,
     private val settingsRepository: SettingsRepository,
+    private val companionDeviceAssociator: CompanionDeviceAssociator,
 ) : ViewModel() {
 
     val devices: StateFlow<List<Device>> = deviceRepository.getAllDevices()
@@ -82,6 +85,11 @@ class DevicesViewModel @Inject constructor(
 
     private val _snackbarEvents = Channel<String>(Channel.BUFFERED)
     val snackbarEvents: Flow<String> = _snackbarEvents.receiveAsFlow()
+
+    // One-shot CDM consent requests for DevicesScreen to launch via
+    // ActivityResultContracts.StartIntentSenderForResult - mirrors _snackbarEvents' shape.
+    private val _associationRequests = Channel<IntentSender>(Channel.BUFFERED)
+    val associationRequests: Flow<IntentSender> = _associationRequests.receiveAsFlow()
 
     val connectionState: StateFlow<BleConnectionState> = bleEngine.connectionState
         .stateIn(
@@ -140,7 +148,30 @@ class DevicesViewModel @Inject constructor(
     }
 
     fun onCandidateSelected(candidate: DiscoveredCandidate) {
+        // Pairing must not block on CDM consent, so the connect proceeds unconditionally;
+        // the association request runs alongside it and only affects whether this device
+        // later gets a presence-triggered background wake (see onAssociationResult).
         bleEngine.connectToCandidate(candidate)
+        viewModelScope.launch {
+            val chooserLauncher = companionDeviceAssociator.requestAssociation(candidate.address, candidate.deviceName)
+            if (chooserLauncher != null) {
+                _associationRequests.send(chooserLauncher)
+            }
+        }
+    }
+
+    /**
+     * Called by DevicesScreen once the user has resolved the CDM consent dialog launched from
+     * [associationRequests]. A decline (granted = false) is not an error - the device simply
+     * falls back to periodic-only background sync via BackgroundSyncWorker.
+     */
+    fun onAssociationResult(bleAddress: String, granted: Boolean) {
+        viewModelScope.launch {
+            deviceRepository.setCdmAssociated(bleAddress, granted)
+            if (granted) {
+                companionDeviceAssociator.startObservingPresence(bleAddress)
+            }
+        }
     }
 
     fun onDeviceCellTapped(device: Device) {

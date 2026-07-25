@@ -10,4 +10,5 @@ data class Device(
     val lastBatteryPct: Int? = null,
     val isPrimary: Boolean = false,
     val autoSyncEnabled: Boolean = true,
+    val cdmAssociated: Boolean = false,
 )

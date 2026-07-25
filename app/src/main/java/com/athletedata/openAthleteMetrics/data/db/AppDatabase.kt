@@ -63,6 +63,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *       multi-device "bring your own band" primary-device model; backfilled is_primary onto
  *       the most-recently-active device (same heuristic autoConnectOnStartup used before this
  *       migration), auto_sync_enabled defaults to 1 for all existing devices unchanged.
+ *  25 — added cdm_associated (INTEGER, default 0) to devices: tracks whether a
+ *       CompanionDeviceManager association was granted for this device at pairing time, so
+ *       BackgroundSyncWorker/SyncCompanionDeviceService know which devices can be woken via
+ *       CDM presence observation vs. rely solely on the periodic Worker.
  */
 @Database(
     entities = [
@@ -92,7 +96,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BaselineWindowConfigEntity::class,
         MetricDailyStatsEntity::class,
     ],
-    version = 24,
+    version = 25,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -1331,6 +1335,15 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                     """.trimIndent()
                 )
+            }
+        }
+
+        val MIGRATION_24_25 = object : Migration(24, 25) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // DEFAULT 0: existing devices have no CDM association until the user re-pairs
+                // or the app requests one retroactively; this is a "not yet associated" default,
+                // not a claim that association was ever attempted.
+                db.execSQL("ALTER TABLE `devices` ADD COLUMN `cdm_associated` INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

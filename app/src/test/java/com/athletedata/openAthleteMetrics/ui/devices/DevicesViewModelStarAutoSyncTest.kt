@@ -2,6 +2,7 @@ package com.athletedata.openAthleteMetrics.ui.devices
 
 import com.athletedata.openAthleteMetrics.ble.BleConnectionState
 import com.athletedata.openAthleteMetrics.ble.BleEngine
+import com.athletedata.openAthleteMetrics.ble.companion.CompanionDeviceAssociator
 import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
 import com.athletedata.openAthleteMetrics.ble.driver.DriverStorage
 import com.athletedata.openAthleteMetrics.ble.sync.DeviceReprocessor
@@ -58,6 +59,7 @@ class DevicesViewModelStarAutoSyncTest {
                 coEvery { getRecentInProgress(any()) } returns emptyList()
             },
             settingsRepository = settingsRepository,
+            companionDeviceAssociator = mockk<CompanionDeviceAssociator>(relaxed = true),
         )
     }
 

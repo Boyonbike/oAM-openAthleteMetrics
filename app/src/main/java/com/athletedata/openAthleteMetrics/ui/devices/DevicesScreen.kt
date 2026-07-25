@@ -1,7 +1,9 @@
 package com.athletedata.openAthleteMetrics.ui.devices
 
 import android.Manifest
+import android.app.Activity
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -121,6 +123,25 @@ fun DevicesScreen(
     val storagePermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted -> if (granted) filePicker.launch("*/*") }
+
+    // Correlates a launched CDM consent IntentSender back to the address it was requested
+    // for - viewModel.associationRequests only carries the IntentSender, set alongside the
+    // onCandidateSelected() call below since that's the only place a new address is known.
+    var pendingAssociationAddress by remember { mutableStateOf<String?>(null) }
+    val associationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        pendingAssociationAddress?.let { address ->
+            viewModel.onAssociationResult(address, result.resultCode == Activity.RESULT_OK)
+        }
+        pendingAssociationAddress = null
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.associationRequests.collect { intentSender ->
+            associationLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.driverEvents.collect { event ->
@@ -373,7 +394,10 @@ fun DevicesScreen(
                                 CandidateCell(
                                     candidate = candidate,
                                     hasDuplicateNames = hasDuplicateNames,
-                                    onAdd = { viewModel.onCandidateSelected(candidate) },
+                                    onAdd = {
+                                        pendingAssociationAddress = candidate.address
+                                        viewModel.onCandidateSelected(candidate)
+                                    },
                                 )
                             }
                             if (connectionState !is BleConnectionState.Scanning && filteredCandidates.isEmpty()) {

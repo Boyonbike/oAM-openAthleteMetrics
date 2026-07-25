@@ -18,13 +18,18 @@ import io.mockk.mockk
 import io.mockk.verify
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -208,5 +213,37 @@ class MultiDeviceSyncOrchestratorTest {
 
         assertTrue("expected settle-wait to be skipped, elapsed=${testScheduler.currentTime}ms", testScheduler.currentTime < 1_000L)
         assertEquals(listOf(unreachable.bleAddress, next.bleAddress), events.filter { it.startsWith("connect:") }.map { it.removePrefix("connect:") })
+    }
+
+    @Test
+    fun `runIfIdle runs the sync and returns true when idle`() = runTest(testDispatcher) {
+        val solo = device(1, "Solo")
+        coEvery { deviceRepository.getAutoSyncEnabledOrdered() } returns listOf(solo)
+
+        val ran = orchestrator.runIfIdle()
+
+        assertTrue(ran)
+        verify { bleEngine.connectToDevice(solo.bleAddress, any()) }
+    }
+
+    @Test
+    fun `runIfIdle returns false and never touches the engine when a run is already active`() = runTest(testDispatcher) {
+        // Keeps the first runIfIdle() suspended (isRunning already flipped true) so the
+        // second, unlaunched call below is guaranteed to observe it as busy — the shared
+        // gate MainActivity, BackgroundSyncWorker and CompanionPresenceSyncTrigger all rely on.
+        coEvery { deviceRepository.getAutoSyncEnabledOrdered() } coAnswers {
+            delay(1_000)
+            emptyList()
+        }
+
+        val firstRun = launch { orchestrator.runIfIdle() }
+        runCurrent() // let firstRun start and suspend on the delay above, past the CAS
+
+        val secondResult = orchestrator.runIfIdle()
+
+        assertFalse(secondResult)
+        advanceUntilIdle()
+        firstRun.join()
+        verify(exactly = 0) { bleEngine.connectToDevice(any(), any()) }
     }
 }

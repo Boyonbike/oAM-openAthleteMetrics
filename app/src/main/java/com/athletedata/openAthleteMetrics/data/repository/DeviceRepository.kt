@@ -25,6 +25,8 @@ interface DeviceRepository {
 
     suspend fun setAutoSync(deviceId: Long, enabled: Boolean)
 
+    suspend fun setCdmAssociated(bleAddress: String, associated: Boolean)
+
     fun observePrimary(): Flow<Device?>
 
     suspend fun getPrimary(): Device?

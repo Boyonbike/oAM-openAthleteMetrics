@@ -54,6 +54,11 @@ interface DeviceDao {
     @Query("UPDATE devices SET auto_sync_enabled = :enabled WHERE id = :deviceId")
     suspend fun setAutoSync(deviceId: Long, enabled: Boolean)
 
+    // Best-effort: called right after a CompanionDeviceManager association request resolves,
+    // keyed by ble_address since the CDM flow only knows the address, not the local row id.
+    @Query("UPDATE devices SET cdm_associated = :associated WHERE ble_address = :bleAddress")
+    suspend fun setCdmAssociated(bleAddress: String, associated: Boolean)
+
     // ── Reads ─────────────────────────────────────────────────────────────────
 
     @Query("SELECT * FROM devices ORDER BY display_name ASC")

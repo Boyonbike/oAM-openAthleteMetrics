@@ -11,7 +11,7 @@ import org.json.JSONObject
 
 @Entity(
     tableName = "blood_pressure_readings",
-    indices = [Index(value = ["driver_id", "recorded_at"], unique = true)],
+    indices = [Index(value = ["device_id", "recorded_at"], unique = true)],
 )
 data class BloodPressureReadingEntity(
     @PrimaryKey(autoGenerate = true)

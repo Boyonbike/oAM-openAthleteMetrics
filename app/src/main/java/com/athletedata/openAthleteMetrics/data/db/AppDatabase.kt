@@ -50,6 +50,15 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *       (physical devices.id, not the driver); backfilled from devices.id where driver_id
  *       maps to exactly one device row. Additive only — no index changes; existing
  *       driver_id-based unique/dedup indexes are unchanged.
+ *  23 — replaced the driver_id-based UNIQUE dedup indexes on the same 13 tables with
+ *       device_id-based UNIQUE indexes (fixes two physical units sharing a driver
+ *       colliding at the same timestamp). driver_id remains a plain provenance column,
+ *       not removed. Index-only migration — no table rebuilt, no row deleted or merged.
+ *       Safe without a pre-merge step: under the old (driver_id, X) uniqueness every
+ *       attributed row's device_id was already 1:1 with its driver_id (v22's
+ *       single-device backfill), so CREATE UNIQUE INDEX on (device_id, X) cannot collide
+ *       for attributed rows; NULL-device rows are pairwise distinct under SQLite's
+ *       NULL-in-unique-index handling, so they can't collide either.
  */
 @Database(
     entities = [
@@ -79,7 +88,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BaselineWindowConfigEntity::class,
         MetricDailyStatsEntity::class,
     ],
-    version = 22,
+    version = 23,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -1201,6 +1210,95 @@ abstract class AppDatabase : RoomDatabase() {
                     WHERE `activities`.driver_id IS NOT NULL
                       AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `activities`.driver_id) = 1
                     """.trimIndent()
+                )
+            }
+        }
+
+        val MIGRATION_22_23 = object : Migration(22, 23) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // --- Replace driver_id-based UNIQUE dedup indexes with device_id-based ones. ---
+                // Index-only: no ALTER TABLE, no data touched. Safe without pre-merging
+                // duplicates -- see the v23 schema-history kdoc above for why.
+
+                db.execSQL("DROP INDEX IF EXISTS `index_hr_readings_driver_id_recorded_at`")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_hr_readings_device_id_recorded_at` " +
+                        "ON `hr_readings` (`device_id`, `recorded_at`)"
+                )
+
+                db.execSQL("DROP INDEX IF EXISTS `index_hrv_readings_driver_id_recorded_at`")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_hrv_readings_device_id_recorded_at` " +
+                        "ON `hrv_readings` (`device_id`, `recorded_at`)"
+                )
+
+                db.execSQL("DROP INDEX IF EXISTS `index_spo2_readings_driver_id_recorded_at`")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_spo2_readings_device_id_recorded_at` " +
+                        "ON `spo2_readings` (`device_id`, `recorded_at`)"
+                )
+
+                db.execSQL("DROP INDEX IF EXISTS `index_respiration_readings_driver_id_recorded_at`")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_respiration_readings_device_id_recorded_at` " +
+                        "ON `respiration_readings` (`device_id`, `recorded_at`)"
+                )
+
+                db.execSQL("DROP INDEX IF EXISTS `index_skin_temp_readings_driver_id_recorded_at`")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_skin_temp_readings_device_id_recorded_at` " +
+                        "ON `skin_temp_readings` (`device_id`, `recorded_at`)"
+                )
+
+                db.execSQL("DROP INDEX IF EXISTS `index_steps_readings_driver_id_recorded_at`")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_steps_readings_device_id_recorded_at` " +
+                        "ON `steps_readings` (`device_id`, `recorded_at`)"
+                )
+
+                db.execSQL("DROP INDEX IF EXISTS `index_blood_pressure_readings_driver_id_recorded_at`")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_blood_pressure_readings_device_id_recorded_at` " +
+                        "ON `blood_pressure_readings` (`device_id`, `recorded_at`)"
+                )
+
+                db.execSQL("DROP INDEX IF EXISTS `index_glucose_readings_driver_id_recorded_at`")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_glucose_readings_device_id_recorded_at` " +
+                        "ON `glucose_readings` (`device_id`, `recorded_at`)"
+                )
+
+                db.execSQL("DROP INDEX IF EXISTS `index_active_calorie_readings_driver_id_recorded_at`")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_active_calorie_readings_device_id_recorded_at` " +
+                        "ON `active_calorie_readings` (`device_id`, `recorded_at`)"
+                )
+
+                db.execSQL("DROP INDEX IF EXISTS `index_total_calorie_readings_driver_id_recorded_at`")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_total_calorie_readings_device_id_recorded_at` " +
+                        "ON `total_calorie_readings` (`device_id`, `recorded_at`)"
+                )
+
+                // metric_readings_staging: only the (driver_id, metric_type, recorded_at) UNIQUE
+                // index is replaced. index_metric_readings_staging_metric_type_recorded_at
+                // (non-unique, ASC/DESC ordered) is untouched.
+                db.execSQL("DROP INDEX IF EXISTS `index_metric_readings_staging_driver_id_metric_type_recorded_at`")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_metric_readings_staging_device_id_metric_type_recorded_at` " +
+                        "ON `metric_readings_staging` (`device_id`, `metric_type`, `recorded_at`)"
+                )
+
+                db.execSQL("DROP INDEX IF EXISTS `index_sleep_sessions_driver_id_date`")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_sleep_sessions_device_id_date` " +
+                        "ON `sleep_sessions` (`device_id`, `date`)"
+                )
+
+                db.execSQL("DROP INDEX IF EXISTS `index_activities_driver_id_start_time`")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_activities_device_id_start_time` " +
+                        "ON `activities` (`device_id`, `start_time`)"
                 )
             }
         }

@@ -11,7 +11,7 @@ import java.time.Instant
 /** Calories burned during activity periods only (excludes resting metabolic rate). */
 @Entity(
     tableName = "active_calorie_readings",
-    indices = [Index(value = ["driver_id", "recorded_at"], unique = true)],
+    indices = [Index(value = ["device_id", "recorded_at"], unique = true)],
 )
 data class ActiveCalorieReadingEntity(
     @PrimaryKey(autoGenerate = true)

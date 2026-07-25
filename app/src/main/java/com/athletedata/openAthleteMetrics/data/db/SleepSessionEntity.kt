@@ -17,7 +17,7 @@ import java.time.LocalDate
  */
 @Entity(
     tableName = "sleep_sessions",
-    indices = [Index(value = ["driver_id", "date"], unique = true)],
+    indices = [Index(value = ["device_id", "date"], unique = true)],
 )
 data class SleepSessionEntity(
     @PrimaryKey(autoGenerate = true)

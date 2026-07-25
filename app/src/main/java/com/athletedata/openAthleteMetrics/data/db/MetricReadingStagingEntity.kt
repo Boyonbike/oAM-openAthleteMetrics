@@ -21,7 +21,7 @@ import java.time.Instant
     tableName = "metric_readings_staging",
     indices = [
         Index(value = ["metric_type", "recorded_at"], orders = [Index.Order.ASC, Index.Order.DESC]),
-        Index(value = ["driver_id", "metric_type", "recorded_at"], unique = true),
+        Index(value = ["device_id", "metric_type", "recorded_at"], unique = true),
     ],
 )
 data class MetricReadingStagingEntity(

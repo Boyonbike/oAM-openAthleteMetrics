@@ -11,7 +11,7 @@ import java.time.Instant
 
 @Entity(
     tableName = "activities",
-    indices = [Index(value = ["driver_id", "start_time"], unique = true)],
+    indices = [Index(value = ["device_id", "start_time"], unique = true)],
 )
 data class ActivityEntity(
     @PrimaryKey(autoGenerate = true)

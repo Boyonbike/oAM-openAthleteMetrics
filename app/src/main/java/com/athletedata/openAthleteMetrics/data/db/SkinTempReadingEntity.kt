@@ -10,7 +10,7 @@ import java.time.Instant
 
 @Entity(
     tableName = "skin_temp_readings",
-    indices = [Index(value = ["driver_id", "recorded_at"], unique = true)],
+    indices = [Index(value = ["device_id", "recorded_at"], unique = true)],
 )
 data class SkinTempReadingEntity(
     @PrimaryKey(autoGenerate = true)

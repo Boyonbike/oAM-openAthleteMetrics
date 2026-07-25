@@ -21,6 +21,14 @@ interface DeviceRepository {
 
     suspend fun updateLastBatteryPct(bleAddress: String, pct: Int)
 
+    suspend fun setPrimary(deviceId: Long)
+
+    suspend fun setAutoSync(deviceId: Long, enabled: Boolean)
+
+    fun observePrimary(): Flow<Device?>
+
+    suspend fun getPrimary(): Device?
+
     // RESET-SYSTEM
     suspend fun deleteAll()
 }

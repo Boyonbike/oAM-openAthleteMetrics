@@ -80,6 +80,30 @@ class RoomDeviceRepository @Inject constructor(
         }
     }
 
+    override suspend fun setPrimary(deviceId: Long) {
+        try {
+            dao.setPrimary(deviceId)
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to set primary device")
+            throw e
+        }
+    }
+
+    override suspend fun setAutoSync(deviceId: Long, enabled: Boolean) {
+        try {
+            dao.setAutoSync(deviceId, enabled)
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to set device auto-sync")
+            throw e
+        }
+    }
+
+    override fun observePrimary(): Flow<Device?> =
+        dao.observePrimary().map { it?.toModel() }
+
+    override suspend fun getPrimary(): Device? =
+        dao.getPrimary()?.toModel()
+
     // RESET-SYSTEM
     override suspend fun deleteAll() {
         database.withTransaction {

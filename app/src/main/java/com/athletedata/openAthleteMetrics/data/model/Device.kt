@@ -8,4 +8,6 @@ data class Device(
     val lastSeenMs: Long? = null,
     val lastSyncMs: Long? = null,
     val lastBatteryPct: Int? = null,
+    val isPrimary: Boolean = false,
+    val autoSyncEnabled: Boolean = true,
 )

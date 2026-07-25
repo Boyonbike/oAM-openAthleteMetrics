@@ -59,6 +59,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *       single-device backfill), so CREATE UNIQUE INDEX on (device_id, X) cannot collide
  *       for attributed rows; NULL-device rows are pairwise distinct under SQLite's
  *       NULL-in-unique-index handling, so they can't collide either.
+ *  24 — added is_primary and auto_sync_enabled (INTEGER, default 0/1) to devices for the
+ *       multi-device "bring your own band" primary-device model; backfilled is_primary onto
+ *       the most-recently-active device (same heuristic autoConnectOnStartup used before this
+ *       migration), auto_sync_enabled defaults to 1 for all existing devices unchanged.
  */
 @Database(
     entities = [
@@ -88,7 +92,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BaselineWindowConfigEntity::class,
         MetricDailyStatsEntity::class,
     ],
-    version = 23,
+    version = 24,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -1299,6 +1303,33 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL(
                     "CREATE UNIQUE INDEX IF NOT EXISTS `index_activities_device_id_start_time` " +
                         "ON `activities` (`device_id`, `start_time`)"
+                )
+            }
+        }
+
+        val MIGRATION_23_24 = object : Migration(23, 24) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // auto_sync_enabled DEFAULT 1: SQLite backfills the default into existing rows
+                // at ALTER time, so no separate UPDATE is needed to preserve today's
+                // always-sync behavior.
+                db.execSQL("ALTER TABLE `devices` ADD COLUMN `is_primary` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `devices` ADD COLUMN `auto_sync_enabled` INTEGER NOT NULL DEFAULT 1")
+
+                // Backfill is_primary: the most recently active device becomes primary, same
+                // heuristic autoConnectOnStartup used before this migration. Deterministic
+                // tie-break (id ASC) guarantees exactly one row wins even when all timestamps
+                // are NULL/equal. Zero devices -> subquery returns no row -> UPDATE affects
+                // 0 rows (safe no-op).
+                db.execSQL(
+                    """
+                    UPDATE `devices`
+                    SET is_primary = 1
+                    WHERE id = (
+                        SELECT id FROM `devices`
+                        ORDER BY COALESCE(last_sync_ms, last_seen_ms, 0) DESC, id ASC
+                        LIMIT 1
+                    )
+                    """.trimIndent()
                 )
             }
         }

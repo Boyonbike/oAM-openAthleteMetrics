@@ -726,4 +726,93 @@ class BleEngineTest {
         assertTrue("metricRouter.route was not called", routeLatch.await(5, TimeUnit.SECONDS))
         assertNull(captured.captured.deviceId)
     }
+
+    // -------------------------------------------------------------------------
+    // autoConnectOnStartup
+    //
+    // connectToDevice() is exercised for real (not mocked) rather than intercepted, since
+    // BleEngine is not spied. With the relaxed mockk<Context>() from setUp(), getSystemService
+    // returns null, so a real reach into connectToDevice() deterministically lands on the
+    // "Bluetooth is disabled" Error state without touching any other BLE framework API -- this
+    // is used below purely as an observable proxy for "connectToDevice was reached", not to
+    // exercise BLE connection formation itself.
+    // -------------------------------------------------------------------------
+
+    private fun primaryDevice(
+        autoSyncEnabled: Boolean = true,
+        driverId: String = "test-driver",
+    ) = Device(
+        id = 5L,
+        bleAddress = "AA:BB:CC:DD:EE:FF",
+        driverId = driverId,
+        displayName = "Test",
+        isPrimary = true,
+        autoSyncEnabled = autoSyncEnabled,
+    )
+
+    @Test
+    fun `autoConnectOnStartup reaches connectToDevice when primary auto_sync is enabled`() = runBlocking {
+        coEvery { deviceRepository.getPrimary() } returns primaryDevice(autoSyncEnabled = true)
+        every { driverRegistry.allDrivers() } returns listOf(testManifest())
+
+        engine.autoConnectOnStartup()
+
+        coVerify { deviceRepository.getPrimary() }
+        assertEquals(BleConnectionState.Error("Bluetooth is disabled"), getPrivateField("_connectionState").let {
+            @Suppress("UNCHECKED_CAST")
+            (it as MutableStateFlow<BleConnectionState>).value
+        })
+    }
+
+    @Test
+    fun `autoConnectOnStartup does not connect when primary auto_sync is disabled`() = runBlocking {
+        coEvery { deviceRepository.getPrimary() } returns primaryDevice(autoSyncEnabled = false)
+
+        engine.autoConnectOnStartup()
+
+        coVerify { deviceRepository.getPrimary() }
+        verify(exactly = 0) { driverRegistry.allDrivers() }
+        assertEquals(BleConnectionState.Idle, getPrivateField("_connectionState").let {
+            @Suppress("UNCHECKED_CAST")
+            (it as MutableStateFlow<BleConnectionState>).value
+        })
+    }
+
+    @Test
+    fun `autoConnectOnStartup does not connect when there is no primary device`() = runBlocking {
+        coEvery { deviceRepository.getPrimary() } returns null
+
+        engine.autoConnectOnStartup()
+
+        coVerify { deviceRepository.getPrimary() }
+        verify(exactly = 0) { driverRegistry.allDrivers() }
+        assertEquals(BleConnectionState.Idle, getPrivateField("_connectionState").let {
+            @Suppress("UNCHECKED_CAST")
+            (it as MutableStateFlow<BleConnectionState>).value
+        })
+    }
+
+    @Test
+    fun `autoConnectOnStartup does not connect when primary device's driver has no matching manifest`() = runBlocking {
+        coEvery { deviceRepository.getPrimary() } returns primaryDevice(driverId = "unknown-driver")
+        every { driverRegistry.allDrivers() } returns listOf(testManifest())
+
+        engine.autoConnectOnStartup()
+
+        assertEquals(BleConnectionState.Idle, getPrivateField("_connectionState").let {
+            @Suppress("UNCHECKED_CAST")
+            (it as MutableStateFlow<BleConnectionState>).value
+        })
+    }
+
+    @Test
+    fun `autoConnectOnStartup does nothing when connectionState is not Idle`() = runBlocking {
+        @Suppress("UNCHECKED_CAST")
+        val connectionStateFlow = getPrivateField("_connectionState") as MutableStateFlow<BleConnectionState>
+        connectionStateFlow.value = BleConnectionState.Connecting("AA:BB:CC:DD:EE:FF")
+
+        engine.autoConnectOnStartup()
+
+        coVerify(exactly = 0) { deviceRepository.getPrimary() }
+    }
 }

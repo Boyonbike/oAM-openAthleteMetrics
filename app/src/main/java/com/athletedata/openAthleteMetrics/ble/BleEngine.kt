@@ -59,7 +59,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
@@ -229,9 +228,8 @@ class BleEngine @Inject constructor(
     fun autoConnectOnStartup() {
         scope.launch {
             if (_connectionState.value !is BleConnectionState.Idle) return@launch
-            val devices = deviceRepository.getAllDevices().first()
-            if (devices.isEmpty()) return@launch
-            val device = devices.maxByOrNull { it.lastSyncMs ?: it.lastSeenMs ?: 0L } ?: return@launch
+            val device = deviceRepository.getPrimary() ?: return@launch
+            if (!device.autoSyncEnabled) return@launch
             val manifest = driverRegistry.allDrivers().find { it.id == device.driverId } ?: return@launch
             connectToDevice(device.bleAddress, manifest)
         }

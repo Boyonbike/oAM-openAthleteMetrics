@@ -25,6 +25,10 @@ data class DeviceEntity(
     val lastSyncMs: Long? = null,
     @ColumnInfo(name = "last_battery_pct")
     val lastBatteryPct: Int? = null,
+    @ColumnInfo(name = "is_primary")
+    val isPrimary: Boolean = false,
+    @ColumnInfo(name = "auto_sync_enabled")
+    val autoSyncEnabled: Boolean = true,
 )
 
 // ── Mappers ──────────────────────────────────────────────────────────────────
@@ -37,6 +41,8 @@ fun DeviceEntity.toModel() = Device(
     lastSeenMs = lastSeenMs,
     lastSyncMs = lastSyncMs,
     lastBatteryPct = lastBatteryPct,
+    isPrimary = isPrimary,
+    autoSyncEnabled = autoSyncEnabled,
 )
 
 fun Device.toEntity() = DeviceEntity(
@@ -47,4 +53,6 @@ fun Device.toEntity() = DeviceEntity(
     lastSeenMs = lastSeenMs,
     lastSyncMs = lastSyncMs,
     lastBatteryPct = lastBatteryPct,
+    isPrimary = isPrimary,
+    autoSyncEnabled = autoSyncEnabled,
 )

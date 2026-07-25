@@ -9,7 +9,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.getValue
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.athletedata.openAthleteMetrics.ble.BleEngine
+import com.athletedata.openAthleteMetrics.ble.sync.MultiDeviceSyncOrchestrator
 import com.athletedata.openAthleteMetrics.data.model.ThemePreference
 import com.athletedata.openAthleteMetrics.ui.nav.AppNavGraph
 import com.athletedata.openAthleteMetrics.ui.settings.SettingsViewModel
@@ -21,7 +21,7 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
-    @Inject lateinit var bleEngine: BleEngine
+    @Inject lateinit var multiDeviceSyncOrchestrator: MultiDeviceSyncOrchestrator
 
     // Seeded from `intent` in onCreate and updated by onNewIntent — lets a home-screen
     // widget tap deep-link into the app whether it's cold-started or already running.
@@ -31,7 +31,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        bleEngine.autoConnectOnStartup()
+        multiDeviceSyncOrchestrator.startAutoSync()
         widgetIntent.value = intent
         enableEdgeToEdge()
         setContent {

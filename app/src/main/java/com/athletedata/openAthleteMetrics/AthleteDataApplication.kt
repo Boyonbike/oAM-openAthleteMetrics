@@ -13,6 +13,8 @@ import com.athletedata.openAthleteMetrics.ble.BleEngine
 import com.athletedata.openAthleteMetrics.ble.BleSyncService
 import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
 import com.athletedata.openAthleteMetrics.ble.sync.DeviceSyncProcessor
+import com.athletedata.openAthleteMetrics.ble.sync.MultiDeviceSyncOrchestrator
+import com.athletedata.openAthleteMetrics.ble.sync.SyncProgress
 import com.athletedata.openAthleteMetrics.ble.wasm.WasmRuntimeCheck
 import com.athletedata.openAthleteMetrics.data.db.AppDatabase
 import com.athletedata.openAthleteMetrics.data.db.QuestionDefinitionDao
@@ -26,6 +28,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import timber.log.Timber
 import javax.inject.Inject
@@ -38,6 +41,9 @@ class AthleteDataApplication : Application(), Configuration.Provider {
 
     @Inject
     lateinit var bleEngine: BleEngine
+
+    @Inject
+    lateinit var multiDeviceSyncOrchestrator: MultiDeviceSyncOrchestrator
 
     @Inject
     lateinit var syncProcessor: DeviceSyncProcessor
@@ -59,6 +65,11 @@ class AthleteDataApplication : Application(), Configuration.Provider {
     // (e.g. Connected re-emits on every packet received).
     private var syncServiceActive = false
     private var pendingStopJob: Job? = null
+
+    // Tracks what BleSyncService was last told to show, decoupled from syncServiceActive's
+    // rising-edge check, so per-device progress updates keep landing throughout a multi-device
+    // auto-sync run (syncServiceActive stays true for the whole run once started).
+    private var lastNotifiedProgress: SyncProgress? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -114,7 +125,9 @@ class AthleteDataApplication : Application(), Configuration.Provider {
     // streaming immediately after connect — well before Syncing is ever set.
     private fun observeBleSyncService() {
         applicationScope.launch {
-            bleEngine.connectionState.collect { state ->
+            combine(bleEngine.connectionState, multiDeviceSyncOrchestrator.progress) { state, progress ->
+                state to progress
+            }.collect { (state, progress) ->
                 val shouldBeActive = when (state) {
                     is BleConnectionState.Connecting,
                     is BleConnectionState.Connected,
@@ -126,7 +139,14 @@ class AthleteDataApplication : Application(), Configuration.Provider {
                 if (shouldBeActive) {
                     pendingStopJob?.cancel()
                     pendingStopJob = null
-                    if (!syncServiceActive) startBleSyncService()
+                    // Re-deliver the intent whenever progress changes, even if the service is
+                    // already running, so per-device notification text stays current —
+                    // startForegroundService() on an already-running FGS just redelivers
+                    // onStartCommand with the new extras.
+                    if (!syncServiceActive || progress != lastNotifiedProgress) {
+                        startBleSyncService(progress)
+                        lastNotifiedProgress = progress
+                    }
                 } else if (syncServiceActive && pendingStopJob == null) {
                     // Debounce the stop: a brief Disconnected -> Connecting blip during
                     // BleEngine's own GATT-reconnect retry (2s/4s/8s backoff) shouldn't tear
@@ -141,9 +161,16 @@ class AthleteDataApplication : Application(), Configuration.Provider {
         }
     }
 
-    private fun startBleSyncService() {
+    private fun startBleSyncService(progress: SyncProgress? = null) {
+        val intent = Intent(this, BleSyncService::class.java).apply {
+            if (progress != null) {
+                putExtra(BleSyncService.EXTRA_DEVICE_NAME, progress.deviceName)
+                putExtra(BleSyncService.EXTRA_INDEX, progress.index)
+                putExtra(BleSyncService.EXTRA_TOTAL, progress.total)
+            }
+        }
         try {
-            ContextCompat.startForegroundService(this, Intent(this, BleSyncService::class.java))
+            ContextCompat.startForegroundService(this, intent)
             syncServiceActive = true
         } catch (e: ForegroundServiceStartNotAllowedException) {
             // Every connect() call site today is UI-triggered, so the app should always be
@@ -157,6 +184,7 @@ class AthleteDataApplication : Application(), Configuration.Provider {
     private fun stopBleSyncService() {
         stopService(Intent(this, BleSyncService::class.java))
         syncServiceActive = false
+        lastNotifiedProgress = null
     }
 
     companion object {

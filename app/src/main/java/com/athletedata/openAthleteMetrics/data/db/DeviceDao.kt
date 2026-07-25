@@ -70,4 +70,10 @@ interface DeviceDao {
 
     @Query("SELECT * FROM devices WHERE is_primary = 1 LIMIT 1")
     suspend fun getPrimary(): DeviceEntity?
+
+    // Primary first (when it's also auto-sync-enabled), then the rest of the
+    // auto-sync-enabled devices alphabetically. A primary device can have auto-sync
+    // individually disabled via setAutoSync(), which this correctly excludes.
+    @Query("SELECT * FROM devices WHERE auto_sync_enabled = 1 ORDER BY is_primary DESC, display_name ASC")
+    suspend fun getAutoSyncEnabledOrdered(): List<DeviceEntity>
 }

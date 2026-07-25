@@ -225,16 +225,6 @@ class BleEngine @Inject constructor(
     // Public API
     // -------------------------------------------------------------------------
 
-    fun autoConnectOnStartup() {
-        scope.launch {
-            if (_connectionState.value !is BleConnectionState.Idle) return@launch
-            val device = deviceRepository.getPrimary() ?: return@launch
-            if (!device.autoSyncEnabled) return@launch
-            val manifest = driverRegistry.allDrivers().find { it.id == device.driverId } ?: return@launch
-            connectToDevice(device.bleAddress, manifest)
-        }
-    }
-
     @SuppressLint("MissingPermission")
     fun connectToDevice(bleAddress: String, manifest: WasmDriverManifest) {
         val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager

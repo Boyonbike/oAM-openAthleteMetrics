@@ -104,6 +104,9 @@ class RoomDeviceRepository @Inject constructor(
     override suspend fun getPrimary(): Device? =
         dao.getPrimary()?.toModel()
 
+    override suspend fun getAutoSyncEnabledOrdered(): List<Device> =
+        dao.getAutoSyncEnabledOrdered().map { it.toModel() }
+
     // RESET-SYSTEM
     override suspend fun deleteAll() {
         database.withTransaction {

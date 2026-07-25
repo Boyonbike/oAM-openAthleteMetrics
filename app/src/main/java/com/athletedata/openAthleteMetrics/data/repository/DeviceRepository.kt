@@ -29,6 +29,8 @@ interface DeviceRepository {
 
     suspend fun getPrimary(): Device?
 
+    suspend fun getAutoSyncEnabledOrdered(): List<Device>
+
     // RESET-SYSTEM
     suspend fun deleteAll()
 }

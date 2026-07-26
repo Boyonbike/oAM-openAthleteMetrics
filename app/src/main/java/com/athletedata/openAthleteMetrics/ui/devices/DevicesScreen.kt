@@ -332,6 +332,7 @@ fun DevicesScreen(
                     connectionState !is BleConnectionState.Connected) {
                     BleBanner(
                         state = connectionState,
+                        onScanCancelled = viewModel::onScanCancelled,
                         onSyncAcknowledged = viewModel::onSyncAcknowledged,
                         onAddDeviceTapped = viewModel::onAddDeviceTapped,
                         onDisconnectDismissed = viewModel::onDisconnectDismissed,
@@ -864,6 +865,7 @@ private fun SyncInterruptedBanner(onDismiss: () -> Unit) {
 @Composable
 private fun BleBanner(
     state: BleConnectionState,
+    onScanCancelled: () -> Unit,
     onSyncAcknowledged: () -> Unit,
     onAddDeviceTapped: () -> Unit,
     onDisconnectDismissed: () -> Unit,
@@ -879,7 +881,14 @@ private fun BleBanner(
         Column(modifier = Modifier.fillMaxWidth().padding(space8)) {
             when (state) {
                 is BleConnectionState.Scanning -> {
-                    Text("Scanning for devices...", style = TypographyTitle)
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Scanning for devices...",
+                            style = TypographyTitle,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = onScanCancelled) { Text("Stop") }
+                    }
                     Spacer(Modifier.height(space4))
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }

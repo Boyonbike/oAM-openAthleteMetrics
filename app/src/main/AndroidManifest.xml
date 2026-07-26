@@ -80,6 +80,15 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 
+        <!-- WorkManager's own proxy service has no foregroundServiceType by default; without
+             this override, BackgroundSyncWorker's setForeground(CONNECTED_DEVICE) throws
+             IllegalArgumentException on API 34+ since the requested type isn't a subset of
+             what the manifest declares. -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="connectedDevice"
+            tools:node="merge" />
+
         <!-- API 33+ only (CompanionDeviceService itself requires it); on lower API levels
              BackgroundSyncWorker's periodic cadence is the sole background trigger. -->
         <service

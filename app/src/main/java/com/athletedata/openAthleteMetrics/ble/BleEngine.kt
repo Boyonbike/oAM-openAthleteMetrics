@@ -96,7 +96,7 @@ class BleEngine @Inject constructor(
         private const val TAG = "data-pathway-tracker" // DPT
         private const val CCCD_UUID = "00002902-0000-1000-8000-00805f9b34fb"
         private const val MTU_REQUEST = 512
-        private const val SCAN_TIMEOUT_MS = 10_000L
+        private const val SCAN_TIMEOUT_MS = 30_000L
         private const val MAX_RETRIES = 3
         private const val STREAM_QUIESCENCE_MS = 3_000L
         private const val SILENT_SYNC_TIMEOUT_MS = 15_000L
@@ -340,6 +340,13 @@ class BleEngine @Inject constructor(
             }
         }
         return true
+    }
+
+    fun cancelScan() {
+        if (_connectionState.value is BleConnectionState.Scanning) {
+            stopScan()
+            _connectionState.value = BleConnectionState.Idle
+        }
     }
 
     fun disconnect() {

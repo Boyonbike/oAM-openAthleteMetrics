@@ -104,6 +104,7 @@ class MultiDeviceSyncOrchestratorTest {
                 val terminal = terminalByAddress[address]?.invoke()
                     ?: BleConnectionState.SyncComplete(mockk(relaxed = true), address)
                 stateFlow.value = terminal
+                true
             }
             every { acknowledgeSyncComplete() } answers {
                 events += "ack"
@@ -193,6 +194,21 @@ class MultiDeviceSyncOrchestratorTest {
         orchestrator.runSequentialSync()
 
         assertEquals(listOf(failing.bleAddress, healthy.bleAddress), events.filter { it.startsWith("connect:") }.map { it.removePrefix("connect:") })
+    }
+
+    @Test
+    fun `a device whose connect throws an unexpected exception is skipped and the run continues`() = runTest(testDispatcher) {
+        val throwing = device(1, "Throwing")
+        val healthy = device(2, "Healthy")
+        coEvery { deviceRepository.getAutoSyncEnabledOrdered() } returns listOf(throwing, healthy)
+        every { bleEngine.connectToDevice(throwing.bleAddress, any()) } throws RuntimeException("boom")
+
+        orchestrator.runSequentialSync()
+
+        assertEquals(
+            listOf("disconnect", "connect:${healthy.bleAddress}", "ack"),
+            events,
+        )
     }
 
     @Test

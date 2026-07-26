@@ -6,6 +6,7 @@ import com.athletedata.openAthleteMetrics.ble.companion.CompanionDeviceAssociato
 import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
 import com.athletedata.openAthleteMetrics.ble.driver.DriverStorage
 import com.athletedata.openAthleteMetrics.ble.sync.DeviceReprocessor
+import com.athletedata.openAthleteMetrics.ble.sync.MultiDeviceSyncOrchestrator
 import com.athletedata.openAthleteMetrics.data.model.Device
 import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
 import com.athletedata.openAthleteMetrics.data.repository.SettingsRepository
@@ -54,6 +55,7 @@ class DevicesViewModelStarAutoSyncTest {
                 every { connectionState } returns MutableStateFlow(BleConnectionState.Idle)
                 every { discoveredCandidates } returns MutableStateFlow(emptyList())
             },
+            multiDeviceSyncOrchestrator = mockk<MultiDeviceSyncOrchestrator>(relaxed = true),
             deviceReprocessor = mockk<DeviceReprocessor>(relaxed = true),
             syncSessionRepository = mockk<SyncSessionRepository>(relaxed = true) {
                 coEvery { getRecentInProgress(any()) } returns emptyList()

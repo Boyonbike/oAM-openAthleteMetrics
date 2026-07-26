@@ -1,0 +1,577 @@
+ ▐▛███▜▌   Claude Code v2.1.217
+▝▜█████▛▘  Sonnet 5 · Claude Pro
+  ▘▘ ▝▝    ~/StudioProjects/OAM
+
+
+❯ CONTEXT                                                                       
+  oAM (Open Athlete Metrics), local-first Android athlete tracker.              
+  On-disk package: com.athletedata.openAthleteMetrics.                          
+  Kotlin, Jetpack Compose, MVVM, Room, Hilt, Coroutines, Flow, WorkManager,     
+  DataStore.                                                                    
+                                                                                
+  PROJECT BACKGROUND (self-contained — no external documents needed):           
+  - The app owns the ENTIRE BLE lifecycle; drivers are PASSIVE JSON+WASM        
+  manifests run via                                                             
+    Chicory. A driver identifies a device MODEL (driver_id, e.g.                
+  "hume_band_v1"), NOT a                                                        
+    physical unit. Physical-unit identity is the BLE MAC address                
+  (devices.ble_address),                                                        
+    mapped to the numeric devices.id. Reference device: Hume Band J2208.        
+  - Data pipeline: BLE notification -> driver parse -> MetricRouter -> typed    
+  Room tables                                                                   
+    (hr_readings, hrv_readings, …, sleep_sessions, activities) ->               
+  DailySummaryWorker                                                            
+    aggregates per day -> metric_daily_stats (point-in-time baselines) -> UI.   
+  - Conventions: MVVM + Hilt DI; Coroutines/Flow; WorkManager (Hilt             
+  WorkerFactory);                                                               
+    DataStore Preferences for app-level toggles; Timber under the               
+  "data-pathway-tracker"                                                        
+    tag; the data path uses ZoneId.systemDefault(), never ZoneOffset.UTC. Tests 
+  use REAL                                                                      
+    Room in-memory DBs via Robolectric (never mocked DAOs) — SQL/dedup bugs are 
+  invisible to                                                                  
+    mocked-DAO tests.                                                           
+                                                                                
+  WHAT WAS BUILT — a 6-session build-out to support MULTIPLE physical bands on  
+  one phone.                                                                    
+  This audit verifies it landed correctly and safely. The INTENDED end state    
+  per session                                                                   
+  (your checklist — verify each against the actual code):                       
+                                                                                
+  S1 — device_id attribution (migration 21->22):                                
+    * A nullable device_id (numeric devices.id) column added to exactly these   
+  13 tables:                                                                    
+      hr_readings, hrv_readings, spo2_readings, respiration_readings,           
+  skin_temp_readings,                                                           
+      steps_readings, blood_pressure_readings, glucose_readings,                
+  active_calorie_readings,                                                      
+      total_calorie_readings, metric_readings_staging, sleep_sessions,          
+  activities.                                                                   
+      sleep_stages MUST NOT have gained a device_id (device derives via its     
+  session_id FK to                                                              
+      sleep_sessions).                                                          
+    * NO Room @ForeignKey on device_id (deletes don't cascade; orphans          
+  tolerated).                                                                   
+    * All real writers stamp the numeric device_id: MetricRouter (from          
+  BleEngine.routeReading,                                                       
+      which resolves the connected MAC -> numeric id; and from                  
+  DeviceReprocessor with                                                        
+      device.id), DeviceSyncProcessor (sleep_sessions + activities),            
+  SleepStagePromoter (new                                                       
+      device param, on sleep_sessions only). SeederService leaves device_id     
+  NULL by design.                                                               
+    * Backfill = conditional per-driver-uniqueness: a historical row is         
+  attributed only when                                                          
+      its d                                                                     
+  ──── (71 lines hidden) ────────────────────────────────────────────────────── 
+  e wired to setPrimary/setAutoSync; re-star dialog +                           
+     DataStore don't-show-again; label removed; follows the inline-AlertDialog  
+  idiom.                                                                        
+  9. Display filter Part B (S4): correctly deferred if the stats tables are     
+  still date-only —                                                             
+     OR, if implemented, metric_daily_stats/daily_summary genuinely gained      
+  device scoping and                                                            
+     the filter (MetricDailyStatsReader choke point) is correct. Flag premature 
+  Part B.                                                                       
+  10. Sequential orchestrator (S5): serial execution, primary-first ordering,   
+  reentrancy gate,                                                              
+      EOS AND passive-stream completion, failure isolation, reassembly safety;  
+  confirm NO                                                                    
+      concurrent connections / device-keyed GATT were introduced.               
+  11. Background sync (S6): periodic worker cadence + battery-not-low           
+  constraint; invokes the                                                       
+      orchestrator; no-overlap coordination; CDM association at pairing +       
+  decline fallback;                                                             
+      foreground-service correctness; any new migration slotted after 23->24.   
+  12. Regression safety: the reading device_id changes did NOT disturb the      
+  existing                                                                      
+      single-device flow, DailySummaryWorker aggregation, or the point-in-time  
+      metric_daily_stats computation. The existing sync path still works end to 
+  end.                                                                          
+  13. Test quality: data-layer tests use REAL Room in-memory (Robolectric), not 
+  mocked DAOs;                                                                  
+      engine tests use fakes over the connectionState StateFlow; migration      
+  tests assert data                                                             
+      survival; the headline cross-device-collision test exists and genuinely   
+  fails on the old                                                              
+      index / passes on the new. Note any load-bearing guarantee lacking a      
+  concrete assertion.                                                           
+                                                                                
+  OUTPUT FORMAT (match this structure)                                          
+  - VERDICT BLOCK: one row per goal above — Goal / Verdict / Summary.           
+  - FINDINGS BY SECTION: per layer (data layer, primary+selection, UI,          
+  engine+background),                                                           
+    with file:line evidence and a severity tag (blocker / correctness / cleanup 
+  / n/a) per                                                                    
+    finding.                                                                    
+  - STRAGGLER LIST: dead code, stale doc comments, or dangling references to    
+  pre-multi-device                                                              
+    behavior (e.g. lingering maxByOrNull selection, "Multi-device not yet       
+  supported" text,                                                              
+    driver-only dedup assumptions in comments), each doc-only vs code.          
+  - TEST-COVERAGE GAPS: which guarantees are proven vs only partially covered.  
+  - OPEN QUESTIONS: anything unconfirmable from static code (e.g. real-device   
+  sequential sync                                                               
+    behavior, CDM association at runtime) — flag as runtime/roadmap, not code   
+  defects.                                                                      
+  - Lead with a one-line "assumptions confirmed / assumptions corrected" note   
+  if the actual                                                                 
+    implementation diverged from the intended end state above.                  
+  No code changes. Findings only.                                               
+
+● I'll start by mapping the repo structure so I can direct focused research into
+  each of the four layers (data, primary/selection, UI, engine/background).
+
+  Searched for 2 patterns, ran 1 shell command (ctrl+o to expand)
+
+● Good, this maps cleanly onto the checklist. I'll now dispatch four parallel
+  research agents (read-only, evidence-gathering only — no verdicts) covering:
+  (1) data layer/migrations S1-S2, (2) primary/selection S3 + regression S12,
+  (3) UI S4, (4) engine/background S5-S6 + tests S13. I'll synthesize the actual
+  verdicts myself from their raw evidence.
+
+● 4 background agents launched (↓ to manage)
+   ├ Audit S1/S2 data-layer device_id work
+   ├ Audit S3 primary/auto-sync + S12 regression
+   ├ Audit S4 Devices UI
+   └ Audit S5/S6 orchestrator, background sync, tests
+
+● Four research agents are running in parallel, covering the data layer (S1/S2),
+  primary/selection + regression (S3/S12), Devices UI (S4), and the sync
+  engine/background work (S5/S6/S13). I'll wait for their findings before
+  synthesizing the audit.
+
+● Four research agents are running in the background gathering evidence; I'll
+  synthesize the full audit once they report back.
+
+✻ Worked for 1m 39s
+
+● Agent "Audit S4 Devices UI" finished · 2m 9s
+
+● One of four research agents (Devices UI) has reported back with detailed
+  evidence. Waiting on the other three (data layer, primary/selection,
+  engine/background) before synthesizing the full audit.
+
+✻ Cogitated for 8s
+
+● Agent "Audit S1/S2 data-layer device_id work" finished · 3m 1s
+
+● Second of four agents back (S1/S2 data layer), with strong evidence —
+  including a discovery not in the original checklist: there's actually a
+  MIGRATION_24_25 adding cdm_associated to devices, tied to S6's
+  CompanionDeviceManager work. Still waiting on the primary/selection and
+  engine/background agents.
+
+● Two of four research agents have reported back; still waiting on the
+  primary/selection (S3) and engine/background (S5/S6) agents before I write up
+  the synthesis.
+
+✻ Churned for 13s
+
+● Agent "Audit S5/S6 orchestrator, background sync, tests" finished · 3m 19s
+
+● Three of four research agents have returned; only the primary/selection +
+  regression-safety agent (S3/S12) is still running. I'll wait for that before
+  synthesizing the full audit.
+
+● Still waiting on the final research agent (S3 primary/auto-sync + S12
+  regression) — three of four have returned so far. I'll synthesize the full
+  audit as soon as it completes.
+
+✻ Sautéed for 12s
+
+✻ Claude resuming /loop wakeup (Jul 25 3:56pm)
+
+● Task Output(non-blocking) ad8aba65244420843
+  ⎿  Task is still running…
+● The agent is still active — mid-investigation, it turned up something notable:
+  autoConnectOnStartup as a named function was actually removed (in the "multi
+  device system prompt 5" commit) and superseded by
+  MultiDeviceSyncOrchestrator.startAutoSync(), which now handles primary-first
+  ordering and the auto-sync filter directly via getAutoSyncEnabledOrdered().
+  I'll let it finish rather than keep polling the raw transcript.
+
+● Still waiting on the last research agent; I'll synthesize the full audit as
+  soon as it completes.
+
+✻ Cogitated for 24s
+
+✻ Claude resuming /loop wakeup (Jul 25 4:05pm)
+
+● Task Output(non-blocking) ad8aba65244420843
+  ⎿  Task is still running…
+
+● The last agent is still investigating (mid-transcript, tracing the
+  autoConnectOnStartup → MultiDeviceSyncOrchestrator history via git blame).
+  I'll wait for its completion notification before writing the synthesis rather
+  than keep polling its raw transcript.
+
+● Still waiting on the final research agent to finish.
+
+✻ Cooked for 16s
+
+✻ Claude resuming /loop wakeup (Jul 25 4:14pm)
+
+● Task Output(non-blocking) ad8aba65244420843
+  ⎿  Task is still running…
+
+● The agent has now confirmed the full picture: the original
+  autoConnectOnStartup() (which called deviceRepository.getPrimary() and checked
+  auto_sync_enabled) was deleted wholesale in commit cbcf8f2, along with its
+  dedicated tests, and replaced by MainActivity.onCreate() calling
+  MultiDeviceSyncOrchestrator.startAutoSync() — which now handles primary-first
+  ordering and the auto-sync filter via getAutoSyncEnabledOrdered() (ORDER BY 
+  is_primary DESC). This is a legitimate architectural supersession (S3's
+  single-primary-connect behavior subsumed into S5's multi-device orchestrator),
+  not a regression — I'll fold that into goal 7 in the final synthesis. Still
+  waiting for the agent to finish and produce its full report.
+
+● Still waiting on the final research agent to complete before I write up the
+  synthesis.
+
+✻ Brewed for 21s
+
+✻ Claude resuming /loop wakeup (Jul 25 4:22pm)
+
+● Task Output(non-blocking) ad8aba65244420843
+  ⎿  Task is still running…
+
+● Still running — same status as before. I'll stop manually polling and just
+  wait for its completion notification.
+
+● Still waiting on the final research agent; I'll write up the full synthesis as
+  soon as it completes.
+
+✻ Crunched for 13s
+
+✻ Claude resuming /loop wakeup (Jul 25 4:33pm)
+
+● Task Output ad8aba65244420843
+  ⎿  Task is still running…
+
+● The final agent has now been running unusually long (~50+ min vs. ~3-5 min for
+  the others) doing deep git archaeology. Rather than keep waiting, I'll pull
+  the remaining specific facts myself directly — I already have strong evidence
+  for most of S3/S12 from what surfaced in its transcript.
+
+  Read 3 files, ran 6 shell commands (ctrl+o to expand)
+● I now have enough independently-verified evidence to complete the audit
+  without waiting further on the last (unusually slow) research agent. Here is
+  the full audit.
+
+  ---
+  Assumptions corrected: Goal 7's premise — a standalone autoConnectOnStartup()
+  that targets the primary — no longer exists as such. It was deleted (with its
+  5 dedicated BleEngineTest cases) in the S5 commit and subsumed into
+  MultiDeviceSyncOrchestrator.startAutoSync() → getAutoSyncEnabledOrdered()
+  (WHERE auto_sync_enabled=1 ORDER BY is_primary DESC, display_name ASC). This
+  is a legitimate architectural supersession — primary-first ordering and the
+  auto-sync gate both survive, just generalized to "all auto-sync devices"
+  instead of "primary only" — not a regression. Everything else landed
+  materially as specified, including a bonus MIGRATION_24_25 (adds
+  devices.cdm_associated) that the checklist's own "(may add a small migration)"
+  allowance for S6 anticipated.
+
+  VERDICT BLOCK
+
+  #: 1
+  Goal: device_id present & correct (S1)
+  Verdict: YES
+  Summary: All 13 tables (HrReadingEntity.kt:29, HrvReadingEntity.kt:29,
+  SpO2ReadingEntity.kt:29, RespirationReadingEntity.kt:29,
+  SkinTempReadingEntity.kt:29, StepsReadingEntity.kt:29,
+  BloodPressureReadingEntity.kt:30, GlucoseReadingEntity.kt:29,
+  ActiveCalorieReadingEntity.kt:30, TotalCalorieReadingEntity.kt:30,
+  MetricReadingStagingEntity.kt:45, SleepSessionEntity.kt:36,
+  ActivityEntity.kt:48) carry a nullable device_id: Long?.
+  SleepStageEntity.kt:22-51 has no such field — device derives via its
+  session_id FK to sleep_sessions. No @ForeignKey on device_id anywhere.
+  ────────────────────────────────────────
+  #: 2
+  Goal: Writers stamp device_id (S1)
+  Verdict: YES
+  Summary: BleEngine.triggerSync() resolves MAC→id (BleEngine.kt:506),
+  routeReading() stamps activeDeviceId onto the reading before
+  MetricRouter.route() (BleEngine.kt:1342).
+  DeviceReprocessor.kt:138,144,146,166 and DeviceSyncProcessor.kt:135,137,184
+  stamp device.id for readings/sleep/activities/stage-promotion.
+  SleepStagePromoter.kt:55,213 applies deviceId to sleep_sessions only, never
+  sleep_stages (no field exists). SeederService.kt never sets deviceId anywhere
+   — confirmed null by omission across all generator functions.
+  ────────────────────────────────────────
+  #: 3
+  Goal: Backfill correctness (S1)
+  Verdict: YES
+  Summary: MIGRATION_21_22 (AppDatabase.kt:1118-1125, repeated per table)
+  backfills only WHERE driver_id IS NOT NULL AND (SELECT COUNT(*) FROM  devices
+   d2 WHERE d2.driver_id = ...) = 1. Tests prove all 3 NULL cases (two devices 
+  sharing driver_id leaves device_id NULL, orphaned, null-driver) plus
+  no-row-loss and dedup-preserved.
+  ────────────────────────────────────────
+  #: 4
+  Goal: Dedup keyed on device (S2)
+  Verdict: YES
+  Summary: MIGRATION_22_23 (AppDatabase.kt:1225-1312) drops driver_id-keyed
+  indexes, creates device_id-keyed ones exactly as specified (10 typed tables,
+  staging's compound key, sleep_sessions, activities). Pure index swap, no rows
+   touched. DeviceDedupIndexMigrationTest.kt has a genuine before/after pair:
+  cross-device pair cannot be seeded at v22 (throws SQLiteConstraintException
+  on the old index) vs. cross-device  pair on hr_readings coexists after 
+  migration (same insert succeeds post-migration) — the real headline test, not
+   a synthetic one.
+  ────────────────────────────────────────
+  #: 5
+  Goal: Migration chain clean
+  Verdict: YES
+  Summary: version = 25 (AppDatabase.kt:99), MIGRATION_21_22 through
+  MIGRATION_24_25 registered in order in DatabaseModule.kt:195-198. Schema
+  JSONs exist for 22/23/24/25 (app/schemas/.../25.json etc.). Earlier
+  migrations (2→21) untouched.
+  ────────────────────────────────────────
+  #: 6
+  Goal: Single-primary invariant (S3)
+  Verdict: YES
+  Summary: DeviceDao.setPrimary() (DeviceDao.kt:48-52) is @Transaction:
+  clearOtherPrimaries (is_primary=0, auto_sync=0 for the old primary, excluding
+   the target) then setPrimaryFlag (is_primary=1, auto_sync=1 for the new one).
+   setAutoSync (DeviceDao.kt:54-55) is a bare single-column update —
+  independent, never touches is_primary, so a device can be primary with
+  auto-sync manually off. Both observePrimary() (Flow) and getPrimary()
+  (suspend) exist (DeviceDao.kt:73-77).
+  ────────────────────────────────────────
+  #: 7
+  Goal: Startup selection (S3)
+  Verdict: PARTIAL — superseded, not broken
+  Summary: The dedicated autoConnectOnStartup() was deleted; startup now goes
+  MainActivity.onCreate() → MultiDeviceSyncOrchestrator.startAutoSync() →
+  getAutoSyncEnabledOrdered(), which still orders primary-first and still gates
+   on auto_sync_enabled, but now drives all auto-sync devices, not "primary
+  only." activeDeviceAddress/activeManifest (BleEngine.kt:111-112) remain pure
+  runtime connection fields, never read against is_primary — no conflation
+  confirmed. The post-connect auto-sync listener (BleEngine.kt:199-211,
+  Connecting→Connected triggers triggerSync()) is untouched and
+  device-agnostic.
+  ────────────────────────────────────────
+  #: 8
+  Goal: Devices UI Part A (S4)
+  Verdict: YES
+  Summary: DeviceCell (DevicesScreen.kt:561-767): star top-left bound to
+  device.isPrimary (712-728), auto-sync Switch bottom-left bound to
+  device.autoSyncEnabled (730-738), battery relocated inline into the info
+  column (665-677). Star tap on non-primary opens inline AlertDialog (277-305)
+  with "Don't show this again" checkbox, Continue (commits + optionally
+  persists) / Back (cancels, no commit); dismissed-pref bypasses the dialog
+  (382-388). DataStore key RESTAR_CONFIRM_DISMISSED_KEY
+  (DataStoreSettingsRepository.kt:103). "Multi-device not yet supported" text:
+  zero hits anywhere in app/src/main.
+  ────────────────────────────────────────
+  #: 9
+  Goal: Display filter Part B (S4)
+  Verdict: YES — correctly deferred
+  Summary: MetricDailyStatsEntity (MetricDailyStatsEntity.kt:27-47, PK
+  summary_date+metric_type) and DailySummaryEntity
+  (DailySummaryEntity.kt:18-77, PK date) both remain 100% date-only — zero
+  device_id/deviceId columns. MetricDailyStatsReader.kt:31-32 filters only on
+  (metric, date). No ui/ composable outside ui/devices references a
+  primary/selected device. Part B genuinely wasn't attempted — no
+  premature/incorrect filter exists.
+  ────────────────────────────────────────
+  #: 10
+  Goal: Sequential orchestrator (S5)
+  Verdict: YES
+  Summary: MultiDeviceSyncOrchestrator.kt: own AtomicBoolean isRunning gate
+  (runIfIdle, lines 58-70), fully separate from BleEngine.connectToDevice()
+  which has zero reentrancy primitives (confirmed via grep — contrast
+  startScan() which does guard itself, BleEngine.kt:253-257). Primary-first via
+   getAutoSyncEnabledOrdered(). Strictly sequential forEachIndexed (72-93), one
+   syncOneDevice() at a time. isTerminal() (125-132) covers both EOS
+  (SyncComplete) and passive-stream quiescence (Connected && isQuiescent) — not
+   a fixed delay. No device-keyed connection/GATT maps anywhere in BleEngine —
+  single activeGatt/activeDeviceAddress/activeManifest. Reassembly buffer keyed
+   by characteristic UUID only, cleared on connect/disconnect — safe for
+  single-device-at-a-time.
+  ────────────────────────────────────────
+  #: 11
+  Goal: Background sync (S6)
+  Verdict: YES
+  Summary: BackgroundSyncWorker (BackgroundSyncWorker.kt:40-109): @HiltWorker,
+  PeriodicWorkRequestBuilder(6, HOURS) + setRequiresBatteryNotLow(true),
+  enqueued once via enqueueUniquePeriodicWork(KEEP) from
+  AthleteDataApplication.kt:104. doWork() calls
+  multiDeviceSyncOrchestrator.runIfIdle() — same gate as MainActivity's startup
+   trigger and CompanionPresenceSyncTrigger, so no stacking. CDM: association
+  requested at pairing (DevicesViewModel.onCandidateSelected, non-blocking),
+  decline/failure resolves to null/false cleanly, falls back to periodic-only.
+  Foreground service handled via setForeground() self-promotion bridging to
+  BleSyncService (documented rationale, BackgroundSyncWorker.kt:24-31).
+  MIGRATION_24_25 adds cdm_associated.
+  ────────────────────────────────────────
+  #: 12
+  Goal: Regression safety
+  Verdict: YES
+  Summary: DailySummaryWorker.kt is untouched by the device_id work — still a
+  pure date-range aggregation across all readings for that day, no device_id
+  references anywhere in it. metric_daily_stats/daily_summary remain date-only
+  (see #9). All device_id columns are nullable/additive, so the single-device
+  flow is unaffected.
+  ────────────────────────────────────────
+  #: 13
+  Goal: Test quality
+  Verdict: PARTIAL
+  Summary: Migration tests use real MigrationTestHelper (genuine SQL, not mocked
+
+  DAOs) — see #4/#3. Engine tests (MultiDeviceSyncOrchestratorTest,
+  BleEngineTest) are pure-JVM mockk, with connectionState faked via a real
+  MutableStateFlow wired into the mock rather than a dedicated Fake class —
+  acceptable, matches project convention. Gaps below.
+
+  FINDINGS BY SECTION
+
+  Data layer
+  - n/a (cleanup): SleepStageEntity.kt still carries a driverId column with no
+  deviceId — intentional (device derives via FK), but any future code reading
+  sleep_stages.driverId expecting device-equivalence would silently misbehave in
+  the 2+-devices-share-a-driver case. Worth a comment if not already present;
+  not currently exploited anywhere found.
+  - n/a: All 13 backfill UPDATEs and all 13 index DROP/CREATE pairs are
+  copy-pasted per-table rather than looped — verbose but not a defect (Room
+  migrations are static SQL by nature).
+
+  Primary + selection
+  - correctness: MultiDeviceSyncOrchestrator.kt:82-85 explicitly documents an
+  unclosed gap — a manual UI tap in DevicesViewModel can grab BleEngine mid-run,
+  and the orchestrator can only detect this after the fact (aborts the rest of
+  the run) rather than prevent it via a shared lock. Both sides check
+  bleEngine.connectionState before acting, but that's a check-then-act race, not
+  a mutex. Low real-world likelihood (requires precise user timing during a
+  background run) but worth a shared gate if this proves to matter.
+
+  UI
+  - n/a: No findings beyond what's in the verdict table — Part A is clean,
+  complete, and matches the inline-AlertDialog idiom used elsewhere in the app.
+
+  Engine + background
+  - cleanup: MultiDeviceSyncOrchestrator.syncOneDevice/finishDevice have no
+  try/catch around the connect/observe/cleanup sequence — failure isolation
+  instead relies on every failure path resolving to a BleConnectionState value
+  (Error, Disconnected) or a bounded withTimeoutOrNull. This works in the traced
+  code paths but means a genuinely-thrown exception from
+  bleEngine.connectToDevice() (e.g. an unexpected SecurityException not caught
+  inside BleEngine) would propagate up through runSequentialSync()'s
+  forEachIndexed and abort the entire run rather than skip just that device —
+  contradicts the "isolates failures" goal for that specific failure mode.
+  BleEngine.connectToDevice (BleEngine.kt:228-243) does catch SecurityException
+  internally and turns it into an Error state, so this specific case is covered,
+  but there's no blanket boundary if a new call site inside syncOneDevice
+  throws something else in the future.
+
+  STRAGGLER LIST
+
+  - "Multi-device not yet supported" label: fully removed (code) — zero hits
+  anywhere in app/src/main.
+  - Old maxByOrNull/single-primary-connect heuristic: fully deleted, not left
+  dangling (code) — autoConnectOnStartup() and its tests were removed wholesale,
+  not commented out or dead-coded.
+  - SleepStageEntity.driverId retained alongside no deviceId (code) —
+  intentional design, flagged above as a latent trap rather than a defect.
+  - No lingering references to the old (driver_id, recorded_at) unique index in
+  application code — cleanly replaced.
+
+  TEST-COVERAGE GAPS
+
+  - Proven: cross-device dedup collision (before/after pair),
+  per-driver-ambiguity NULL backfill, single-primary transactional invariant
+  (via DeviceDao.setPrimary structure — though see below), EOS vs.
+  passive-stream orchestrator completion, runIfIdle no-concurrent-runs.
+  - Gap: No test directly asserts BleEngine never holds >1 GATT connection
+  concurrently — true only by code inspection (single activeGatt field), not
+  guarded by a regression test that would catch a future regression
+  reintroducing per-device concurrency.
+  - Gap: No Compose UI test (createComposeRule) exercises the actual
+  star/dialog/checkbox interaction in DevicesScreen.kt —
+  DevicesViewModelStarAutoSyncTest covers only the ViewModel functions
+  (onStarTapped, onRestarConfirmDismissedChanged, the restarConfirmDismissed
+  flow), not that tapping the real Icon/Checkbox composables actually wires
+  through.
+  - Gap: No dedicated test found asserting DeviceDao.setPrimary's exact "new ON
+  / old OFF" transition (would need to check
+  DeviceIdBackfillMigrationTest/DevicePrimaryAutoSyncMigrationTest more closely
+  — not exhaustively confirmed as covered by a unit test beyond the migration
+  test for the column additions themselves).
+  - Gap: No test asserting DailySummaryWorker/metric_daily_stats behave
+  correctly in the presence of multi-device readings (i.e., that aggregation
+  still works when rows now carry non-null device_ids) — inferred safe from
+  unchanged code, not verified by a dedicated regression test.
+
+  OPEN QUESTIONS (runtime/roadmap — not code defects)
+
+  - Real-device sequential sync timing: whether isQuiescent detection and the
+  5-minute DEVICE_SYNC_TIMEOUT_MS backstop hold up in practice across multiple
+  real Hume Band units back-to-back.
+  - CDM association UX at runtime: real OS consent-dialog behavior and OEM
+  variance in CompanionDeviceService wake reliability — unconfirmable
+  statically.
+  - The orchestrator/manual-tap TOCTOU race (noted above) — theoretically
+  possible, not exercisable via unit tests alone.
+  - Foreground-service start restrictions under targetSdk 36 across real OEM
+  builds — the ForegroundServiceStartNotAllowedException catch is defensive for
+  a case the code asserts "shouldn't happen today."
+  - Whether a future Part B (device-scoped metric_daily_stats/daily_summary) is
+  actually road-mapped — correctly out of scope here, but unconfirmable from
+  static code alone.
+
+✻ Sautéed for 9m 0s
+
+● Agent "Audit S3 primary/auto-sync + S12 regression" finished · 1h 22m 23s
+
+● The last research agent (S3/S12) has finally returned — after ~50 minutes,
+  considerably more thorough than the others. It surfaces one correction to my
+  synthesis above.
+
+  Correction to goal 13 / test-coverage gaps: I incorrectly flagged "no
+  dedicated test found asserting DeviceDao.setPrimary's exact new-ON/old-OFF
+  transition" as a gap. That's wrong — DeviceDaoTest.kt exists and covers this
+  directly and thoroughly:
+
+  setPrimary makes exactly one device primary
+  setPrimary sets new primary auto_sync ON
+  setPrimary flips old primary auto_sync OFF
+  setPrimary is idempotent for the already-primary device
+  star A then star B then star A again stays consistent
+  setAutoSync toggles without changing is_primary on the primary device
+  setAutoSync on a non-primary device works independently
+  observePrimary emits the current primary and updates when setPrimary changes
+  it
+  getPrimary returns null when no device is primary
+
+  This upgrades goal 6 (single-primary invariant) from "verified by code
+  inspection" to "verified by code inspection and dedicated unit tests" — no
+  change to the YES verdict, but it removes that line from the
+  test-coverage-gaps list.
+
+  Also confirmed with harder evidence (git diff of the actual deleted function,
+  not just inference):
+  -    fun autoConnectOnStartup() {
+  -        scope.launch {
+  -            if (_connectionState.value !is BleConnectionState.Idle) 
+  return@launch
+  -            val device = deviceRepository.getPrimary() ?: return@launch
+  -            if (!device.autoSyncEnabled) return@launch
+  -            val manifest = driverRegistry.allDrivers().find { it.id == 
+  device.driverId } ?: return@launch
+  -            connectToDevice(device.bleAddress, manifest)
+  -        }
+  -    }
+  This confirms the deleted function used getPrimary() (never a maxByOrNull
+  heuristic) and did gate on autoSyncEnabled — exactly as goal 7 specified
+  before being superseded by the orchestrator. Its 5 dedicated tests were
+  deleted alongside it in the same commit, confirmed absent from the current
+  BleEngineTest.kt.
+
+  Everything else in the new evidence (DailySummaryWorker,
+  MetricDailyStatsEntity/DailySummaryEntity, MetricDailyStatsReader,
+  activeDeviceAddress/activeManifest non-conflation) matches what I already
+  verified directly and reported above — no other changes to the verdict block,
+  findings, or straggler list. The rest of the audit stands as delivered.
+
+✻ Churned for 1h 23m 44s

@@ -62,12 +62,13 @@ class DailySummaryWorkerMetricStatsTest {
         db.close()
     }
 
-    private fun insertHr(date: LocalDate, hour: Int, bpm: Int) = runBlocking {
+    private fun insertHr(date: LocalDate, hour: Int, bpm: Int, deviceId: Long? = null) = runBlocking {
         db.hrReadingDao().insert(
             HrReadingEntity(
                 recordedAt = date.atTime(hour, 0).atZone(zone).toInstant(),
                 createdAt = Instant.now(),
                 source = DataSource.SEEDER,
+                deviceId = deviceId,
                 bpm = bpm,
             )
         )
@@ -128,5 +129,51 @@ class DailySummaryWorkerMetricStatsTest {
         val row = db.metricDailyStatsDao().getRange(BaselineMetric.HR, day3, day3).first().single()
         assertEquals(3, row.sampleCount)
         assertEquals(60.0, row.mean!!, 1e-9) // average(50, 60, 70) -- day3's own backward window
+    }
+
+    @Test
+    fun `avgHrBpm aggregation is device-agnostic across two device_ids and a null device_id`() = runBlocking {
+        val summaryRepo = FakeDailySummaryRepository(db.dailySummaryDao())
+        val day = LocalDate.of(2021, 6, 15)
+
+        insertHr(day, hour = 6, bpm = 60, deviceId = 1L)
+        insertHr(day, hour = 9, bpm = 70, deviceId = 2L)
+        insertHr(day, hour = 12, bpm = 80, deviceId = null)
+
+        val settingsRepo = mockk<SettingsRepository>(relaxed = true) {
+            every { getBaselineWindowDays() } returns flowOf(30)
+        }
+        val windowConfigRepo = RoomBaselineWindowConfigRepository(db.baselineWindowConfigDao(), settingsRepo)
+        val calculators: Map<BaselineMetric, MetricStatsCalculator> = mapOf(
+            BaselineMetric.HR to GenericTrailingStatsCalculator(BaselineMetric.HR, summaryRepo, windowConfigRepo) { it.avgHrBpm },
+        )
+        val statsWriter = MetricDailyStatsWriter(db.metricDailyStatsDao(), calculators)
+
+        val context = RuntimeEnvironment.getApplication()
+        val worker = TestListenableWorkerBuilder<DailySummaryWorker>(context)
+            .setInputData(workDataOf(DailySummaryWorker.KEY_DATE to day.toString()))
+            .setWorkerFactory(object : WorkerFactory() {
+                override fun createWorker(
+                    appContext: Context,
+                    workerClassName: String,
+                    workerParameters: WorkerParameters,
+                ): ListenableWorker = DailySummaryWorker(
+                    appContext, workerParameters,
+                    db.hrReadingDao(), db.hrvReadingDao(), db.spO2ReadingDao(), db.skinTempReadingDao(),
+                    db.respirationReadingDao(), db.stepsReadingDao(), db.activeCalorieReadingDao(),
+                    db.totalCalorieReadingDao(), db.bloodPressureReadingDao(), db.glucoseReadingDao(),
+                    db.sleepSessionDao(), db.sleepStageDao(),
+                    summaryRepo,
+                    OvernightHrvCalculator(db.hrvReadingDao(), db.sleepSessionDao()),
+                    statsWriter,
+                )
+            })
+            .build()
+
+        val result = worker.startWork().get()
+        assertTrue("worker should succeed", result is ListenableWorker.Result.Success)
+
+        val summary = summaryRepo.getSummaryForDateOnce(day)
+        assertEquals(70.0, summary?.avgHrBpm!!, 1e-9) // average(60, 70, 80) regardless of device_id
     }
 }

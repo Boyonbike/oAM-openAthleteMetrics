@@ -225,13 +225,38 @@ class BleEngine @Inject constructor(
     // Public API
     // -------------------------------------------------------------------------
 
+    // Single atomic acquisition point every external caller (manual UI taps, the sync
+    // orchestrator) passes through before the engine starts a new connection/scan. Reuses
+    // _connectionState's own compareAndSet rather than a separate lock, so release is
+    // implicit — whichever of the ~20 existing assignment sites lands back on an idle-ish
+    // state automatically reopens the gate, with nothing new to keep in sync.
+    private fun isIdleish(state: BleConnectionState): Boolean = when (state) {
+        is BleConnectionState.Idle,
+        is BleConnectionState.Error,
+        is BleConnectionState.GattCacheError,
+        is BleConnectionState.Disconnected -> true
+        else -> false
+    }
+
+    private fun tryAcquire(acquireState: BleConnectionState): Boolean {
+        while (true) {
+            val current = _connectionState.value
+            if (!isIdleish(current)) return false
+            if (_connectionState.compareAndSet(current, acquireState)) return true
+        }
+    }
+
     @SuppressLint("MissingPermission")
-    fun connectToDevice(bleAddress: String, manifest: WasmDriverManifest) {
+    fun connectToDevice(bleAddress: String, manifest: WasmDriverManifest): Boolean {
+        if (!tryAcquire(BleConnectionState.Connecting(bleAddress))) {
+            Timber.tag(TAG).i("BleEngine: connectToDevice rejected — engine busy (%s)", _connectionState.value)
+            return false
+        }
         val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         val adapter = manager?.adapter
         if (adapter == null || !adapter.isEnabled) {
             _connectionState.value = BleConnectionState.Error("Bluetooth is disabled")
-            return
+            return true
         }
         try {
             val device = adapter.getRemoteDevice(bleAddress)
@@ -240,33 +265,35 @@ class BleEngine @Inject constructor(
             Timber.w(e, "BLE permission revoked during connectToDevice")
             _connectionState.value = BleConnectionState.Error("Bluetooth permission denied")
         }
+        return true
     }
 
-    fun connectToCandidate(candidate: DiscoveredCandidate) {
+    fun connectToCandidate(candidate: DiscoveredCandidate): Boolean {
         candidateMap.clear()
         _discoveredCandidates.value = emptyList()
         stopScan()
-        connectToDevice(candidate.address, candidate.manifest)
+        return connectToDevice(candidate.address, candidate.manifest)
     }
 
     @SuppressLint("MissingPermission")
-    fun startScan() {
+    fun startScan(): Boolean {
         Timber.w(Exception("startScan stack trace"), "BleEngine: startScan() called")
-        val current = _connectionState.value
-        if (current !is BleConnectionState.Idle && current !is BleConnectionState.Error &&
-            current !is BleConnectionState.GattCacheError) return
+        if (!tryAcquire(BleConnectionState.Scanning)) {
+            Timber.tag(TAG).i("BleEngine: startScan rejected — engine busy (%s)", _connectionState.value)
+            return false
+        }
 
         val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         val adapter = manager?.adapter
         if (adapter == null || !adapter.isEnabled) {
             _connectionState.value = BleConnectionState.Error("Bluetooth is disabled")
-            return
+            return true
         }
 
         val scanner = adapter.bluetoothLeScanner
         if (scanner == null) {
             _connectionState.value = BleConnectionState.Error("Bluetooth scanner unavailable")
-            return
+            return true
         }
         bleScanner = scanner
 
@@ -300,7 +327,7 @@ class BleEngine @Inject constructor(
         } catch (e: SecurityException) {
             Timber.w(e, "BLE permission revoked during startScan")
             _connectionState.value = BleConnectionState.Error("Bluetooth permission denied")
-            return
+            return true
         }
 
         scanTimeoutJob = scope.launch {
@@ -312,6 +339,7 @@ class BleEngine @Inject constructor(
                 }
             }
         }
+        return true
     }
 
     fun disconnect() {

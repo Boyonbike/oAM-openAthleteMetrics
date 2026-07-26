@@ -55,6 +55,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import junit.framework.TestCase.assertEquals
+import junit.framework.TestCase.assertFalse
 import junit.framework.TestCase.assertNull
 import junit.framework.TestCase.assertTrue
 import org.junit.After
@@ -232,6 +233,43 @@ class BleEngineTest {
             Thread.sleep(10)
         }
         return false
+    }
+
+    @Test
+    fun `connectToDevice rejects a second acquisition while the engine is busy, leaving active state untouched`() {
+        val firstManifest = testManifest()
+        val firstAddress = "AA:BB:CC:DD:EE:FF"
+        val busyState = BleConnectionState.Connected(firstAddress, firstManifest.displayName)
+        val fakeGatt = mockk<BluetoothGatt>(relaxed = true)
+
+        setPrivateField("activeManifest", firstManifest)
+        setPrivateField("activeDeviceAddress", firstAddress)
+        setPrivateField("activeGatt", fakeGatt)
+        val connectionStateFlow = getPrivateField("_connectionState") as MutableStateFlow<BleConnectionState>
+        connectionStateFlow.value = busyState
+
+        val accepted = engine.connectToDevice("11:22:33:44:55:66", testManifest().copy(id = "test-driver-2"))
+
+        assertFalse("second connectToDevice() must be rejected while engine is busy", accepted)
+        assertEquals("connectionState must be untouched by the rejected attempt", busyState, connectionStateFlow.value)
+        assertEquals(firstAddress, getPrivateField("activeDeviceAddress"))
+        assertEquals(firstManifest, getPrivateField("activeManifest"))
+        assertTrue(getPrivateField("activeGatt") === fakeGatt)
+    }
+
+    @Test
+    fun `startScan rejects while the engine is busy, leaving active state untouched`() {
+        val address = "AA:BB:CC:DD:EE:FF"
+        val busyState = BleConnectionState.Syncing(address, 3)
+        setPrivateField("activeManifest", testManifest())
+        setPrivateField("activeDeviceAddress", address)
+        val connectionStateFlow = getPrivateField("_connectionState") as MutableStateFlow<BleConnectionState>
+        connectionStateFlow.value = busyState
+
+        val accepted = engine.startScan()
+
+        assertFalse("startScan() must be rejected while engine is busy", accepted)
+        assertEquals(busyState, connectionStateFlow.value)
     }
 
     @Test

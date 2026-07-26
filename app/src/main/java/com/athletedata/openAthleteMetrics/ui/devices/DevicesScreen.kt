@@ -32,6 +32,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.outlined.Bluetooth
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.StarBorder
@@ -47,7 +48,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -59,7 +59,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -728,14 +727,22 @@ private fun DeviceCell(
         }
 
         // Auto-sync toggle bottom-left
-        Switch(
-            checked = device.autoSyncEnabled,
-            onCheckedChange = onAutoSyncToggled,
+        IconButton(
+            onClick = { onAutoSyncToggled(!device.autoSyncEnabled) },
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .scale(0.7f)
-                .padding(start = 4.dp, bottom = 2.dp),
-        )
+                .size(32.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Sync,
+                contentDescription = if (device.autoSyncEnabled) "Auto-sync enabled" else "Auto-sync disabled",
+                modifier = Modifier.size(20.dp),
+                tint = if (device.autoSyncEnabled)
+                    MaterialTheme.colorScheme.primary
+                else
+                    MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
 
         // Disconnect icon top-right — only when connected
         if (isActive) {

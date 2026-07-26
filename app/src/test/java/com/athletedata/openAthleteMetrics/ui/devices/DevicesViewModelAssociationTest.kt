@@ -14,6 +14,7 @@ import com.athletedata.openAthleteMetrics.ble.driver.StepsMode
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
 import com.athletedata.openAthleteMetrics.ble.driver.WasmExports
 import com.athletedata.openAthleteMetrics.ble.sync.DeviceReprocessor
+import com.athletedata.openAthleteMetrics.ble.sync.MultiDeviceSyncOrchestrator
 import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
 import com.athletedata.openAthleteMetrics.data.repository.SettingsRepository
@@ -59,6 +60,7 @@ class DevicesViewModelAssociationTest {
                 every { allDrivers() } returns emptyList()
             },
             bleEngine = bleEngine,
+            multiDeviceSyncOrchestrator = mockk<MultiDeviceSyncOrchestrator>(relaxed = true),
             deviceReprocessor = mockk<DeviceReprocessor>(relaxed = true),
             syncSessionRepository = mockk<SyncSessionRepository>(relaxed = true) {
                 coEvery { getRecentInProgress(any()) } returns emptyList()
@@ -105,6 +107,7 @@ class DevicesViewModelAssociationTest {
         bleEngine = mockk(relaxed = true) {
             every { connectionState } returns MutableStateFlow(BleConnectionState.Idle)
             every { discoveredCandidates } returns MutableStateFlow(emptyList())
+            every { connectToCandidate(any()) } returns true
         }
         companionDeviceAssociator = mockk(relaxed = true)
     }

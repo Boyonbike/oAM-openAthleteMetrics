@@ -12,6 +12,7 @@ import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
 import com.athletedata.openAthleteMetrics.ble.driver.DriverStorage
 import com.athletedata.openAthleteMetrics.ble.driver.WasmDriverManifest
 import com.athletedata.openAthleteMetrics.ble.sync.DeviceReprocessor
+import com.athletedata.openAthleteMetrics.ble.sync.MultiDeviceSyncOrchestrator
 import com.athletedata.openAthleteMetrics.data.model.Device
 import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
 import com.athletedata.openAthleteMetrics.data.repository.SettingsRepository
@@ -61,6 +62,7 @@ class DevicesViewModel @Inject constructor(
     private val driverStorage: DriverStorage,
     private val driverRegistry: DriverRegistry,
     private val bleEngine: BleEngine,
+    private val multiDeviceSyncOrchestrator: MultiDeviceSyncOrchestrator,
     private val deviceReprocessor: DeviceReprocessor,
     private val syncSessionRepository: SyncSessionRepository,
     private val settingsRepository: SettingsRepository,
@@ -140,18 +142,27 @@ class DevicesViewModel @Inject constructor(
     }
 
     fun onAddDeviceTapped() {
-        val current = connectionState.value
-        if (current is BleConnectionState.Idle || current is BleConnectionState.Error ||
-            current is BleConnectionState.GattCacheError) {
-            bleEngine.startScan()
+        if (multiDeviceSyncOrchestrator.isRunningNow) {
+            viewModelScope.launch { _snackbarEvents.send("Sync in progress") }
+            return
+        }
+        if (!bleEngine.startScan()) {
+            viewModelScope.launch { _snackbarEvents.send("Sync in progress") }
         }
     }
 
     fun onCandidateSelected(candidate: DiscoveredCandidate) {
-        // Pairing must not block on CDM consent, so the connect proceeds unconditionally;
-        // the association request runs alongside it and only affects whether this device
+        if (multiDeviceSyncOrchestrator.isRunningNow) {
+            viewModelScope.launch { _snackbarEvents.send("Sync in progress") }
+            return
+        }
+        // Pairing must not block on CDM consent, so once the connect is accepted the
+        // association request runs alongside it and only affects whether this device
         // later gets a presence-triggered background wake (see onAssociationResult).
-        bleEngine.connectToCandidate(candidate)
+        if (!bleEngine.connectToCandidate(candidate)) {
+            viewModelScope.launch { _snackbarEvents.send("Sync in progress") }
+            return
+        }
         viewModelScope.launch {
             val chooserLauncher = companionDeviceAssociator.requestAssociation(candidate.address, candidate.deviceName)
             if (chooserLauncher != null) {
@@ -175,9 +186,10 @@ class DevicesViewModel @Inject constructor(
     }
 
     fun onDeviceCellTapped(device: Device) {
-        val current = connectionState.value
-        if (current !is BleConnectionState.Idle && current !is BleConnectionState.Error &&
-            current !is BleConnectionState.GattCacheError) return
+        if (multiDeviceSyncOrchestrator.isRunningNow) {
+            viewModelScope.launch { _snackbarEvents.send("Sync in progress") }
+            return
+        }
         val manifest = driverRegistry.allDrivers().find { it.id == device.driverId }
         if (manifest == null) {
             viewModelScope.launch {
@@ -185,7 +197,9 @@ class DevicesViewModel @Inject constructor(
             }
             return
         }
-        bleEngine.connectToDevice(device.bleAddress, manifest)
+        if (!bleEngine.connectToDevice(device.bleAddress, manifest)) {
+            viewModelScope.launch { _snackbarEvents.send("Sync in progress") }
+        }
     }
 
     fun onRemoveDeviceTapped(device: Device) {

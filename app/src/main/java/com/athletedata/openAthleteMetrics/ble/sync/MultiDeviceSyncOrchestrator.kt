@@ -8,6 +8,7 @@ import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -25,10 +26,11 @@ private const val TAG = "data-pathway-tracker" // DPT
 /**
  * Drives a sequential (one-at-a-time) sync across every auto-sync-enabled device, reusing
  * BleEngine's single-connection design as-is: connect -> observe connectionState until a
- * terminal outcome -> disconnect/acknowledge -> only then advance. BleEngine.connectToDevice()
- * has no reentrancy gate of its own (unlike startScan()), so this class owns the only gate
- * that keeps a second connect from clobbering activeGatt/activeManifest/activeDeviceAddress
- * mid-cycle.
+ * terminal outcome -> disconnect/acknowledge -> only then advance. BleEngine now owns the
+ * authoritative acquisition gate (a manual connectToDevice()/connectToCandidate()/startScan()
+ * call is atomically rejected while this run holds the engine); isRunning/isRunningNow only
+ * close the brief inter-device window where the engine is transiently idle between devices,
+ * so a manual tap can't slip in there either.
  */
 @Singleton
 class MultiDeviceSyncOrchestrator @Inject constructor(
@@ -39,6 +41,11 @@ class MultiDeviceSyncOrchestrator @Inject constructor(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val isRunning = AtomicBoolean(false)
+
+    // Snapshot check for callers that must reject a conflicting manual action while a run is
+    // in progress but don't need to reactively observe it (DevicesViewModel's manual
+    // scan/connect entry points).
+    val isRunningNow: Boolean get() = isRunning.get()
 
     private val _progress = MutableStateFlow<SyncProgress?>(null)
     val progress: StateFlow<SyncProgress?> = _progress.asStateFlow()
@@ -102,24 +109,41 @@ class MultiDeviceSyncOrchestrator @Inject constructor(
     }
 
     private suspend fun syncOneDevice(device: Device) {
-        val manifest = driverRegistry.allDrivers().find { it.id == device.driverId }
-        if (manifest == null) {
-            Timber.tag(TAG).w("MultiDeviceSyncOrchestrator: no driver installed for %s (%s), skipping", device.displayName, device.driverId)
-            return
-        }
+        try {
+            val manifest = driverRegistry.allDrivers().find { it.id == device.driverId }
+            if (manifest == null) {
+                Timber.tag(TAG).w("MultiDeviceSyncOrchestrator: no driver installed for %s (%s), skipping", device.displayName, device.driverId)
+                return
+            }
 
-        bleEngine.connectToDevice(device.bleAddress, manifest)
+            val accepted = bleEngine.connectToDevice(device.bleAddress, manifest)
+            if (!accepted) {
+                Timber.tag(TAG).w("MultiDeviceSyncOrchestrator: connectToDevice rejected (engine busy) for %s, skipping", device.displayName)
+                return
+            }
 
-        val outcome = withTimeoutOrNull(DEVICE_SYNC_TIMEOUT_MS) {
-            bleEngine.connectionState.filter(::isTerminal).first()
+            val outcome = withTimeoutOrNull(DEVICE_SYNC_TIMEOUT_MS) {
+                bleEngine.connectionState.filter(::isTerminal).first()
+            }
+            when (outcome) {
+                null -> Timber.tag(TAG).w("MultiDeviceSyncOrchestrator: timed out syncing %s", device.displayName)
+                is BleConnectionState.SyncComplete -> Timber.tag(TAG).i("MultiDeviceSyncOrchestrator: synced %s", device.displayName)
+                is BleConnectionState.Connected -> Timber.tag(TAG).i("MultiDeviceSyncOrchestrator: synced %s (quiescent)", device.displayName)
+                else -> Timber.tag(TAG).w("MultiDeviceSyncOrchestrator: failed syncing %s: %s", device.displayName, outcome)
+            }
+            finishDevice(outcome)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "MultiDeviceSyncOrchestrator: unexpected exception syncing %s — skipping device", device.displayName)
+            try {
+                finishDevice(null)
+            } catch (cleanupError: CancellationException) {
+                throw cleanupError
+            } catch (cleanupError: Exception) {
+                Timber.tag(TAG).e(cleanupError, "MultiDeviceSyncOrchestrator: cleanup after exception also failed for %s", device.displayName)
+            }
         }
-        when (outcome) {
-            null -> Timber.tag(TAG).w("MultiDeviceSyncOrchestrator: timed out syncing %s", device.displayName)
-            is BleConnectionState.SyncComplete -> Timber.tag(TAG).i("MultiDeviceSyncOrchestrator: synced %s", device.displayName)
-            is BleConnectionState.Connected -> Timber.tag(TAG).i("MultiDeviceSyncOrchestrator: synced %s (quiescent)", device.displayName)
-            else -> Timber.tag(TAG).w("MultiDeviceSyncOrchestrator: failed syncing %s: %s", device.displayName, outcome)
-        }
-        finishDevice(outcome)
     }
 
     private fun isTerminal(state: BleConnectionState): Boolean = when (state) {

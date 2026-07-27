@@ -887,7 +887,12 @@ private fun BleBanner(
                             style = TypographyTitle,
                             modifier = Modifier.weight(1f),
                         )
-                        TextButton(onClick = onScanCancelled) { Text("Stop") }
+                        Text(
+                            "Stop",
+                            style = TypographyTitle,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable(onClick = onScanCancelled),
+                        )
                     }
                     Spacer(Modifier.height(space4))
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())

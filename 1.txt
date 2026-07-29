@@ -1,318 +1,1377 @@
- ▐▛███▜▌   Claude Code v2.1.217
-▝▜█████▛▘  Sonnet 5 · Claude Pro
-  ▘▘ ▝▝    ~/StudioProjects/OAM
+╭─── Claude Code v2.1.220 ─────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting        │
+│                  Welcome back bob!                 │ started                 │
+│                                                    │ Run /init to create a … │
+│                       ▐▛███▜▌                      │ ─────────────────────── │
+│                      ▝▜█████▛▘                     │ What's new              │
+│                        ▘▘ ▝▝                       │ Stacked slash-skill in… │
+│   Sonnet 5 · Claude Pro ·                          │ Fixed SSL certificate … │
+│   innesmcdonaldracing@outlook.com's Organization   │ Fixed streaming respon… │
+│                ~/StudioProjects/OAM                │ /release-notes for more │
+╰──────────────────────────────────────────────────────────────────────────────╯
 
+   Tackle your toughest work with Opus 5. Switch anytime with /model.
 
-❯ CONTEXT                                                                       
-  oAM (Open Athlete Metrics), local-first Android athlete tracker.              
-  On-disk package: com.athletedata.openAthleteMetrics.                          
-  Kotlin, Jetpack Compose, MVVM, Room, Hilt, Coroutines, Flow, WorkManager.     
-  BLE drivers are JSON manifests with embedded base64 WASM run via Chicory;     
-  plugin-only.                                                                  
-  Multiple physical BLE devices on one phone.                                   
-  Paste the Master Plan and MVP Build Spec before this prompt.                  
-                                                                                
-  This is a READ-ONLY RECON to lock two upcoming sessions: (5) syncing multiple 
-  devices                                                                       
-  SEQUENTIALLY — one at a time, primary first, reusing the single-connection    
-  engine (NOT                                                                   
-  concurrent connections); (6) background/unattended sync via WorkManager +     
-  CompanionDeviceManager. Do not edit any code. Findings only, file:line        
-  throughout.                                                                   
-                                                                                
-  INVESTIGATE AND REPORT                                                        
-                                                                                
-  1. SINGLE-SYNC LIFECYCLE (end to end)                                         
-     - Trace one device sync start-to-finish in BleEngine: connect,             
-  notification handling                                                         
-       (handleNotification), how end-of-stream is detected (awaitEndOfStream or 
-  equivalent),                                                                  
-       and disconnect. Give the exact call sequence + file:line.                
-     - Single-connection state: activeGatt, activeManifest, activeDeviceAddress 
-  — confirm all                                                                 
-       singular. Confirm startScan() gating (idle/error only).                  
-                                                                                
-  2. SYNC TRIGGERING / QUEUING                                                  
-     - How is a full sync invoked from (a) autoConnectOnStartup and (b) the     
-  manual                                                                        
-       onSyncTapped path? Is there any existing queue/orchestration, or is each 
-  a one-shot?                                                                   
-     - What would a "run an ordered list of devices, one after another"         
-  orchestrator wrap —                                                           
-       the connect/sync/disconnect unit, or something higher? Identify the      
-  exact seam.                                                                   
-                                                                                
-  3. REASSEMBLY BUFFER SAFETY                                                   
-     - reassemblyBuffers: how keyed, and exactly where/when cleared. Confirm    
-  they are cleared                                                              
-       on disconnect / between connections, so strictly-sequential runs cannot  
-  bleed one                                                                     
-       device's packets into another's. file:line for the clear.                
-                                                                                
-  4. CONNECTION STATE & SERVICE                                                 
-     - BleConnectionState: shape, the single StateFlow, and who observes it     
-  (UI/service).                                                                 
-     - BleSyncService: lifecycle (how started/stopped), the notification        
-  content and how it                                                            
-       is updated — the seam for a per-device "Syncing X (n of m)" progress     
-  notification.                                                                 
-                                                                                
-  5. WORKMANAGER SETUP (for session 6)                                          
-     - How existing Workers (AppStartupWorker, WidgetRefreshWorker,             
-  DailySummaryWorker) are                                                       
-       registered and scheduled. Is there a Hilt WorkerFactory / custom         
-  Configuration? Where                                                          
-       would a new periodic background-sync Worker slot in?                     
-     - Confirm there is NO existing periodic BLE sync worker today.             
-                                                                                
-  6. BOOTSTRAP & PLATFORM                                                       
-     - Where/when autoConnectOnStartup is triggered at process start (to avoid  
-  double-firing                                                                 
-       with a new background scheduler).                                        
-     - Android minSdk / targetSdk (build.gradle.kts) — relevant to              
-  CompanionDeviceManager                                                        
-       association/observation and background-BLE limits.                       
-     - Reconfirm there is ZERO CompanionDeviceManager usage anywhere, and       
-  report the current                                                            
-       scan/pairing entry points (startScan and its callers) where an           
-  association step would                                                        
-       later attach.                                                            
-                                                                                
-  OUTPUT                                                                        
-  - Findings report in Markdown. Lead with a short "facts sessions 5 & 6 must   
-  embed" list                                                                   
-    (the orchestrator seam; the reassembly-clear guarantee; the BleSyncService  
-  notification                                                                  
-    seam; the WorkManager registration pattern; minSdk/targetSdk; the           
-  startup-trigger site).                                                        
-    Then a section per item above with file:line evidence. No code changes.     
+❯ im trying to unify the design and style of the sync, connection and parsing   
+  notification bar and other notofications in the devices page. currently there 
+  is a Stop button on the bar when the app is searching for a new device. i     
+  want to add a Cancel button to the connecting>syncing>parsing notifiication   
+  in the same place as the stop button with the same styling. no matter when    
+  the cancel button is clicked it should stop the syncing process and discard   
+  any data that been collected or parsed from the device. if the device is      
+  connected it should not be disconnected but if its canceled in the connection 
+  phase it shouldnt connect. clear?                                             
 
-● I'll delegate this to a research agent since it requires tracing code across
-  many files with file:line precision — I'll run it in the foreground since the
-  report itself is the deliverable you need back.
+● 2 background agents launched (↓ to manage)
+   ├ Find devices page notification bar and Stop button
+   └ Find sync/parsing data pipeline and cancellation logic
 
-● Agent(BLE sync lifecycle recon for sessions 5&6)
-  ⎿  Done (26 tool uses · 108.2k tokens · 3m 24s)
-  (ctrl+o to expand)
+● Both explore agents are running in the background — I'll wait for their
+  results before digging further.
 
-● Let me spot-check a handful of the load-bearing file:line claims before
-  handing this over, since these numbers will lock design decisions.
+  Ran 1 shell command (ctrl+o to expand)
 
-  Searched for 2 patterns, ran 1 shell command (ctrl+o to expand)
+● Waiting for the two research agents to finish before proceeding.
 
-● All the load-bearing line numbers check out exactly against the source (state
-  fields, reassembly-buffer clears, SDK versions). The third grep just hit a
-  shell globbing quirk — rerunning it directly.
+  Ran 2 shell commands (ctrl+o to expand)
+
+● I'll pause here and wait for the background research agents to complete before
+  continuing.
+
+✻ Worked for 36s
+
+● Agent "Find devices page notification bar and Stop button" finished · 1m 22s
+
+● First research agent is done — I have the UI side mapped out. Waiting on the
+  second agent covering the cancellation/data-discard logic before I move to
+  planning.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● I'll wait for the second research agent's notification rather than polling
+  further.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● I'll stop polling and wait for the second agent's completion notification.
+
+✻ Cogitated for 13s
+
+✻ Claude resuming /loop wakeup (Jul 27 12:18pm)
+
+● Task Output ad8c70783bd2395cd
+  ⎿  Read output (ctrl+o to expand)
+
+● Agent "Find sync/parsing data pipeline and cancellation logic" finished · 3m 
+27s
+
+● Both agents finished. Before designing the plan, I need to check one more
+  detail: whether the per-metric reading tables (hr_readings, steps_readings,
+  etc.) store a session/device reference that would let us delete readings
+  written during a cancelled sync.
+
+  Searched for 4 patterns, read 2 files, ran 1 shell command (ctrl+o to expand)
+
+● Good — stored as a string, so adding a CANCELLED value needs no DB migration.
+  Now I have enough to firm up the design questions with the user before
+  drafting the plan.
+
+● Claude asked:
+  ⎿  · The current metric-writing code (MetricRouter) inserts each parsed 
+     reading into its DB table immediately, one at a time — there's no existing 
+     way to "undo" readings already written mid-parse. To guarantee cancel 
+     always discards data cleanly, I'd wrap the parse-and-route step in a single
+     DB transaction, so cancelling mid-parse rolls back automatically (nothing 
+     partial ever lands in the tables) instead of leaving some readings written 
+     and others not. This is a small, contained change to BleEngine's 
+     parse-routing loop. Does that match what you want? (Yes, guarantee atomic 
+     rollback (Recommended) / Best-effort is fine)
+     · After Cancel is pressed and the sync/parse is torn down, what should the 
+     devices page show? (Silent reset (Recommended) / Brief "Cancelled" banner)
+     ● No response after 60s — continued without an answer
+● No response yet — I'll proceed with the recommended defaults (atomic rollback
+  via transaction, silent reset matching the Stop button) and move to drafting
+  the plan. I can revise if the user weighs in differently.
+
+  Searched for 1 pattern, read 2 files (ctrl+o to expand)
+
+● I have a solid, verified picture of the whole cancellation pathway now. I'll
+  run this through a Plan agent to pressure-test the design and nail down exact
+  edit points before writing the final plan.
+
+● Plan(Design cancel-sync implementation plan)
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+● The Plan agent is working through the remaining open questions
+  (retry-suppression, onCharacteristicWrite, multi-device orchestrator
+  interaction, transaction wiring). I'll wait for it to finish.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● I'll wait for the plan agent's completion notification rather than polling.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Waiting for the Plan agent to complete before finalizing the plan document.
+
+✻ Sautéed for 7m 54s
+
+● Agent "Design cancel-sync implementation plan" finished · 9m 35s
+
+● Let me verify a few load-bearing claims before finalizing — particularly the
+  onCharacteristicWrite callback and
+  MultiDeviceSyncOrchestrator.isTerminal()/finishDevice().
+
+  Searched for 2 patterns, read 1 file (ctrl+o to expand)
+
+● Confirmed — everything the plan relies on checks out. I have enough to write
+  the final plan document now.
+
+● Updated plan
+  ⎿  /plan to preview
+
+● User approved Claude's plan
+  ⎿  Plan saved to: ~/.claude/plans/im-trying-to-unify-giggly-bumblebee.md · 
+     /plan to edit
+     Add "Cancel" to the Connecting/Syncing/Parsing banner (styled like the 
+     existing "Stop")
+
+     Context
+
+     The Devices page shows a banner (BleBanner in DevicesScreen.kt) that
+     changes content based on BleConnectionState. Today only the Scanning phase
+     ("Scanning for devices...") has a cancel affordance — a plain clickable
+     Text("Stop", ...) next to the label, wired to BleEngine.cancelScan(). The
+     Connecting, Syncing, and Parsing phases show only a label + progress bar,
+     with no way to back out. The user wants a "Cancel" button added to those
+     three phases, in the same visual slot and style as "Stop", that reliably
+     halts the operation:
+
+     - Stops the sync/parse in progress.
+     - Discards any data collected or parsed from the device during that attempt
+     — nothing partial should land in the database.
+     - If the BLE connection is already established (device is genuinely
+     connected), cancelling must not disconnect it — only the sync/parse
+     activity stops.
+     - If cancelled during Connecting (before any GATT link exists), the app
+     must not proceed to connect.
+
+     Investigation of BleEngine.kt (the real state machine — DevicesViewModel is
+     a thin pass-through) found:
+     - The Connecting phase has no live GATT link yet — cancelling it is safe to
+     implement by reusing the existing disconnect() path, which already tears
+     down an in-progress connectGatt() attempt and lands on Idle (via a brief
+     transient Disconnected), without ever reaching Connected.
+     - The Syncing phase (executeNextSyncCommand()) is driven recursively
+     through Android BLE GATT callbacks, not a single coroutine — cancellation
+     must be a cooperative flag, not a Job.cancel().
+     - The Parsing phase runs the actual data write in a single
+     scope.launch(Dispatchers.IO) { ... } block that calls MetricRouter.route()
+     once per reading, immediately, with no transaction — so a naive cancel
+     could leave a partial set of readings permanently in the database. Some
+     metric tables (e.g. STEPS/ACTIVE_CALORIES in ABSOLUTE mode) do a
+     delete-then-insert per reading, making a mid-loop interruption doubly
+     risky. The metric reading tables have no sync_session_id column, so there's
+     no way to delete "just this session's rows" after the fact — the only
+     reliable fix is to prevent the writes from committing at all via a DB
+     transaction that rolls back on cancellation.
+     - RawDeviceDataRepository.deleteForSession(syncSessionId) already exists
+     but is dead code (never called) — it's the natural hook for discarding raw
+     bytes written during a cancelled Syncing/Parsing attempt.
+     - MultiDeviceSyncOrchestrator.isTerminal() doesn't currently treat Idle as
+     terminal, which would make it wait up to 5 minutes if a cancel during
+     EOS-driver Parsing lands the engine on Idle.
+
+     Approach
+
+     1. data/model/SyncStatus.kt
+
+     Add a CANCELLED enum constant. Persisted via Converters.kt's
+     .name/.valueOf() — no Room migration, no exhaustive when anywhere breaks
+     (verified: only non-exhaustive when {} branches reference this enum).
+
+     2. ble/BleEngine.kt (bulk of the work)
+
+     - Inject AppDatabase and SyncSessionRepository into the constructor (both
+     already Hilt-bound singletons, same as DeviceSyncProcessor already does).
+     - Add @Volatile private var cancelRequested = false and private var 
+     activeSyncJob: Job? = null. Reset cancelRequested = false in connect()
+     alongside the existing userDisconnecting = false.
+     - New public fun cancelSync(), branching on _connectionState.value:
+       - Connecting → call the existing disconnect() directly. It only needs
+     activeDeviceAddress != null (true here), doesn't inspect state, and already
+     produces the right outcome (never reaches Connected).
+       - Syncing → set cancelRequested = true; cancel
+     retryJob/silentSyncTimeoutJob/writeAckTimeoutJob/quiescenceJob; null the
+     awaitReplyDeferred/awaitEndOfStreamDeferred fields (same guard pattern the
+     callbacks already use); do not touch activeGatt; delete raw session data
+     and mark the SyncSession row CANCELLED (new markSyncSessionCancelled()
+     helper, fire-and-forget on IO, wrapped in runCatching so it never blocks
+     the UI transition); clear sessionCache/pendingMetrics/pendingSleep/pendingA
+     ctivities/affectedDates/reassemblyBuffers; then transition state
+     synchronously — Connected(address, driverName, 0, true) since GATT is
+     always open in this phase (mirrors the existing open-GATT check in
+     acknowledgeSyncComplete()).
+       - Parsing → ownership handoff, not synchronous cleanup: set
+     cancelRequested = true, cancel retryJob, and call activeSyncJob?.cancel().
+     The in-flight parse coroutine is the sole owner of finishing cleanup once
+     it observes the cancellation (see below) — this avoids two writers racing
+     on _connectionState.
+       - Other states → no-op.
+     - executeNextSyncCommand(): add a cancelRequested check at the very top
+     that returns immediately, halting the recursive command chain. No other
+     callback needs an individual check.
+     - scheduleRetry(): add a guard at the top — if cancelRequested, clear
+     activeManifest/activeDeviceAddress/activeDeviceId, reset retryCount, set
+     Idle, and return (instead of scheduling a reconnect). Covers the narrow
+     race where a write/GATT error arrives the same tick as a cancel.
+     - triggerSync() (passive/streaming-driver path, GATT stays open through
+     parsing) and dispatchPostStreamParse() (EOS-driver path, GATT already
+     closed before Parsing state is even entered):
+       - Wrap the existing per-reading for (vr in readingResults) { 
+     routeReading(...) } loop in appDatabase.withTransaction { }. Room's suspend
+     DAO calls already check coroutine cancellation, so a plain Job.cancel()
+     triggers a CancellationException at the next DB write and Room rolls back
+     the whole transaction atomically — no manual "isCancelled()" polling
+     needed.
+       - Capture the launching coroutine into activeSyncJob at all three launch
+     sites: startSync(), the init block's auto-trigger-on-Connected collector,
+     and dispatchPostStreamParse()'s scope.launch(Dispatchers.IO) { ... }.
+       - Add a catch (e: CancellationException) block (before the existing
+     generic catch (e: Exception)), wrapped in withContext(NonCancellable) { }
+     so cleanup itself can't be re-cancelled: call markSyncSessionCancelled(),
+     clear sessionCache, and transition state using the same open-GATT check as
+     the Syncing branch (Connected(...) if activeGatt != null, else clear the
+     active-device fields and go Idle). In dispatchPostStreamParse()'s case this
+     always lands Idle since GATT is already closed by the time Parsing starts;
+     written generically for symmetry with triggerSync().
+     - New private suspend fun markSyncSessionCancelled(sessionId: Long):
+     runCatching { rawDeviceDataRepository.deleteForSession(sessionId) }, then
+     runCatching { syncSessionRepository.getById(sessionId)?.let { 
+     update(it.copy(status = SyncStatus.CANCELLED, endedAt = Instant.now())) } }
+     — both failures logged and swallowed so a cancellation always completes
+     its state transition even if this bookkeeping fails.
+
+     3. ble/sync/MultiDeviceSyncOrchestrator.kt
+
+     Add is BleConnectionState.Idle -> true to isTerminal(). Confirmed safe:
+     connectToDevice() synchronously moves state off Idle via its tryAcquire()
+     gate before the orchestrator starts observing, so a stale pre-connect Idle
+     is never misread as this device's outcome. With this fix, cancelling one
+     device mid-auto-sync-run lets the orchestrator move on to the next queued
+     device within seconds instead of waiting out the 5-minute timeout backstop.
+     No other orchestrator change needed — finishDevice() already
+     unconditionally disconnects between devices for any non-SyncComplete
+     outcome (including a healthy quiescent Connected), so
+     cancel-while-connected during a multi-device run isn't a new case, it's the
+     same "disconnect to move to the next device" behavior that already exists.
+
+     4. ui/devices/DevicesViewModel.kt
+
+     Add fun onCancelSync() { bleEngine.cancelSync() }, next to the existing
+     onScanCancelled().
+
+     5. ui/devices/DevicesScreen.kt
+
+     - Add an onCancelSync: () -> Unit parameter to BleBanner, wired at the call
+     site to viewModel::onCancelSync.
+     - In the Connecting, Syncing, and Parsing branches of BleBanner's when 
+     (state), replace the bare label Text with a Row matching the existing
+     Scanning branch's layout exactly: label Text with Modifier.weight(1f), then
+     Text("Cancel", style = TypographyTitle, color = 
+     MaterialTheme.colorScheme.primary, modifier = Modifier.clickable(onClick = 
+     onCancelSync)). Same TypographyTitle style and colorScheme.primary tint as
+     "Stop" — no new component needed.
+
+     Verification
+
+     - Build and run the app; connect to a real (or test) BLE device.
+     - Cancel during Connecting: tap Cancel immediately after tapping a
+     discovered device — banner should disappear, device never reaches
+     Connected, no lingering scan/connect state.
+     - Cancel during Syncing (passive/streaming driver, link survives sync): tap
+     Cancel — banner disappears, device tile shows Connected (not
+     disconnected), a subsequent manual "Sync" works normally, and
+     raw_device_data / typed metric tables show nothing new from the cancelled
+     attempt (check via Room DB inspector or logs); sync_sessions table shows a
+     CANCELLED row for that attempt.
+     - Cancel during Parsing, EOS driver (GATT already closed by the time
+     Parsing starts): tap Cancel — banner disappears, engine settles on Idle, no
+     partial reading rows exist for that attempt. Specifically test with a
+     STEPS or ACTIVE_CALORIES ABSOLUTE-mode driver to confirm the transaction
+     rollback doesn't leave a day's data deleted-but-not-reinserted.
+     - Cancel during Parsing, passive/streaming driver (GATT stays open): tap
+     Cancel — banner disappears, device tile shows Connected.
+     - Cancel mid multi-device auto-sync run: trigger auto-sync across 2+
+     devices, cancel the one currently active — orchestrator should proceed to
+     the next device within a few seconds, not hang until the 5-minute timeout.
+     - Confirm the existing "Stop" button (Scanning phase) and "Dismiss"/"Retry"
+     buttons (SyncComplete/Error/GattCacheError) are untouched and still work.
+● Starting implementation. First, the simple enum change.
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/data/model/SyncSta
+        tus.kt)
+  ⎿  Added 2 lines
+       9       *  (totalRejected > 0 && totalAccepted > 0). endedAt is al
+          ways set. */
+      10      PARTIAL,
+      11      FAILED,
+      12 +    /** Sync/parse was aborted by the user's Cancel action. end
+         +edAt is always set. */                                         
+      13 +    CANCELLED,                                                 
+      14  }
+
+● Now the small orchestrator fix.
+
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/ble/sync/MultiDevi
+        ceSyncOrchestrator.kt)
+  ⎿  Added 5 lines, removed 1 line
+      151          is BleConnectionState.Connected -> state.isQuiescent
+      152          is BleConnectionState.Error,
+      153          is BleConnectionState.GattCacheError,
+      154 -        is BleConnectionState.Disconnected -> true            
+      154 +        is BleConnectionState.Disconnected,                   
+      155 +        // A cancelled sync/parse during an EOS driver's Parsi
+          +ng phase lands the engine                                     
+      156 +        // directly on Idle (GATT already closed) — must be te
+          +rminal or the orchestrator                                    
+      157 +        // waits out the full DEVICE_SYNC_TIMEOUT_MS backstop 
+          +before moving to the next device.                             
+      158 +        is BleConnectionState.Idle -> true                    
+      159          else -> false
+      160      }
+      161  
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/ui/devices/Devices
+        ViewModel.kt)
+  ⎿  Added 2 lines
+      241  
+      242      fun onScanCancelled() { bleEngine.cancelScan() }
+      243  
+      244 +    fun onCancelSync() { bleEngine.cancelSync() }             
+      245 +                                                              
+      246      // REMOVED: interrupted-sync-recovery — onRecoverSessionTa
+           pped() deleted
+      247      // ADDED: interrupted-sync-message
+      248      fun onSyncInterruptedDismissed() {
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/ui/devices/Devices
+        Screen.kt)
+  ⎿  Added 1 line
+      333                      BleBanner(
+      334                          state = connectionState,
+      335                          onScanCancelled = viewModel::onScanCan
+           celled,
+      336 +                        onCancelSync = viewModel::onCancelSync
+          +,                                                             
+      337                          onSyncAcknowledged = viewModel::onSync
+           Acknowledged,
+      338                          onAddDeviceTapped = viewModel::onAddDe
+           viceTapped,
+      339                          onDisconnectDismissed = viewModel::onD
+           isconnectDismissed,
+
+● Now let's view the BleBanner composable itself to edit its signature and the
+  three branches.
+
+  Read 1 file (ctrl+o to expand)
+
+● Now applying the signature and three branch edits.
+
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/ui/devices/Devices
+        Screen.kt)
+  ⎿  Added 1 line
+      867  private fun BleBanner(
+      868      state: BleConnectionState,
+      869      onScanCancelled: () -> Unit,
+      870 +    onCancelSync: () -> Unit,                                 
+      871      onSyncAcknowledged: () -> Unit,
+      872      onAddDeviceTapped: () -> Unit,
+      873      onDisconnectDismissed: () -> Unit,
+
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/ui/devices/Devices
+        Screen.kt)  ⎿  Added 31 lines, removed 6 lines
+      900                      LinearProgressIndicator(modifier = Modifie
+           r.fillMaxWidth())
+      901                  }
+      902                  is BleConnectionState.Connecting -> {
+      903 -                    Text("Connecting...", style = TypographyTi
+          -tle)                                                          
+      903 +                    Row(Modifier.fillMaxWidth(), verticalAlign
+          +ment = Alignment.CenterVertically) {                          
+      904 +                        Text("Connecting...", style = Typograp
+          +hyTitle, modifier = Modifier.weight(1f))                      
+      905 +                        Text(                                 
+      906 +                            "Cancel",                         
+      907 +                            style = TypographyTitle,          
+      908 +                            color = MaterialTheme.colorScheme.
+          +primary,                                                      
+      909 +                            modifier = Modifier.clickable(onCl
+          +ick = onCancelSync),                                          
+      910 +                        )                                     
+      911 +                    }                                         
+      912                      Spacer(Modifier.height(space4))
+      913                      LinearProgressIndicator(modifier = Modifie
+           r.fillMaxWidth())
+      914                  }
+      915                  is BleConnectionState.Syncing -> {
+      908 -                    Text(                                     
+      909 -                        if (state.packetsReceived > 0) "Syncin
+          -g... ${state.packetsReceived} packets" else "Syncing...",     
+      910 -                        style = TypographyTitle,              
+      911 -                    )                                         
+      916 +                    Row(Modifier.fillMaxWidth(), verticalAlign
+          +ment = Alignment.CenterVertically) {                          
+      917 +                        Text(                                 
+      918 +                            if (state.packetsReceived > 0) "Sy
+          +ncing... ${state.packetsReceived} packets" else "Syncing...", 
+      919 +                            style = TypographyTitle,          
+      920 +                            modifier = Modifier.weight(1f),   
+      921 +                        )                                     
+      922 +                        Text(                                 
+      923 +                            "Cancel",                         
+      924 +                            style = TypographyTitle,          
+      925 +                            color = MaterialTheme.colorScheme.
+          +primary,                                                      
+      926 +                            modifier = Modifier.clickable(onCl
+          +ick = onCancelSync),                                          
+      927 +                        )                                     
+      928 +                    }                                         
+      929                      Spacer(Modifier.height(space4))
+      930                      LinearProgressIndicator(modifier = Modifie
+           r.fillMaxWidth())
+      931                  }
+      932                  is BleConnectionState.Parsing -> {
+      916 -                    Text("Parsing...", style = TypographyTitle
+          -)                                                             
+      933 +                    Row(Modifier.fillMaxWidth(), verticalAlign
+          +ment = Alignment.CenterVertically) {                          
+      934 +                        Text("Parsing...", style = TypographyT
+          +itle, modifier = Modifier.weight(1f))                         
+      935 +                        Text(                                 
+      936 +                            "Cancel",                         
+      937 +                            style = TypographyTitle,          
+      938 +                            color = MaterialTheme.colorScheme.
+          +primary,                                                      
+      939 +                            modifier = Modifier.clickable(onCl
+          +ick = onCancelSync),                                          
+      940 +                        )                                     
+      941 +                    }                                         
+      942                      Spacer(Modifier.height(space4))
+      943                      LinearProgressIndicator(modifier = Modifie
+           r.fillMaxWidth())
+      944                  }
+
+● UI side done. Now the core BleEngine.kt changes — the largest piece.
 
   Searched for 1 pattern (ctrl+o to expand)
 
-● Confirmed: zero CompanionDeviceManager usage anywhere, and the core function
-  line numbers match exactly. The report is solid. Here it is:
+● Good, matches the plan exactly. Now let's make all the BleEngine.kt edits.
 
-  Findings Report: BLE Multi-Device Sync & Background Scheduling Recon
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/ble/BleEngine.kt)
+  ⎿  Added 2 lines
+      18  import android.os.ParcelUuid
+      19  import android.os.SystemClock
+      20  import androidx.annotation.RequiresApi
+      21 +import androidx.room.withTransaction                           
+      22  import androidx.work.WorkManager
+      23 +import com.athletedata.openAthleteMetrics.data.db.AppDatabase  
+      24  import com.athletedata.openAthleteMetrics.ble.driver.DriverRegi
+          stry
+      25  import com.athletedata.openAthleteMetrics.ble.driver.EndOfStrea
+          mStrategy
+      26  import com.athletedata.openAthleteMetrics.ble.driver.EndOfStrea
+          mStrategyFactory
 
-  Facts sessions 5 & 6 must embed
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/ble/BleEngine.kt)
+  ⎿  Added 4 lines
+      42  import com.athletedata.openAthleteMetrics.data.model.MetricType
+      43  import com.athletedata.openAthleteMetrics.data.model.RawPayload
+      44  import com.athletedata.openAthleteMetrics.data.model.SleepSessi
+          on
+      45 +import com.athletedata.openAthleteMetrics.data.model.SyncStatus
+      46  import com.athletedata.openAthleteMetrics.data.repository.Devic
+          eRepository
+      47  import com.athletedata.openAthleteMetrics.data.repository.Metri
+          cStatsBackfillCoordinator
+      48  import com.athletedata.openAthleteMetrics.data.repository.RawDe
+          viceDataRepository
+      49 +import com.athletedata.openAthleteMetrics.data.repository.SyncS
+         +essionRepository                                               
+      50  import com.athletedata.openAthleteMetrics.worker.enqueueSummary
+          Worker
+      51  import dagger.hilt.android.qualifiers.ApplicationContext
+      52  import java.time.LocalDate
+      53  import kotlin.time.Duration.Companion.milliseconds
+      54 +import kotlinx.coroutines.CancellationException                
+      55  import kotlinx.coroutines.CompletableDeferred
+      56  import kotlinx.coroutines.CoroutineScope
+      57  import kotlinx.coroutines.Dispatchers
+      58  import kotlinx.coroutines.Job
+      59 +import kotlinx.coroutines.NonCancellable                       
+      60  import kotlinx.coroutines.SupervisorJob
+      61  import kotlinx.coroutines.channels.BufferOverflow
+      62  import kotlinx.coroutines.channels.Channel
 
-  - Orchestrator seam: No queue/orchestration abstraction exists anywhere. A
-  sequential-device orchestrator is a new component sitting above BleEngine,
-  driving fun connectToDevice(bleAddress: String, manifest: WasmDriverManifest)
-  at BleEngine.kt:237 one device at a time, observing val connectionState: 
-  StateFlow<BleConnectionState> at BleEngine.kt:188 for a terminal state, then
-  calling fun disconnect() at BleEngine.kt:325 before advancing.
-  connectToDevice()/connect() have no internal reentrancy gate — only callers
-  (autoConnectOnStartup, DevicesViewModel) currently self-gate. An orchestrator
-  must supply its own gate, or calling it again mid-cycle will clobber
-  activeGatt/activeManifest/activeDeviceAddress and orphan the previous
-  BluetoothGatt.
-  - Reassembly-buffer-clear guarantee: reassemblyBuffers (BleEngine.kt:131,
-  keyed by characteristic UUID only, not per-device) is cleared at disconnect()
-  (:346), triggerSync() (:587), unconditionally at the top of every connect()
-  (:678), and in dispatchPostStreamParse() (:1388). Sequential runs cannot leak
-  packets between devices — provided the orchestrator never re-enters
-  connectToDevice() before the prior cycle's disconnect/parse has actually
-  completed (same caveat as above).
-  - BleSyncService notification seam: buildNotification() at
-  BleSyncService.kt:51-59 currently emits a static "Syncing device…" string;
-  onStartCommand's intent param is unused (line 35). This is the seam for a
-  future "Syncing X (n of m)" notification, but it needs a data path added first
-  (Intent extras, or the service observing BleEngine state itself).
-  - WorkManager registration pattern: One-time work uses enqueueUniqueWork +
-  ExistingWorkPolicy (AppStartupWorker.kt:39-45); periodic uses
-  enqueueUniquePeriodicWork + ExistingPeriodicWorkPolicy
-  (WidgetRefreshWorker.kt:42-49, 30-min interval). Hilt wiring:
-  AthleteDataApplication implements Configuration.Provider, injects
-  HiltWorkerFactory (AthleteDataApplication.kt:94-97); default WorkManager
-  initializer is removed in AndroidManifest.xml:142-151. No existing Worker uses
-  Constraints — a background-sync Worker would be the first. No periodic 
-  BLE-sync Worker exists today (confirmed by grep).
-  - minSdk/targetSdk: minSdk = 26, targetSdk = 36, compileSdk = 37 —
-  app/build.gradle.kts:11,15,16 (verified directly). targetSdk 36 already
-  enforces Android 12+ BLE runtime permissions and Android 14
-  foreground-service-type (connectedDevice, already declared).
-  - Startup-trigger site: bleEngine.autoConnectOnStartup() fires exactly once,
-  unconditionally, from MainActivity.onCreate() at MainActivity.kt:34 — not from
-  Application.onCreate() or any Worker. A background scheduler must coordinate
-  with this Activity-driven trigger to avoid double-firing.
+● Now the constructor and new fields:
 
-  ---
-  1. Single-sync lifecycle (end to end)
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/ble/BleEngine.kt)
+  ⎿  Added 2 lines
+       97      private val metricRouter: MetricRouter,
+       98      private val workManager: WorkManager,
+       99      private val metricStatsBackfillCoordinator: MetricStatsBac
+           kfillCoordinator,
+      100 +    private val appDatabase: AppDatabase,                     
+      101 +    private val syncSessionRepository: SyncSessionRepository, 
+      102  ) {
+      103      companion object {
+      104          private const val TAG = "data-pathway-tracker" // DPT
 
-  State fields — confirmed singular (verified directly against source):
-  - activeManifest: WasmDriverManifest? — BleEngine.kt:112
-  - activeDeviceAddress: String? — BleEngine.kt:113
-  - activeGatt: BluetoothGatt? — BleEngine.kt:175
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/ble/BleEngine.kt)
+  ⎿  Added 9 lines
+      195      private var inSyncCommandNotify = false
+      196      private var userDisconnecting = false
+      197  
+      198 +    // Set by cancelSync() while Syncing/Parsing; checked coop
+          +eratively at the top of                                       
+      199 +    // executeNextSyncCommand() and by scheduleRetry() to stop
+          + the callback-driven command                                  
+      200 +    // chain from advancing or auto-reconnecting after a user-
+          +initiated cancel.                                             
+      201 +    @Volatile private var cancelRequested = false             
+      202 +    // The coroutine currently running triggerSync() or dispat
+          +chPostStreamParse()'s parse+route                             
+      203 +    // work. cancelSync() cancels this Job directly during Par
+          +sing so an in-flight DB write                                 
+      204 +    // inside appDatabase.withTransaction {} throws and rolls 
+          +back atomically.                                              
+      205 +    private var activeSyncJob: Job? = null                    
+      206 +                                                              
+      207      private val _connectionState = MutableStateFlow<BleConnect
+           ionState>(BleConnectionState.Idle)
+      208      val connectionState: StateFlow<BleConnectionState> = _conn
+           ectionState.asStateFlow()
+      209  
 
-  One @Singleton BleEngine instance holds exactly one of each — no per-device
-  collections.
+● Now reset cancelRequested in connect() alongside userDisconnecting = false:
 
-  Call sequence for one full sync:
-  1. connectToDevice(bleAddress, manifest) (:237) → connect(device, manifest, 
-  resetRetries = true) (:246).
-  2. connect() (:650-693): clears accumulators + reassemblyBuffers.clear()
-  (:678), sets Connecting state (:686), device.connectGatt(...) (:688).
-  3. onConnectionStateChange (:698) → STATE_CONNECTED → gatt.requestMtu(...)
-  (:705).
-  4. onMtuChanged (:738) → gatt.discoverServices() (:747).
-  5. onServicesDiscovered (:751) → builds notify queue →
-  enableNextNotification() (:771).
-  6. enableNextNotification() (:997) drains queue → beginSyncCommandExecution()
-  (:1004).
-  7. beginSyncCommandExecution() (:1049) sets Syncing (:1052) →
-  executeNextSyncCommand() (:1065).
-  8. executeNextSyncCommand() (:1114) walks Write/EnableNotify/Delay commands,
-  arming awaitReplyDeferred/awaitEndOfStreamDeferred (:1176-1214).
-  9. Notifications arrive via onCharacteristicChanged (:807, :850) → checked
-  against awaitEndOfStreamStrategy (:826, :869) → forwarded to
-  notificationChannel (:137).
-  10. A dedicated consumer coroutine (init, :212-218) drains the channel and
-  calls handleNotification(characteristicUuid, bytes) (:412) — appends into
-  reassemblyBuffers[uuid] (:427), detects completion when a fragment is shorter
-  than negotiatedMtu - 3 (:431), persists raw packets immediately (:452-456).
-  11. End-of-stream detection: (a) driver-declared awaitEndOfStream resolved in
-  onCharacteristicWrite's aesDeferred branch (:932-982), setting
-  endOfStreamReceived = true (:977); (b) fallback quiescence/silent-sync timers
-  when no strategy is declared (:467 gate, :1130).
-  12. All commands done + EOS received → dispatchPostStreamParse() (:1360):
-  closes GATT (:1377-1379), clears reassemblyBuffers (:1388), parses
-  sessionCache, enqueues DailySummaryWorker, sets SyncComplete (:1453).
-  Passive-stream drivers (no EOS) stay Connected until manual disconnect()
-  (:325) or acknowledgeSyncComplete() (:363).
-  13. Re-sync of an already-connected device goes through triggerSync() (:506)
-  directly, clearing reassemblyBuffers again (:587).
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/ble/BleEngine.kt)
+  ⎿  Added 1 line
+      731          effectiveSyncCommands = emptyList()
+      732          inSyncCommandNotify = false
+      733          userDisconnecting = false
+      734 +        cancelRequested = false                               
+      735          Timber.tag(TAG).d("[CONN] connecting address=%s driver
+           =%s retry=%d", device.address, manifest.id, retryCount)
+      736          _connectionState.value = BleConnectionState.Connecting
+           (device.address)
+      737          try {
 
-  startScan() gating (:261-323): line 264 returns early unless current state is
-  Idle/Error/GattCacheError — scanning is blocked while
-  connected/connecting/syncing. connectToDevice()/connect() themselves have no 
-  equivalent internal gate — this is the key gap an orchestrator must fill.
+● Now add cancelSync() and markSyncSessionCancelled() near
+  disconnect()/cancelScan().
 
-  ---
-  2. Sync triggering / queuing
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/ble/BleEngine.kt)
+  ⎿  Added 76 lines
+      366          }
+      367      }
+      368  
+      369 +    /**                                                       
+      370 +     * Cancels the in-progress connect/sync/parse attempt whil
+          +e preserving an already-live BLE                              
+      371 +     * link where one exists. Behaviour depends on the phase c
+          +ancelled mid-flight:                                          
+      372 +     *  - Connecting: no GATT link exists yet — reuses [discon
+          +nect] to tear down the in-progress                            
+      373 +     *    connectGatt() attempt, landing on Idle without ever 
+          +reaching Connected.                                           
+      374 +     *  - Syncing: GATT is always open in this phase. Halts th
+          +e command-callback chain, discards                            
+      375 +     *    all collected-but-unparsed data, marks the sync sess
+          +ion CANCELLED, and returns to                                 
+      376 +     *    Connected without touching the GATT link.           
+      377 +     *  - Parsing: hands off ownership to the in-flight parse 
+          +coroutine via activeSyncJob.cancel()                          
+      378 +     *    rather than mutating state here, so there is a singl
+          +e writer of the final state/cleanup                           
+      379 +     *    (see the CancellationException catch in triggerSync(
+          +)/dispatchPostStreamParse()).                                 
+      380 +     */                                                       
+      381 +    fun cancelSync() {                                        
+      382 +        when (_connectionState.value) {                       
+      383 +            is BleConnectionState.Connecting -> disconnect()  
+      384 +                                                              
+      385 +            is BleConnectionState.Syncing -> {                
+      386 +                cancelRequested = true                        
+      387 +                retryJob?.cancel(); retryJob = null           
+      388 +                silentSyncTimeoutJob?.cancel(); silentSyncTime
+          +outJob = null                                                 
+      389 +                writeAckTimeoutJob?.cancel(); writeAckTimeoutJ
+          +ob = null                                                     
+      390 +                quiescenceJob?.cancel(); quiescenceJob = null 
+      391 +                awaitReplyDeferred = null                     
+      392 +                awaitReplyCharUuid = null                     
+      393 +                awaitEndOfStreamDeferred = null               
+      394 +                awaitEndOfStreamCharUuid = null               
+      395 +                awaitEndOfStreamStrategy = null               
+      396 +                awaitEndOfStreamArmedAtMs = 0L                
+      397 +                endOfStreamReceived = false                   
+      398 +                                                              
+      399 +                val address = activeDeviceAddress             
+      400 +                val driverName = activeManifest?.displayName  
+      401 +                val sessionId = currentSyncSessionId          
+      402 +                currentSyncSessionId = null                   
+      403 +                synchronized(sessionCache) { sessionCache.clea
+          +r() }                                                         
+      404 +                synchronized(pendingMetrics) { pendingMetrics.
+          +clear() }                                                     
+      405 +                synchronized(pendingSleep) { pendingSleep.clea
+          +r(); seenSleepStartMs.clear() }                               
+      406 +                synchronized(pendingActivities) { pendingActiv
+          +ities.clear() }                                               
+      407 +                synchronized(affectedDates) { affectedDates.cl
+          +ear() }                                                       
+      408 +                reassemblyBuffers.clear()                     
+      409 +                packetCount = 0                               
+      410 +                isQuiescent = false                           
+      411 +                                                              
+      412 +                if (sessionId != null) {                      
+      413 +                    scope.launch(Dispatchers.IO) { markSyncSes
+          +sionCancelled(sessionId) }                                    
+      414 +                }                                             
+      415 +                // GATT is always live while Syncing — never d
+          +isconnect here.                                               
+      416 +                if (address != null && driverName != null) {  
+      417 +                    _connectionState.value = BleConnectionStat
+          +e.Connected(address, driverName, 0, true)                     
+      418 +                }                                             
+      419 +            }                                                 
+      420 +                                                              
+      421 +            is BleConnectionState.Parsing -> {                
+      422 +                cancelRequested = true                        
+      423 +                retryJob?.cancel(); retryJob = null           
+      424 +                activeSyncJob?.cancel()                       
+      425 +            }                                                 
+      426 +                                                              
+      427 +            else -> Unit                                      
+      428 +        }                                                     
+      429 +    }                                                         
+      430 +                                                              
+      431 +    // Shared cleanup for a cancelled sync/parse attempt: disc
+          +ards raw packets persisted during                             
+      432 +    // Syncing and marks the SyncSession row CANCELLED. Never 
+          +throws — failures are logged and                              
+      433 +    // swallowed so a cancellation always completes its state 
+          +transition even if this                                       
+      434 +    // bookkeeping fails.                                     
+      435 +    private suspend fun markSyncSessionCancelled(sessionId: Lo
+          +ng) {                                                         
+      436 +        runCatching { rawDeviceDataRepository.deleteForSession
+          +(sessionId) }                                                 
+      437 +            .onFailure { Timber.w(it, "BleEngine: failed to de
+          +lete raw data for cancelled session $sessionId") }            
+      438 +        runCatching {                                         
+      439 +            syncSessionRepository.getById(sessionId)?.let { ex
+          +isting ->                                                     
+      440 +                syncSessionRepository.update(existing.copy(sta
+          +tus = SyncStatus.CANCELLED, endedAt = Instant.now()))         
+      441 +            }                                                 
+      442 +        }.onFailure { Timber.w(it, "BleEngine: failed to mark 
+          +sync session $sessionId cancelled") }                         
+      443 +    }                                                         
+      444 +                                                              
+      445      fun disconnect() {
+      446          val address = activeDeviceAddress ?: return
+      447          userDisconnecting = true
 
-  (a) Startup: MainActivity.onCreate() → autoConnectOnStartup(). This picks the
-  most-recently-synced/seen device (maxByOrNull { lastSyncMs ?: lastSeenMs ?: 0L
-  }, :230) — there is no "primary device" concept in the Device model (only
-  lastSeenMs/lastSyncMs/lastBatteryPct). Session 5's "primary first" ordering
-  needs a new field.
+● Now add the cancelRequested guard at the top of executeNextSyncCommand():
 
-  (b) Manual tap: DevicesViewModel.onSyncTapped() → bleEngine.startSync(),
-  documented as fire-and-forget on the engine's app-scoped coroutine scope — not
-  awaitable/chainable by a caller.
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/ble/BleEngine.kt)
+  ⎿  Added 4 lines
+      1239  
+      1240      @SuppressLint("MissingPermission")
+      1241      private fun executeNextSyncCommand() {
+      1242 +        if (cancelRequested) {                               
+      1243 +            Timber.tag(TAG).d("[SYNC] executeNextSyncCommand:
+           + cancelRequested — halting")                                 
+      1244 +            return                                           
+      1245 +        }                                                    
+      1246          val manifest = activeManifest ?: return
+      1247          val address = activeDeviceAddress ?: return
+      1248          val commands = effectiveSyncCommands  // effectiveSyn
+            cCommands is always set correctly by beginSyncCommandExecutio
+            n
 
-  Auto-sync-on-connect: a separate init-block collector (:199-208) calls
-  triggerSync() on every Connecting → Connected transition regardless of UI
-  screen.
+● Now let's find scheduleRetry() and add the guard there.
 
-  No existing queue/orchestration abstraction (confirmed by repo grep —
-  ble/sync/ only contains single-device helpers: DeviceSyncProcessor,
-  DeviceReprocessor, SleepMerger, SyncSummary, SyncValidator, MetricRouter).
+  Read 1 file (ctrl+o to expand)
 
-  Exact seam: wrap connectToDevice() (:237) + observe connectionState (:188) to
-  a terminal state + call disconnect()/acknowledgeSyncComplete() — this must
-  live above BleEngine (new orchestrator class or Service), since BleEngine's
-  API and state are single-device by design.
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/ble/BleEngine.kt)
+  ⎿  Added 12 lines
+      1403      // ------------------------------------------------------
+            -------------------
+      1404  
+      1405      private fun scheduleRetry() {
+      1406 +        if (cancelRequested) {                               
+      1407 +            // A write/GATT error raced with a user-initiated
+           + cancel — the caller already                                 
+      1408 +            // closed activeGatt, so there is nothing left to
+           + reconnect to. Land on Idle                                  
+      1409 +            // instead of scheduling a reconnect the user jus
+           +t asked to stop.                                             
+      1410 +            Timber.tag(TAG).d("[SYNC] scheduleRetry suppresse
+           +d — cancelRequested")                                        
+      1411 +            activeManifest = null                            
+      1412 +            activeDeviceAddress = null                       
+      1413 +            activeDeviceId = null                            
+      1414 +            retryCount = 0                                   
+      1415 +            _connectionState.value = BleConnectionState.Idle 
+      1416 +            return                                           
+      1417 +        }                                                    
+      1418          val address = activeDeviceAddress ?: return
+      1419          val manifest = activeManifest ?: return
+      1420          if (retryCount >= MAX_RETRIES) {
 
-  ---
-  3. Reassembly buffer safety
+● Now let's handle triggerSync() and its two launch sites. Let me re-read the
+  current state of that region since line numbers have shifted.
 
-  reassemblyBuffers: MutableMap<String, ByteArray> (:131) is keyed by
-  characteristic UUID only — one map per engine singleton, not per-device.
-  Verified clear sites: disconnect() (:346), triggerSync() (:587), connect()
-  (:678, unconditional on every connection attempt including retries),
-  dispatchPostStreamParse() (:1388). Safe for sequential runs as long as the
-  orchestrator never re-enters connectToDevice() before the prior device's
-  disconnect/parse has completed.
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
 
-  DeviceReprocessor.kt has no reassembly buffer — it reconstructs frames from
-  already-persisted raw rows and is documented as "must only be called when BLE
-  is idle" (offline reprocessing, not live-stream).
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/ble/BleEngine.kt)
+  ⎿  Added 1 line, removed 1 line
+      221              _connectionState.collect { state ->
+      222                  if (state is BleConnectionState.Connected &&
+      223                      prev is BleConnectionState.Connecting) {
+      224 -                    triggerSync()                             
+      224 +                    activeSyncJob = scope.launch { triggerSync
+          +() }                                                          
+      225                  }
+      226                  prev = state
+      227              }
 
-  ---
-  4. Connection state & service
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/ble/BleEngine.kt)  ⎿  Added 1 line, removed 1 line
+      622      // lifetime to their own scope — launches on this engine's
+            app-scoped `scope` instead of
+      623      // the caller's, so the sync isn't cancelled if the caller
+            (e.g. a ViewModel) is cleared.
+      624      fun startSync() {
+      625 -        scope.launch { triggerSync() }                        
+      625 +        activeSyncJob = scope.launch { triggerSync() }        
+      626      }
+      627  
+      628      suspend fun triggerSync(): SyncSummary? {
 
-  BleConnectionState (ble/BleConnectionState.kt, sealed class, 9 variants: Idle,
-  Scanning, Connecting, Connected, Syncing, Parsing, SyncComplete, 
-  Disconnected, Error, GattCacheError). Single StateFlow: BleEngine.kt:188.
+● Now let's read the full current triggerSync() body to wrap the routing loop
+  and add the cancellation catch.
 
-  Observers: AthleteDataApplication.observeBleSyncService() (:117),
-  DevicesViewModel.connectionState (re-exposed),
-  NavHostViewModel.connectionState, NavGraph.kt:49, BottomNavBar.kt,
-  DevicesScreen.kt.
+  Read 1 file (ctrl+o to expand)
 
-  BleSyncService (ble/BleSyncService.kt): unbound (onBind returns null, :28)
-  foreground Service with no sync logic of its own — pure FGS lifetime anchor.
-  Started via AthleteDataApplication.startBleSyncService() (:144-155,
-  ContextCompat.startForegroundService) whenever state enters {Connecting, 
-  Connected, Syncing, Parsing, SyncComplete}; stopped via stopBleSyncService()
-  (:157-160) after a 5s debounce to survive transient reconnect blips.
-  Notification built in buildNotification() (:51-59) — static text, intent
-  extras unused — this is the seam for per-device progress.
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/ble/BleEngine.kt)
+  ⎿  Added 13 lines, removed 7 lines
+      668                  when (val parseResult = driverRegistry.parseSe
+           ssion(manifest, frames)) {
+      669                      is WasmParseResult.Success -> {
+      670                          val readingResults = validator.validat
+           eReadings(parseResult.readings)
+      671 -                        for (vr in readingResults) {          
+      672 -                            when (vr) {                       
+      673 -                                is ValidationResult.Accepted -
+          -> {                                                           
+      674 -                                    routeReading(vr.item)     
+      675 -                                    if (vr.item.metricType == 
+          -MetricType.BATTERY) batteryFromSession.add(vr.item)           
+      671 +                        // Room's suspend DAO calls check the 
+          +calling coroutine's cancellation on                           
+      672 +                        // every call — wrapping the loop in o
+          +ne transaction means a cancelSync()                           
+      673 +                        // during Parsing (which cancels activ
+          +eSyncJob) rolls back the entire                               
+      674 +                        // batch atomically instead of leaving
+          + a partial set of readings written.                           
+      675 +                        appDatabase.withTransaction {         
+      676 +                            for (vr in readingResults) {      
+      677 +                                when (vr) {                   
+      678 +                                    is ValidationResult.Accept
+          +ed -> {                                                       
+      679 +                                        routeReading(vr.item) 
+      680 +                                        if (vr.item.metricType
+          + == MetricType.BATTERY) batteryFromSession.add(vr.item)       
+      681 +                                    }                         
+      682 +                                    is ValidationResult.Reject
+          +ed ->                                                         
+      683 +                                        Timber.w("triggerSync:
+          + dropped %s — %s", vr.item.metricType, vr.reason)             
+      684                                  }
+      677 -                                is ValidationResult.Rejected -
+          ->                                                             
+      678 -                                    Timber.w("triggerSync: dro
+          -pped %s — %s", vr.item.metricType, vr.reason)                 
+      685                              }
+      686                          }
+      687                      }
 
-  ---
-  5. WorkManager setup (session 6)
+● Now add the CancellationException catch block before the generic catch (e: 
+  Exception):
 
-  - AppStartupWorker: one-time, enqueueUniqueWork("app_startup", KEEP, ...)
-  (:39-45).
-  - WidgetRefreshWorker: periodic 30-min,
-  enqueueUniquePeriodicWork("widget_refresh", KEEP, ...) (:42-49).
-  - DailySummaryWorker: one-time, per-date,
-  enqueueUniqueWork("daily_summary_$date", REPLACE, ...) (:267-283).
-  - MetricStatsRecomputeWorker: one-time, similar pattern.
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/ble/BleEngine.kt)
+  ⎿  Added 19 lines
+      719              val summary = syncProcessor.process(result, preSyn
+           cSessionId = preSyncSessionId)
+      720              _connectionState.value = BleConnectionState.SyncCo
+           mplete(summary, activeDeviceAddress ?: "")
+      721              summary
+      722 +        } catch (e: CancellationException) {                  
+      723 +            // cancelSync() cancelled activeSyncJob mid-Parsin
+          +g. NonCancellable so this                                     
+      724 +            // cleanup itself can't be interrupted by the same
+          + cancellation.                                                
+      725 +            withContext(NonCancellable) {                     
+      726 +                preSyncSessionId?.let { markSyncSessionCancell
+          +ed(it) }                                                      
+      727 +                synchronized(sessionCache) { sessionCache.clea
+          +r() }                                                         
+      728 +                val address2 = activeDeviceAddress            
+      729 +                val driverName2 = activeManifest?.displayName 
+      730 +                // triggerSync() never touches activeGatt — th
+          +e link is always still open here.                             
+      731 +                if (activeGatt != null && address2 != null && 
+          +driverName2 != null) {                                        
+      732 +                    _connectionState.value = BleConnectionStat
+          +e.Connected(address2, driverName2, 0, true)                   
+      733 +                } else {                                      
+      734 +                    activeManifest = null                     
+      735 +                    activeDeviceAddress = null                
+      736 +                    activeDeviceId = null                     
+      737 +                    _connectionState.value = BleConnectionStat
+          +e.Idle                                                        
+      738 +                }                                             
+      739 +            }                                                 
+      740 +            null                                              
+      741          } catch (e: Exception) {
+      742              _connectionState.value = BleConnectionState.Error(
+           e.message ?: "Sync failed")
+      743              null
 
-  Hilt: AthleteDataApplication is Configuration.Provider, injects
-  HiltWorkerFactory, exposes workManagerConfiguration (:94-97); default
-  initializer removed in manifest (:142-151). No Worker uses Constraints today.
-  A new periodic sync Worker would be a @HiltWorker CoroutineWorker in worker/,
-  registered via PeriodicWorkRequestBuilder + enqueueUniquePeriodicWork, called
-  once from AthleteDataApplication.onCreate() alongside the existing enqueue
-  calls (:90-91). Confirmed: no periodic BLE-sync Worker exists today.
+● Now let's update dispatchPostStreamParse(). Let me view its current state.
 
-  ---
-  6. Bootstrap & platform
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
 
-  autoConnectOnStartup() fires once per MainActivity.onCreate()
-  (MainActivity.kt:34), gated only by its own internal connectionState != Idle
-  check (BleEngine.kt:227) — not by Application.onCreate() or any Worker.
+● Update(app/src/main/java/com/athletedata/openAthleteMetrics/ble/BleEngine.kt)
+  ⎿  Added 92 lines, removed 60 lines
+      1563          Timber.tag(TAG).d("session-cache-complete: frames=%d"
+            , frames.size)
+      1564  
+      1565          // 3–6. Parse on IO, route readings, enqueue workers,
+             transition state.
+      1566 -        scope.launch(Dispatchers.IO) {                       
+      1567 -            val result = driverRegistry.parseSession(manifest
+           -, frames)                                                    
+      1568 -            val batteryReadings = mutableListOf<MetricReading
+           ->()                                                          
+      1566 +        activeSyncJob = scope.launch(Dispatchers.IO) {       
+      1567 +            try {                                            
+      1568 +                val result = driverRegistry.parseSession(mani
+           +fest, frames)                                                
+      1569 +                val batteryReadings = mutableListOf<MetricRea
+           +ding>()                                                      
+      1570  
+      1570 -            when (result) {                                  
+      1571 -                is WasmParseResult.Success -> {              
+      1572 -                    val readingResults = validator.validateRe
+           -adings(result.readings)                                      
+      1573 -                    for (vr in readingResults) {             
+      1574 -                        when (vr) {                          
+      1575 -                            is ValidationResult.Accepted -> {
+      1576 -                                routeReading(vr.item)        
+      1577 -                                if (vr.item.metricType == Met
+           -ricType.BATTERY) {                                           
+      1578 -                                    batteryReadings.add(vr.it
+           -em)                                                          
+      1571 +                when (result) {                              
+      1572 +                    is WasmParseResult.Success -> {          
+      1573 +                        val readingResults = validator.valida
+           +teReadings(result.readings)                                  
+      1574 +                        // Room's suspend DAO calls check the
+           + calling coroutine's cancellation on                         
+      1575 +                        // every call — wrapping the loop in 
+           +one transaction means a cancelSync()                         
+      1576 +                        // during Parsing (which cancels acti
+           +veSyncJob) rolls back the entire                             
+      1577 +                        // batch atomically instead of leavin
+           +g a partial set of readings written.                         
+      1578 +                        appDatabase.withTransaction {        
+      1579 +                            for (vr in readingResults) {     
+      1580 +                                when (vr) {                  
+      1581 +                                    is ValidationResult.Accep
+           +ted -> {                                                     
+      1582 +                                        routeReading(vr.item)
+      1583 +                                        if (vr.item.metricTyp
+           +e == MetricType.BATTERY) {                                   
+      1584 +                                            batteryReadings.a
+           +dd(vr.item)                                                  
+      1585 +                                        }                    
+      1586 +                                    }                        
+      1587 +                                    is ValidationResult.Rejec
+           +ted ->                                                       
+      1588 +                                        Timber.w("dispatchPos
+           +tStreamParse: dropped %s — %s",                              
+      1589 +                                            vr.item.metricTyp
+           +e, vr.reason)                                                
+      1590                                  }
+      1591                              }
+      1581 -                            is ValidationResult.Rejected ->  
+      1582 -                                Timber.w("dispatchPostStreamP
+           -arse: dropped %s — %s",                                      
+      1583 -                                    vr.item.metricType, vr.re
+           -ason)                                                        
+      1592                          }
+      1593 +                        Timber.tag(TAG).d("parse-complete: re
+           +adings=%d", result.readings.size)                            
+      1594                      }
+      1586 -                    Timber.tag(TAG).d("parse-complete: readin
+           -gs=%d", result.readings.size)                                
+      1595 +                    is WasmParseResult.Empty ->              
+      1596 +                        Timber.tag(TAG).d("parse-session: emp
+           +ty — no readings produced")                                  
+      1597 +                    is WasmParseResult.WasmTrap ->           
+      1598 +                        Timber.tag(TAG).e("parse-session: was
+           +m trap message=%s", result.message)                          
+      1599 +                    is WasmParseResult.DeserialisationError -
+           +>                                                            
+      1600 +                        Timber.tag(TAG).e("parse-session: des
+           +erialisation error message=%s", result.message)              
+      1601 +                    is WasmParseResult.EngineNotInitialised -
+           +>                                                            
+      1602 +                        Timber.tag(TAG).e("parse-session: eng
+           +ine not initialised")                                        
+      1603                  }
+      1588 -                is WasmParseResult.Empty ->                  
+      1589 -                    Timber.tag(TAG).d("parse-session: empty —
+           - no readings produced")                                      
+      1590 -                is WasmParseResult.WasmTrap ->               
+      1591 -                    Timber.tag(TAG).e("parse-session: wasm tr
+           -ap message=%s", result.message)                              
+      1592 -                is WasmParseResult.DeserialisationError ->   
+      1593 -                    Timber.tag(TAG).e("parse-session: deseria
+           -lisation error message=%s", result.message)                  
+      1594 -                is WasmParseResult.EngineNotInitialised ->   
+      1595 -                    Timber.tag(TAG).e("parse-session: engine 
+           -not initialised")                                            
+      1596 -            }                                                
+      1604  
+      1598 -            // 6. Clear cache regardless of parse result.    
+      1599 -            synchronized(sessionCache) { sessionCache.clear()
+           - }                                                           
+      1605 +                // 6. Clear cache regardless of parse result.
+      1606 +                synchronized(sessionCache) { sessionCache.cle
+           +ar() }                                                       
+      1607  
+      1601 -            // Drain affectedDates now; the actual worker enq
+           -ueue is deferred to the                                      
+      1602 -            // finally block below so it always runs after sy
+           -ncProcessor.process() (and                                   
+      1603 -            // therefore sleepStagePromoter.promote()) has co
+           -mpleted — matching triggerSync().                            
+      1604 -            val datesToProcess = synchronized(affectedDates) 
+           -{                                                            
+      1605 -                affectedDates.toSet().also { affectedDates.cl
+           -ear() }                                                      
+      1606 -            }                                                
+      1608 +                // Drain affectedDates now; the actual worker
+           + enqueue is deferred to the                                  
+      1609 +                // finally block below so it always runs afte
+           +r syncProcessor.process() (and                               
+      1610 +                // therefore sleepStagePromoter.promote()) ha
+           +s completed — matching triggerSync().                        
+      1611 +                val datesToProcess = synchronized(affectedDat
+           +es) {                                                        
+      1612 +                    affectedDates.toSet().also { affectedDate
+           +s.clear() }                                                  
+      1613 +                }                                            
+      1614  
+      1608 -            // Finalise sync session row and transition UI st
+           -ate.                                                         
+      1609 -            val syncResult = DriverSyncResult(               
+      1610 -                deviceId        = address,                   
+      1611 -                driverId        = manifest.id,               
+      1612 -                syncStartedAt   = syncStartedAt,             
+      1613 -                syncEndedAt     = Instant.now(),             
+      1614 -                metricReadings  = batteryReadings, // others 
+           -already written by routeReading                              
+      1615 -                sleepSessions   = emptyList(), // sleep metri
+           -cs arrive as MetricReading via parseSession                  
+      1616 -                activities      = emptyList(), // activity me
+           -trics arrive as MetricReading via parseSession               
+      1617 -                rawPayloads     = emptyList(), // packets alr
+           -eady persisted on arrival                                    
+      1618 -                packetsReceived = capturedPacketCount,       
+      1619 -            )                                                
+      1620 -            try {                                            
+      1621 -                val summary = syncProcessor.process(syncResul
+           -t, preSyncSessionId = preSyncSessionId)                      
+      1622 -                withContext(Dispatchers.Main) {              
+      1623 -                    _connectionState.value = BleConnectionSta
+           -te.SyncComplete(summary, address)                            
+      1615 +                // Finalise sync session row and transition U
+           +I state.                                                     
+      1616 +                val syncResult = DriverSyncResult(           
+      1617 +                    deviceId        = address,               
+      1618 +                    driverId        = manifest.id,           
+      1619 +                    syncStartedAt   = syncStartedAt,         
+      1620 +                    syncEndedAt     = Instant.now(),         
+      1621 +                    metricReadings  = batteryReadings, // oth
+           +ers already written by routeReading                          
+      1622 +                    sleepSessions   = emptyList(), // sleep m
+           +etrics arrive as MetricReading via parseSession              
+      1623 +                    activities      = emptyList(), // activit
+           +y metrics arrive as MetricReading via parseSession           
+      1624 +                    rawPayloads     = emptyList(), // packets
+           + already persisted on arrival                                
+      1625 +                    packetsReceived = capturedPacketCount,   
+      1626 +                )                                            
+      1627 +                try {                                        
+      1628 +                    val summary = syncProcessor.process(syncR
+           +esult, preSyncSessionId = preSyncSessionId)                  
+      1629 +                    withContext(Dispatchers.Main) {          
+      1630 +                        _connectionState.value = BleConnectio
+           +nState.SyncComplete(summary, address)                        
+      1631 +                    }                                        
+      1632 +                } catch (e: Exception) {                     
+      1633 +                    withContext(Dispatchers.Main) {          
+      1634 +                        _connectionState.value = BleConnectio
+           +nState.Error(e.message ?: "Sync failed")                     
+      1635 +                    }                                        
+      1636 +                } finally {                                  
+      1637 +                    datesToProcess.forEach { date ->         
+      1638 +                        Timber.tag(TAG).d("[STAGE-6 DB-WRITE]
+           + enqueuing DailySummaryWorker for date=%s stepsMode=%s",     
+      1639 +                            date, manifest.stepsMode)        
+      1640 +                        enqueueSummaryWorker(date, workManage
+           +r, manifest.stepsMode)                                       
+      1641 +                    }                                        
+      1642 +                    metricStatsBackfillCoordinator.enqueueSpa
+           +nRecompute(datesToProcess)                                   
+      1643 +                    postStreamDisconnecting = false          
+      1644                  }
+      1625 -            } catch (e: Exception) {                         
+      1626 -                withContext(Dispatchers.Main) {              
+      1627 -                    _connectionState.value = BleConnectionSta
+           -te.Error(e.message ?: "Sync failed")                         
+      1645 +            } catch (e: CancellationException) {             
+      1646 +                // cancelSync() cancelled activeSyncJob mid-P
+           +arsing. NonCancellable so this                               
+      1647 +                // cleanup itself can't be interrupted by the
+           + same cancellation.                                          
+      1648 +                withContext(NonCancellable) {                
+      1649 +                    preSyncSessionId?.let { markSyncSessionCa
+           +ncelled(it) }                                                
+      1650 +                    synchronized(sessionCache) { sessionCache
+           +.clear() }                                                   
+      1651 +                    postStreamDisconnecting = false          
+      1652 +                    withContext(Dispatchers.Main) {          
+      1653 +                        // activeGatt is always null here — t
+           +his function closes it (see top of                           
+      1654 +                        // dispatchPostStreamParse, before Pa
+           +rsing was ever entered), so this always                      
+      1655 +                        // lands Idle for the EOS-driver path
+           +. Written generically for symmetry                           
+      1656 +                        // with triggerSync()'s equivalent ha
+           +ndler.                                                       
+      1657 +                        val address2 = activeDeviceAddress   
+      1658 +                        val driverName2 = activeManifest?.dis
+           +playName                                                     
+      1659 +                        if (activeGatt != null && address2 !=
+           + null && driverName2 != null) {                              
+      1660 +                            _connectionState.value = BleConne
+           +ctionState.Connected(address2, driverName2, 0, true)         
+      1661 +                        } else {                             
+      1662 +                            activeManifest = null            
+      1663 +                            activeDeviceAddress = null       
+      1664 +                            activeDeviceId = null            
+      1665 +                            _connectionState.value = BleConne
+           +ctionState.Idle                                              
+      1666 +                        }                                    
+      1667 +                    }                                        
+      1668                  }
+      1629 -            } finally {                                      
+      1630 -                datesToProcess.forEach { date ->             
+      1631 -                    Timber.tag(TAG).d("[STAGE-6 DB-WRITE] enq
+           -ueuing DailySummaryWorker for date=%s stepsMode=%s",         
+      1632 -                        date, manifest.stepsMode)            
+      1633 -                    enqueueSummaryWorker(date, workManager, m
+           -anifest.stepsMode)                                           
+      1634 -                }                                            
+      1635 -                metricStatsBackfillCoordinator.enqueueSpanRec
+           -ompute(datesToProcess)                                       
+      1636 -                postStreamDisconnecting = false              
+      1669              }
+      1670          }
+      1671      }
 
-  minSdk = 26, targetSdk = 36, compileSdk = 37 (app/build.gradle.kts:11,15,16,
-  verified directly).
+● All BleEngine.kt changes are in place. Let's check for compile issues by
+  searching for anything that might reference the old BleEngine constructor
+  param order (e.g., Hilt shouldn't care about order, but let's check for manual
+  instantiations/tests).
 
-  Zero CompanionDeviceManager usage — repo-wide grep for CompanionDeviceManager,
-  CompanionDevice, .associate( returns no matches (verified directly).
+  Searched for 2 patterns (ctrl+o to expand)
 
-  Current scan/pairing entry points, where a future CDM association step would
-  attach:
-  - DevicesViewModel.onAddDeviceTapped() → bleEngine.startScan() (:261,
-  verified) — the only current caller of startScan().
-  - DevicesViewModel.onCandidateSelected() → connectToCandidate() → stopScan() +
-  connectToDevice().
-  - DevicesViewModel.onDeviceCellTapped() → direct reconnect to a known device,
-  bypassing scanning.
+● There's a test file directly constructing BleEngine. Let's check it and fix
+  its instantiation to match the new constructor.
 
-  ---
-  Bottom line for session 5: the biggest gap isn't the reassembly buffer (that's
-  already clean) — it's that connectToDevice()/connect() have zero internal
-  reentrancy protection, and there's no "primary device" concept in the data
-  model. Both need solving before an orchestrator can safely walk an ordered
-  device list.
+  Searched for 2 patterns, read 1 file, listed 1 directory (ctrl+o to expand)
 
-✻ Brewed for 4m 55s
+● We have a Gradle wrapper. Let's fix the test file's constructor call first,
+  then actually build and run the affected unit tests to empirically verify the
+  withTransaction mocking concern.
+
+  Searched for 3 patterns, read 2 files, ran 1 shell command (ctrl+o to expand)
+
+● Now applying the test-infra fix: import additions, new mocked fields,
+  transaction-mocking setup, constructor wiring, and teardown.
+
+● Update(app/src/test/java/com/athletedata/openAthleteMetrics/ble/BleEngineTest.
+        kt)
+  ⎿  Added 3 lines
+       5  import android.bluetooth.BluetoothGattService
+       6  import android.content.Context
+       7  import android.os.SystemClock
+       8 +import androidx.room.withTransaction                           
+       9  import androidx.work.ExistingWorkPolicy
+      10  import androidx.work.OneTimeWorkRequest
+      11  import androidx.work.WorkManager
+      12 +import com.athletedata.openAthleteMetrics.data.db.AppDatabase  
+      13 +import com.athletedata.openAthleteMetrics.data.repository.SyncS
+         +essionRepository                                               
+      14  import com.athletedata.openAthleteMetrics.ble.driver.AwaitEndOf
+          Stream
+      15  import com.athletedata.openAthleteMetrics.ble.driver.BleConfig
+      16  import com.athletedata.openAthleteMetrics.ble.driver.DriverRegi
+          stry
+
+● Update(app/src/test/java/com/athletedata/openAthleteMetrics/ble/BleEngineTest.
+        kt)
+  ⎿  Added 2 lines
+      81      private lateinit var metricRouter: MetricRouter
+      82      private lateinit var workManager: WorkManager
+      83      private lateinit var metricStatsBackfillCoordinator: Metric
+          StatsBackfillCoordinator
+      84 +    private lateinit var appDatabase: AppDatabase              
+      85 +    private lateinit var syncSessionRepository: SyncSessionRepo
+         +sitory                                                         
+      86      private lateinit var engine: BleEngine
+      87      // CHANGED: named (not anonymous) so tests can drive its vi
+          rtual clock directly via
+      88      // testDispatcher.scheduler.advanceTimeBy(...) + runCurrent
+          ().
+
+● Update(app/src/test/java/com/athletedata/openAthleteMetrics/ble/BleEngineTest.
+        kt)
+  ⎿  Added 13 lines
+      104          metricRouter = mockk(relaxed = true)
+      105          workManager = mockk(relaxed = true)
+      106          metricStatsBackfillCoordinator = mockk(relaxed = true)
+      107 +        appDatabase = mockk(relaxed = true)                   
+      108 +        syncSessionRepository = mockk(relaxed = true)         
+      109  
+      110 +        // withTransaction is a top-level Room-ktx extension, 
+          +not a member — mock its containing                            
+      111 +        // file class and make it just invoke the passed block
+          + directly against the relaxed                                 
+      112 +        // appDatabase mock, rather than pulling in a real (Ro
+          +bolectric) in-memory database.                                
+      113 +        mockkStatic("androidx.room.RoomDatabaseKt")           
+      114 +        coEvery { appDatabase.withTransaction<Any?>(any()) } c
+          +oAnswers {                                                    
+      115 +            firstArg<suspend () -> Any?>().invoke()           
+      116 +        }                                                     
+      117 +                                                              
+      118          engine = BleEngine(
+      119              context = mockk<Context>(relaxed = true),
+      120              driverRegistry = driverRegistry,
+     ...
+      126              metricRouter = metricRouter,
+      127              workManager = workManager,
+      128              metricStatsBackfillCoordinator = metricStatsBackfi
+           llCoordinator,
+      129 +            appDatabase = appDatabase,                        
+      130 +            syncSessionRepository = syncSessionRepository,    
+      131          )
+      132      }
+      133  
+      134      @After
+      135      fun tearDown() {
+      136 +        unmockkStatic("androidx.room.RoomDatabaseKt")         
+      137          Dispatchers.resetMain()
+      138      }
+      139  
+
+● Now let's build and run the specific test to empirically verify this works.
+
+  Listed 1 directory, ran 2 shell commands (ctrl+o to expand)
+● The build is running in the background — I'll continue once it completes
+  rather than polling.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● I'll wait for the background test run to finish rather than polling further.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Waiting for the Gradle test task to finish.
+
+✻ Cooked for 46m 9s
+
+● Background command "Run BleEngineTest with JAVA_HOME set to Android Studio's
+bundled JBR" completed (exit code 0)
+
+● Test run completed successfully. Let me check the full output for details.
+
+  Searched for 3 patterns, read 1 file (ctrl+o to expand)
+
+● My mockkStatic approach for withTransaction isn't invoking the block (3 tests
+  time out waiting for metricRouter.route). I'll switch to the codebase's
+  established pattern — a real in-memory Room database via Robolectric, same as
+  DeviceReprocessorTest.
+
+  Read 1 file (ctrl+o to expand)
+
+● Now let's replace the mockkStatic approach with the real in-memory Room DB
+  pattern.
+
+● Update(app/src/test/java/com/athletedata/openAthleteMetrics/ble/BleEngineTest.
+        kt)
+  ⎿  Added 2 lines, removed 1 line
+       1  package com.athletedata.openAthleteMetrics.ble
+       2  
+       3 +import android.app.Application                                 
+       4  import android.bluetooth.BluetoothGatt
+       5  import android.bluetooth.BluetoothGattCharacteristic
+       6  import android.bluetooth.BluetoothGattService
+       7  import android.content.Context
+       8  import android.os.SystemClock
+       8 -import androidx.room.withTransaction                           
+       9 +import androidx.room.Room                                      
+      10  import androidx.work.ExistingWorkPolicy
+      11  import androidx.work.OneTimeWorkRequest
+      12  import androidx.work.WorkManager
+
+● Update(app/src/test/java/com/athletedata/openAthleteMetrics/ble/BleEngineTest.
+        kt)
+  ⎿  Added 4 lines
+      65  import org.junit.After
+      66  import org.junit.Before
+      67  import org.junit.Test
+      68 +import org.junit.runner.RunWith                                
+      69 +import org.robolectric.RobolectricTestRunner                   
+      70 +import org.robolectric.RuntimeEnvironment                      
+      71 +import org.robolectric.annotation.Config                       
+      72  import java.time.Instant
+      73  import java.util.UUID
+      74  import java.util.concurrent.CountDownLatch
+
+● Update(app/src/test/java/com/athletedata/openAthleteMetrics/ble/BleEngineTest.
+        kt)
+  ⎿  Added 5 lines
+      75  import java.util.concurrent.TimeUnit
+      76  
+      77  @OptIn(ExperimentalCoroutinesApi::class)
+      78 +@RunWith(RobolectricTestRunner::class)                         
+      79 +@Config(application = Application::class)                      
+      80  class BleEngineTest {
+      81  
+      82      private lateinit var driverRegistry: DriverRegistry
+     ...
+      88      private lateinit var metricRouter: MetricRouter
+      89      private lateinit var workManager: WorkManager
+      90      private lateinit var metricStatsBackfillCoordinator: Metric
+          StatsBackfillCoordinator
+      91 +    // Real in-memory Room database, only to satisfy AppDatabas
+         +e.withTransaction (an                                          
+      92 +    // extension function requiring a real RoomDatabase) — matc
+         +hes DeviceReprocessorTest's                                    
+      93 +    // established pattern. All actual repository writes remain
+         + mocked below.                                                 
+      94      private lateinit var appDatabase: AppDatabase
+      95      private lateinit var syncSessionRepository: SyncSessionRepo
+          sitory
+      96      private lateinit var engine: BleEngine
+
+● Update(app/src/test/java/com/athletedata/openAthleteMetrics/ble/BleEngineTest.
+        kt)
+  ⎿  Added 3 lines, removed 9 lines
+      114          metricRouter = mockk(relaxed = true)
+      115          workManager = mockk(relaxed = true)
+      116          metricStatsBackfillCoordinator = mockk(relaxed = true)
+      117 -        appDatabase = mockk(relaxed = true)                   
+      117 +        appDatabase = Room.inMemoryDatabaseBuilder(RuntimeEnvi
+          +ronment.getApplication(), AppDatabase::class.java)            
+      118 +            .allowMainThreadQueries()                         
+      119 +            .build()                                          
+      120          syncSessionRepository = mockk(relaxed = true)
+      121  
+      120 -        // withTransaction is a top-level Room-ktx extension, 
+          -not a member — mock its containing                            
+      121 -        // file class and make it just invoke the passed block
+          - directly against the relaxed                                 
+      122 -        // appDatabase mock, rather than pulling in a real (Ro
+          -bolectric) in-memory database.                                
+      123 -        mockkStatic("androidx.room.RoomDatabaseKt")           
+      124 -        coEvery { appDatabase.withTransaction<Any?>(any()) } c
+          -oAnswers {                                                    
+      125 -            firstArg<suspend () -> Any?>().invoke()           
+      126 -        }                                                     
+      127 -                                                              
+      122          engine = BleEngine(
+      123              context = mockk<Context>(relaxed = true),
+      124              driverRegistry = driverRegistry,
+
+● Now update tearDown() to close the db:
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(app/src/test/java/com/athletedata/openAthleteMetrics/ble/BleEngineTest.
+        kt)
+  ⎿  Added 1 line, removed 1 line
+      137  
+      138      @After
+      139      fun tearDown() {
+      140 -        unmockkStatic("androidx.room.RoomDatabaseKt")         
+      140 +        appDatabase.close()                                   
+      141          Dispatchers.resetMain()
+      142      }
+      143  
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Good, those imports remain in use. Now let's re-run the tests.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Waiting for this test run to finish before continuing.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● I'll wait for the background test task notification.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Waiting for the Gradle test run to complete.
+✻ Cooked for 3m 4s
+
+● No completion record was found for this background shell command from the
+previous session. It may have been stopped (via the UI, Monitor timeout, or
+agent teardown — these leave no transcript marker), or it may have been running
+when the previous Claude Code process exited. Check the output file for partial
+results before assuming it completed.
+
+● The background test run was interrupted without completing. Let me check for
+  partial output, then re-run if needed.
+
+  Read 1 file (ctrl+o to expand)
+
+❯ /compact                                                                      

@@ -1,13 +1,18 @@
 package com.athletedata.openAthleteMetrics.ble
 
+import android.app.Application
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattService
 import android.content.Context
+import android.os.Build
 import android.os.SystemClock
+import androidx.room.Room
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequest
 import androidx.work.WorkManager
+import com.athletedata.openAthleteMetrics.data.db.AppDatabase
+import com.athletedata.openAthleteMetrics.data.repository.SyncSessionRepository
 import com.athletedata.openAthleteMetrics.ble.driver.AwaitEndOfStream
 import com.athletedata.openAthleteMetrics.ble.driver.BleConfig
 import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
@@ -29,6 +34,8 @@ import com.athletedata.openAthleteMetrics.data.model.DataSource
 import com.athletedata.openAthleteMetrics.data.model.Device
 import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import com.athletedata.openAthleteMetrics.data.model.MetricType
+import com.athletedata.openAthleteMetrics.data.model.SyncSession
+import com.athletedata.openAthleteMetrics.data.model.SyncStatus
 import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
 import com.athletedata.openAthleteMetrics.data.repository.MetricStatsBackfillCoordinator
 import com.athletedata.openAthleteMetrics.data.repository.RawDeviceDataRepository
@@ -47,6 +54,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
@@ -61,12 +69,18 @@ import junit.framework.TestCase.assertTrue
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
+@Config(application = Application::class)
 class BleEngineTest {
 
     private lateinit var driverRegistry: DriverRegistry
@@ -78,6 +92,11 @@ class BleEngineTest {
     private lateinit var metricRouter: MetricRouter
     private lateinit var workManager: WorkManager
     private lateinit var metricStatsBackfillCoordinator: MetricStatsBackfillCoordinator
+    // Real in-memory Room database, only to satisfy AppDatabase.withTransaction (an
+    // extension function requiring a real RoomDatabase) — matches DeviceReprocessorTest's
+    // established pattern. All actual repository writes remain mocked below.
+    private lateinit var appDatabase: AppDatabase
+    private lateinit var syncSessionRepository: SyncSessionRepository
     private lateinit var engine: BleEngine
     // CHANGED: named (not anonymous) so tests can drive its virtual clock directly via
     // testDispatcher.scheduler.advanceTimeBy(...) + runCurrent().
@@ -99,6 +118,10 @@ class BleEngineTest {
         metricRouter = mockk(relaxed = true)
         workManager = mockk(relaxed = true)
         metricStatsBackfillCoordinator = mockk(relaxed = true)
+        appDatabase = Room.inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), AppDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        syncSessionRepository = mockk(relaxed = true)
 
         engine = BleEngine(
             context = mockk<Context>(relaxed = true),
@@ -111,11 +134,14 @@ class BleEngineTest {
             metricRouter = metricRouter,
             workManager = workManager,
             metricStatsBackfillCoordinator = metricStatsBackfillCoordinator,
+            appDatabase = appDatabase,
+            syncSessionRepository = syncSessionRepository,
         )
     }
 
     @After
     fun tearDown() {
+        appDatabase.close()
         Dispatchers.resetMain()
     }
 
@@ -188,23 +214,46 @@ class BleEngineTest {
         method.invoke(engine)
     }
 
-    // reflects into the private gattCallback field and invokes its pre-Tiramisu
-    // onCharacteristicChanged(gatt, characteristic) overload directly, mirroring the
-    // reflection style already used above for private fields/methods.
+    // reflects into the private gattCallback field and invokes whichever
+    // onCharacteristicChanged overload the real Android BLE stack would call at the
+    // current SDK level — the 3-arg (gatt, characteristic, value) overload on Tiramisu+,
+    // the legacy 2-arg (gatt, characteristic) overload below it — mirroring the reflection
+    // style already used above for private fields/methods.
+    //
+    // CHANGED: previously always invoked the legacy 2-arg overload regardless of SDK_INT.
+    // BleEngine.kt's 2-arg override guards its entire body behind
+    // `if (Build.VERSION.SDK_INT < TIRAMISU)`, so once this module's targetSdk (36) made
+    // Robolectric default to an SDK_INT at/above TIRAMISU, that overload became a silent
+    // no-op here and every test driving notifications through this helper started failing —
+    // not because of any BleEngine regression, but because the helper was exercising a
+    // callback path a real device at that SDK level would never receive.
     private fun invokeOnCharacteristicChanged(characteristicUuid: String, bytes: ByteArray) {
         val callbackField = BleEngine::class.java.getDeclaredField("gattCallback")
         callbackField.isAccessible = true
         val callback = callbackField.get(engine)
-        val method = callback.javaClass.getDeclaredMethod(
-            "onCharacteristicChanged",
-            BluetoothGatt::class.java,
-            BluetoothGattCharacteristic::class.java,
-        )
-        method.isAccessible = true
+        val gatt = mockk<BluetoothGatt>(relaxed = true)
         val characteristic = mockk<BluetoothGattCharacteristic>(relaxed = true)
         every { characteristic.value } returns bytes
         every { characteristic.uuid } returns UUID.fromString(characteristicUuid)
-        method.invoke(callback, mockk<BluetoothGatt>(relaxed = true), characteristic)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val method = callback.javaClass.getDeclaredMethod(
+                "onCharacteristicChanged",
+                BluetoothGatt::class.java,
+                BluetoothGattCharacteristic::class.java,
+                ByteArray::class.java,
+            )
+            method.isAccessible = true
+            method.invoke(callback, gatt, characteristic, bytes)
+        } else {
+            val method = callback.javaClass.getDeclaredMethod(
+                "onCharacteristicChanged",
+                BluetoothGatt::class.java,
+                BluetoothGattCharacteristic::class.java,
+            )
+            method.isAccessible = true
+            method.invoke(callback, gatt, characteristic)
+        }
     }
 
     // notificationChannel has buffer capacity 512, so tryReceive() is synchronous —
@@ -763,5 +812,257 @@ class BleEngineTest {
 
         assertTrue("metricRouter.route was not called", routeLatch.await(5, TimeUnit.SECONDS))
         assertNull(captured.captured.deviceId)
+    }
+
+    // ---------------------------------------------------------------------------
+    // cancelSync(): a user-initiated Cancel must stop the sync/parse in progress,
+    // discard any data collected during that attempt, and (per BLE-session state)
+    // either preserve a live GATT link or never establish one — see BleEngine.kt's
+    // cancelSync() doc comment for the full contract.
+    // ---------------------------------------------------------------------------
+
+    private fun parseSessionManifest() = testManifest().copy(
+        parsing = ParsingConfig.WasmParsing(
+            wasmBytes = ByteArray(0),
+            exports = WasmExports(parseSession = "parseSession"),
+        ),
+    )
+
+    // regression test for the cancelRequested leak: pre-fix, cancelRequested was only ever
+    // reset to false inside connect() — a Syncing-phase cancel that lands back on Connected
+    // (without a fresh connect()) left the flag true for the rest of the connection's
+    // lifetime, so scheduleRetry() would silently suppress the NEXT genuine, unrelated GATT
+    // error instead of running its normal exponential-backoff auto-reconnect.
+    @Test
+    fun `cancelSync during Syncing resets cancelRequested so a later real GATT error still triggers auto-retry`() {
+        val address = "AA:BB:CC:DD:EE:FF"
+        val manifest = testManifest()
+        val gatt = mockk<BluetoothGatt>(relaxed = true)
+        setPrivateField("activeManifest", manifest)
+        setPrivateField("activeDeviceAddress", address)
+        setPrivateField("activeGatt", gatt)
+
+        @Suppress("UNCHECKED_CAST")
+        val connectionStateFlow = getPrivateField("_connectionState") as MutableStateFlow<BleConnectionState>
+        connectionStateFlow.value = BleConnectionState.Syncing(address, 3)
+
+        engine.cancelSync()
+
+        assertTrue(
+            "cancelSync during Syncing must land on Connected, not disconnect",
+            connectionStateFlow.value is BleConnectionState.Connected,
+        )
+        verify(exactly = 0) { gatt.disconnect() }
+        verify(exactly = 0) { gatt.close() }
+        assertFalse(
+            "cancelRequested must reset once the cancel's own transition completes",
+            getPrivateField("cancelRequested") as Boolean,
+        )
+
+        // Simulate a genuine, unrelated GATT error arriving later on the same connection —
+        // must go through the normal retry flow, not be silently suppressed by a leaked flag.
+        val scheduleRetryMethod = BleEngine::class.java.getDeclaredMethod("scheduleRetry")
+        scheduleRetryMethod.isAccessible = true
+        scheduleRetryMethod.invoke(engine)
+
+        assertEquals(BleConnectionState.Connecting(address), connectionStateFlow.value)
+        assertEquals(1, getPrivateField("retryCount"))
+    }
+
+    @Test
+    fun `cancelSync during Syncing marks the session CANCELLED and discards raw data without disconnecting`() {
+        val address = "AA:BB:CC:DD:EE:FF"
+        val manifest = testManifest()
+        val gatt = mockk<BluetoothGatt>(relaxed = true)
+        coEvery { syncSessionRepository.getById(42L) } returns SyncSession(
+            id = 42L,
+            deviceId = 1L,
+            driverId = manifest.id,
+            startedAt = Instant.now(),
+            status = SyncStatus.IN_PROGRESS,
+            recordsImported = 0,
+        )
+
+        setPrivateField("activeManifest", manifest)
+        setPrivateField("activeDeviceAddress", address)
+        setPrivateField("activeGatt", gatt)
+        setPrivateField("currentSyncSessionId", 42L)
+
+        @Suppress("UNCHECKED_CAST")
+        val connectionStateFlow = getPrivateField("_connectionState") as MutableStateFlow<BleConnectionState>
+        connectionStateFlow.value = BleConnectionState.Syncing(address, 3)
+
+        val updateLatch = CountDownLatch(1)
+        val capturedSession = slot<SyncSession>()
+        coEvery { syncSessionRepository.update(capture(capturedSession)) } answers {
+            updateLatch.countDown()
+        }
+
+        engine.cancelSync()
+
+        assertTrue("syncSessionRepository.update was not called", updateLatch.await(5, TimeUnit.SECONDS))
+        assertEquals(SyncStatus.CANCELLED, capturedSession.captured.status)
+        coVerify { rawDeviceDataRepository.deleteForSession(42L) }
+        verify(exactly = 0) { gatt.disconnect() }
+        verify(exactly = 0) { gatt.close() }
+    }
+
+    // Covers the passive/streaming-driver path (triggerSync(), GATT stays open through
+    // parsing). metricRouter.route() is made to hang via awaitCancellation() so the test can
+    // deterministically observe the coroutine suspended mid-transaction (inside
+    // appDatabase.withTransaction, which really does dispatch onto Room's transaction
+    // executor — not synchronous under the test's Unconfined dispatcher) before cancelling it.
+    @Test
+    fun `cancelSync during Parsing rolls back the transaction and lands back on Connected without disconnecting`() {
+        val address = "AA:BB:CC:DD:EE:FF"
+        val manifest = parseSessionManifest()
+        val gatt = mockk<BluetoothGatt>(relaxed = true)
+        val reading = MetricReading(
+            metricType = MetricType.HR,
+            value = 60.0,
+            unit = "bpm",
+            recordedAt = Instant.parse("2026-06-15T12:00:00Z"),
+            createdAt = Instant.now(),
+            source = DataSource.DEVICE,
+            driverId = manifest.id,
+        )
+        coEvery { driverRegistry.parseSession(any(), any()) } returns WasmParseResult.Success(listOf(reading))
+        every { validator.validateReadings(any()) } returns listOf(ValidationResult.Accepted(reading))
+
+        val suspendedLatch = CountDownLatch(1)
+        coEvery { metricRouter.route(any(), any(), any(), any()) } coAnswers {
+            suspendedLatch.countDown()
+            awaitCancellation()
+        }
+        coEvery { syncSessionRepository.getById(42L) } returns SyncSession(
+            id = 42L,
+            deviceId = 1L,
+            driverId = manifest.id,
+            startedAt = Instant.now(),
+            status = SyncStatus.IN_PROGRESS,
+            recordsImported = 0,
+        )
+
+        setPrivateField("activeManifest", manifest)
+        setPrivateField("activeDeviceAddress", address)
+        setPrivateField("activeGatt", gatt)
+        setPrivateField("currentSyncSessionId", 42L)
+
+        @Suppress("UNCHECKED_CAST")
+        val connectionStateFlow = getPrivateField("_connectionState") as MutableStateFlow<BleConnectionState>
+        connectionStateFlow.value = BleConnectionState.Connected(address, manifest.displayName, 0, true)
+
+        val capturedSession = slot<SyncSession>()
+        coEvery { syncSessionRepository.update(capture(capturedSession)) } just Runs
+
+        engine.startSync()
+
+        assertTrue(
+            "must reach the hung metricRouter.route() call inside the transaction before cancelling",
+            suspendedLatch.await(5, TimeUnit.SECONDS),
+        )
+        assertTrue(connectionStateFlow.value is BleConnectionState.Parsing)
+
+        engine.cancelSync()
+
+        assertTrue(
+            "cancelling during Parsing must roll back and land back on Connected since activeGatt is still live",
+            awaitPrivateField("_connectionState", 5_000) {
+                @Suppress("UNCHECKED_CAST")
+                (it as MutableStateFlow<BleConnectionState>).value is BleConnectionState.Connected
+            },
+        )
+        verify(exactly = 0) { gatt.disconnect() }
+        verify(exactly = 0) { gatt.close() }
+        coVerify(exactly = 0) { syncProcessor.process(any(), any()) }
+        assertEquals(SyncStatus.CANCELLED, capturedSession.captured.status)
+        coVerify { rawDeviceDataRepository.deleteForSession(42L) }
+        assertFalse(
+            "cancelRequested must reset once the cancellation cleanup completes",
+            getPrivateField("cancelRequested") as Boolean,
+        )
+    }
+
+    // regression test for the affectedDates leak: pre-fix, only sessionCache was cleared in
+    // the CancellationException handler, so a date recorded by routeReading() for a reading
+    // processed earlier in the same (ultimately rolled-back) transaction would linger in
+    // memory and get swept into the next sync's DailySummaryWorker/backfill enqueue.
+    @Test
+    fun `cancelling during Parsing clears affectedDates so a later sync doesn't enqueue stale dates`() {
+        val address = "AA:BB:CC:DD:EE:FF"
+        val manifest = parseSessionManifest()
+        val gatt = mockk<BluetoothGatt>(relaxed = true)
+        val reading1 = MetricReading(
+            metricType = MetricType.HR,
+            value = 60.0,
+            unit = "bpm",
+            recordedAt = Instant.parse("2026-06-15T12:00:00Z"),
+            createdAt = Instant.now(),
+            source = DataSource.DEVICE,
+            driverId = manifest.id,
+        )
+        val reading2 = MetricReading(
+            metricType = MetricType.HR,
+            value = 62.0,
+            unit = "bpm",
+            recordedAt = Instant.parse("2026-06-16T12:00:00Z"),
+            createdAt = Instant.now(),
+            source = DataSource.DEVICE,
+            driverId = manifest.id,
+        )
+        coEvery { driverRegistry.parseSession(any(), any()) } returns
+            WasmParseResult.Success(listOf(reading1, reading2))
+        every { validator.validateReadings(any()) } returns listOf(
+            ValidationResult.Accepted(reading1),
+            ValidationResult.Accepted(reading2),
+        )
+
+        val suspendedLatch = CountDownLatch(1)
+        var routeCallCount = 0
+        coEvery { metricRouter.route(any(), any(), any(), any()) } coAnswers {
+            routeCallCount++
+            if (routeCallCount == 1) {
+                Unit
+            } else {
+                suspendedLatch.countDown()
+                awaitCancellation()
+            }
+        }
+
+        setPrivateField("activeManifest", manifest)
+        setPrivateField("activeDeviceAddress", address)
+        setPrivateField("activeGatt", gatt)
+
+        @Suppress("UNCHECKED_CAST")
+        val connectionStateFlow = getPrivateField("_connectionState") as MutableStateFlow<BleConnectionState>
+        connectionStateFlow.value = BleConnectionState.Connected(address, manifest.displayName, 0, true)
+
+        engine.startSync()
+
+        assertTrue(
+            "must reach the hung second metricRouter.route() call before cancelling",
+            suspendedLatch.await(5, TimeUnit.SECONDS),
+        )
+
+        @Suppress("UNCHECKED_CAST")
+        val affectedDates = getPrivateField("affectedDates") as MutableSet<java.time.LocalDate>
+        assertTrue(
+            "the first reading's date must already be recorded before the second call hangs",
+            synchronized(affectedDates) { affectedDates.isNotEmpty() },
+        )
+
+        engine.cancelSync()
+
+        assertTrue(
+            "cancelling during Parsing must roll back and land back on Connected",
+            awaitPrivateField("_connectionState", 5_000) {
+                @Suppress("UNCHECKED_CAST")
+                (it as MutableStateFlow<BleConnectionState>).value is BleConnectionState.Connected
+            },
+        )
+        assertTrue(
+            "affectedDates must be cleared on a cancelled/rolled-back parse, not leaked into the next sync",
+            synchronized(affectedDates) { affectedDates.isEmpty() },
+        )
     }
 }

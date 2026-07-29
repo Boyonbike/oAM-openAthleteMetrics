@@ -241,6 +241,8 @@ class DevicesViewModel @Inject constructor(
 
     fun onScanCancelled() { bleEngine.cancelScan() }
 
+    fun onCancelSync() { bleEngine.cancelSync() }
+
     // REMOVED: interrupted-sync-recovery — onRecoverSessionTapped() deleted
     // ADDED: interrupted-sync-message
     fun onSyncInterruptedDismissed() {

@@ -18,7 +18,9 @@ import android.os.Build
 import android.os.ParcelUuid
 import android.os.SystemClock
 import androidx.annotation.RequiresApi
+import androidx.room.withTransaction
 import androidx.work.WorkManager
+import com.athletedata.openAthleteMetrics.data.db.AppDatabase
 import com.athletedata.openAthleteMetrics.ble.driver.DriverRegistry
 import com.athletedata.openAthleteMetrics.ble.driver.EndOfStreamStrategy
 import com.athletedata.openAthleteMetrics.ble.driver.EndOfStreamStrategyFactory
@@ -40,17 +42,21 @@ import com.athletedata.openAthleteMetrics.data.model.MetricReading
 import com.athletedata.openAthleteMetrics.data.model.MetricType
 import com.athletedata.openAthleteMetrics.data.model.RawPayload
 import com.athletedata.openAthleteMetrics.data.model.SleepSession
+import com.athletedata.openAthleteMetrics.data.model.SyncStatus
 import com.athletedata.openAthleteMetrics.data.repository.DeviceRepository
 import com.athletedata.openAthleteMetrics.data.repository.MetricStatsBackfillCoordinator
 import com.athletedata.openAthleteMetrics.data.repository.RawDeviceDataRepository
+import com.athletedata.openAthleteMetrics.data.repository.SyncSessionRepository
 import com.athletedata.openAthleteMetrics.worker.enqueueSummaryWorker
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.LocalDate
 import kotlin.time.Duration.Companion.milliseconds
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -91,6 +97,8 @@ class BleEngine @Inject constructor(
     private val metricRouter: MetricRouter,
     private val workManager: WorkManager,
     private val metricStatsBackfillCoordinator: MetricStatsBackfillCoordinator,
+    private val appDatabase: AppDatabase,
+    private val syncSessionRepository: SyncSessionRepository,
 ) {
     companion object {
         private const val TAG = "data-pathway-tracker" // DPT
@@ -187,6 +195,15 @@ class BleEngine @Inject constructor(
     private var inSyncCommandNotify = false
     private var userDisconnecting = false
 
+    // Set by cancelSync() while Syncing/Parsing; checked cooperatively at the top of
+    // executeNextSyncCommand() and by scheduleRetry() to stop the callback-driven command
+    // chain from advancing or auto-reconnecting after a user-initiated cancel.
+    @Volatile private var cancelRequested = false
+    // The coroutine currently running triggerSync() or dispatchPostStreamParse()'s parse+route
+    // work. cancelSync() cancels this Job directly during Parsing so an in-flight DB write
+    // inside appDatabase.withTransaction {} throws and rolls back atomically.
+    private var activeSyncJob: Job? = null
+
     private val _connectionState = MutableStateFlow<BleConnectionState>(BleConnectionState.Idle)
     val connectionState: StateFlow<BleConnectionState> = _connectionState.asStateFlow()
 
@@ -204,7 +221,7 @@ class BleEngine @Inject constructor(
             _connectionState.collect { state ->
                 if (state is BleConnectionState.Connected &&
                     prev is BleConnectionState.Connecting) {
-                    triggerSync()
+                    activeSyncJob = scope.launch { triggerSync() }
                 }
                 prev = state
             }
@@ -347,6 +364,87 @@ class BleEngine @Inject constructor(
             stopScan()
             _connectionState.value = BleConnectionState.Idle
         }
+    }
+
+    /**
+     * Cancels the in-progress connect/sync/parse attempt while preserving an already-live BLE
+     * link where one exists. Behaviour depends on the phase cancelled mid-flight:
+     *  - Connecting: no GATT link exists yet — reuses [disconnect] to tear down the in-progress
+     *    connectGatt() attempt, landing on Idle without ever reaching Connected.
+     *  - Syncing: GATT is always open in this phase. Halts the command-callback chain, discards
+     *    all collected-but-unparsed data, marks the sync session CANCELLED, and returns to
+     *    Connected without touching the GATT link.
+     *  - Parsing: hands off ownership to the in-flight parse coroutine via activeSyncJob.cancel()
+     *    rather than mutating state here, so there is a single writer of the final state/cleanup
+     *    (see the CancellationException catch in triggerSync()/dispatchPostStreamParse()).
+     */
+    fun cancelSync() {
+        when (_connectionState.value) {
+            is BleConnectionState.Connecting -> disconnect()
+
+            is BleConnectionState.Syncing -> {
+                cancelRequested = true
+                retryJob?.cancel(); retryJob = null
+                silentSyncTimeoutJob?.cancel(); silentSyncTimeoutJob = null
+                writeAckTimeoutJob?.cancel(); writeAckTimeoutJob = null
+                quiescenceJob?.cancel(); quiescenceJob = null
+                awaitReplyDeferred = null
+                awaitReplyCharUuid = null
+                awaitEndOfStreamDeferred = null
+                awaitEndOfStreamCharUuid = null
+                awaitEndOfStreamStrategy = null
+                awaitEndOfStreamArmedAtMs = 0L
+                endOfStreamReceived = false
+
+                val address = activeDeviceAddress
+                val driverName = activeManifest?.displayName
+                val sessionId = currentSyncSessionId
+                currentSyncSessionId = null
+                synchronized(sessionCache) { sessionCache.clear() }
+                synchronized(pendingMetrics) { pendingMetrics.clear() }
+                synchronized(pendingSleep) { pendingSleep.clear(); seenSleepStartMs.clear() }
+                synchronized(pendingActivities) { pendingActivities.clear() }
+                synchronized(affectedDates) { affectedDates.clear() }
+                reassemblyBuffers.clear()
+                packetCount = 0
+                isQuiescent = false
+
+                if (sessionId != null) {
+                    scope.launch(Dispatchers.IO) { markSyncSessionCancelled(sessionId) }
+                }
+                // GATT is always live while Syncing — never disconnect here.
+                if (address != null && driverName != null) {
+                    // Reset now that this cancel's own transition has landed — otherwise a
+                    // later, unrelated GATT error on this same connection would hit
+                    // scheduleRetry()'s cancelRequested guard and be silently dropped to Idle
+                    // instead of running the normal auto-reconnect.
+                    cancelRequested = false
+                    _connectionState.value = BleConnectionState.Connected(address, driverName, 0, true)
+                }
+            }
+
+            is BleConnectionState.Parsing -> {
+                cancelRequested = true
+                retryJob?.cancel(); retryJob = null
+                activeSyncJob?.cancel()
+            }
+
+            else -> Unit
+        }
+    }
+
+    // Shared cleanup for a cancelled sync/parse attempt: discards raw packets persisted during
+    // Syncing and marks the SyncSession row CANCELLED. Never throws — failures are logged and
+    // swallowed so a cancellation always completes its state transition even if this
+    // bookkeeping fails.
+    private suspend fun markSyncSessionCancelled(sessionId: Long) {
+        runCatching { rawDeviceDataRepository.deleteForSession(sessionId) }
+            .onFailure { Timber.w(it, "BleEngine: failed to delete raw data for cancelled session $sessionId") }
+        runCatching {
+            syncSessionRepository.getById(sessionId)?.let { existing ->
+                syncSessionRepository.update(existing.copy(status = SyncStatus.CANCELLED, endedAt = Instant.now()))
+            }
+        }.onFailure { Timber.w(it, "BleEngine: failed to mark sync session $sessionId cancelled") }
     }
 
     fun disconnect() {
@@ -529,7 +627,7 @@ class BleEngine @Inject constructor(
     // lifetime to their own scope — launches on this engine's app-scoped `scope` instead of
     // the caller's, so the sync isn't cancelled if the caller (e.g. a ViewModel) is cleared.
     fun startSync() {
-        scope.launch { triggerSync() }
+        activeSyncJob = scope.launch { triggerSync() }
     }
 
     suspend fun triggerSync(): SyncSummary? {
@@ -575,14 +673,20 @@ class BleEngine @Inject constructor(
                 when (val parseResult = driverRegistry.parseSession(manifest, frames)) {
                     is WasmParseResult.Success -> {
                         val readingResults = validator.validateReadings(parseResult.readings)
-                        for (vr in readingResults) {
-                            when (vr) {
-                                is ValidationResult.Accepted -> {
-                                    routeReading(vr.item)
-                                    if (vr.item.metricType == MetricType.BATTERY) batteryFromSession.add(vr.item)
+                        // Room's suspend DAO calls check the calling coroutine's cancellation on
+                        // every call — wrapping the loop in one transaction means a cancelSync()
+                        // during Parsing (which cancels activeSyncJob) rolls back the entire
+                        // batch atomically instead of leaving a partial set of readings written.
+                        appDatabase.withTransaction {
+                            for (vr in readingResults) {
+                                when (vr) {
+                                    is ValidationResult.Accepted -> {
+                                        routeReading(vr.item)
+                                        if (vr.item.metricType == MetricType.BATTERY) batteryFromSession.add(vr.item)
+                                    }
+                                    is ValidationResult.Rejected ->
+                                        Timber.w("triggerSync: dropped %s — %s", vr.item.metricType, vr.reason)
                                 }
-                                is ValidationResult.Rejected ->
-                                    Timber.w("triggerSync: dropped %s — %s", vr.item.metricType, vr.reason)
                             }
                         }
                     }
@@ -620,6 +724,30 @@ class BleEngine @Inject constructor(
             val summary = syncProcessor.process(result, preSyncSessionId = preSyncSessionId)
             _connectionState.value = BleConnectionState.SyncComplete(summary, activeDeviceAddress ?: "")
             summary
+        } catch (e: CancellationException) {
+            // cancelSync() cancelled activeSyncJob mid-Parsing. NonCancellable so this
+            // cleanup itself can't be interrupted by the same cancellation.
+            withContext(NonCancellable) {
+                preSyncSessionId?.let { markSyncSessionCancelled(it) }
+                synchronized(sessionCache) { sessionCache.clear() }
+                synchronized(affectedDates) { affectedDates.clear() }
+                val address2 = activeDeviceAddress
+                val driverName2 = activeManifest?.displayName
+                // Reset now that this cancel's own transition is landing — otherwise a later,
+                // unrelated GATT error on this same connection would hit scheduleRetry()'s
+                // cancelRequested guard and be silently dropped to Idle instead of retrying.
+                cancelRequested = false
+                // triggerSync() never touches activeGatt — the link is always still open here.
+                if (activeGatt != null && address2 != null && driverName2 != null) {
+                    _connectionState.value = BleConnectionState.Connected(address2, driverName2, 0, true)
+                } else {
+                    activeManifest = null
+                    activeDeviceAddress = null
+                    activeDeviceId = null
+                    _connectionState.value = BleConnectionState.Idle
+                }
+            }
+            null
         } catch (e: Exception) {
             _connectionState.value = BleConnectionState.Error(e.message ?: "Sync failed")
             null
@@ -714,6 +842,7 @@ class BleEngine @Inject constructor(
         effectiveSyncCommands = emptyList()
         inSyncCommandNotify = false
         userDisconnecting = false
+        cancelRequested = false
         Timber.tag(TAG).d("[CONN] connecting address=%s driver=%s retry=%d", device.address, manifest.id, retryCount)
         _connectionState.value = BleConnectionState.Connecting(device.address)
         try {
@@ -1145,6 +1274,10 @@ class BleEngine @Inject constructor(
 
     @SuppressLint("MissingPermission")
     private fun executeNextSyncCommand() {
+        if (cancelRequested) {
+            Timber.tag(TAG).d("[SYNC] executeNextSyncCommand: cancelRequested — halting")
+            return
+        }
         val manifest = activeManifest ?: return
         val address = activeDeviceAddress ?: return
         val commands = effectiveSyncCommands  // effectiveSyncCommands is always set correctly by beginSyncCommandExecution
@@ -1305,6 +1438,22 @@ class BleEngine @Inject constructor(
     // -------------------------------------------------------------------------
 
     private fun scheduleRetry() {
+        if (cancelRequested) {
+            // A write/GATT error raced with a user-initiated cancel — the caller already
+            // closed activeGatt, so there is nothing left to reconnect to. Land on Idle
+            // instead of scheduling a reconnect the user just asked to stop.
+            Timber.tag(TAG).d("[SYNC] scheduleRetry suppressed — cancelRequested")
+            activeManifest = null
+            activeDeviceAddress = null
+            activeDeviceId = null
+            retryCount = 0
+            // This is the intended landing spot for the narrow same-tick race the flag exists
+            // to cover — clear it here so a later, unrelated GATT error on the *next* connection
+            // attempt isn't also mistaken for a stale cancel.
+            cancelRequested = false
+            _connectionState.value = BleConnectionState.Idle
+            return
+        }
         val address = activeDeviceAddress ?: return
         val manifest = activeManifest ?: return
         if (retryCount >= MAX_RETRIES) {
@@ -1428,77 +1577,114 @@ class BleEngine @Inject constructor(
         Timber.tag(TAG).d("session-cache-complete: frames=%d", frames.size)
 
         // 3–6. Parse on IO, route readings, enqueue workers, transition state.
-        scope.launch(Dispatchers.IO) {
-            val result = driverRegistry.parseSession(manifest, frames)
-            val batteryReadings = mutableListOf<MetricReading>()
+        activeSyncJob = scope.launch(Dispatchers.IO) {
+            try {
+                val result = driverRegistry.parseSession(manifest, frames)
+                val batteryReadings = mutableListOf<MetricReading>()
 
-            when (result) {
-                is WasmParseResult.Success -> {
-                    val readingResults = validator.validateReadings(result.readings)
-                    for (vr in readingResults) {
-                        when (vr) {
-                            is ValidationResult.Accepted -> {
-                                routeReading(vr.item)
-                                if (vr.item.metricType == MetricType.BATTERY) {
-                                    batteryReadings.add(vr.item)
+                when (result) {
+                    is WasmParseResult.Success -> {
+                        val readingResults = validator.validateReadings(result.readings)
+                        // Room's suspend DAO calls check the calling coroutine's cancellation on
+                        // every call — wrapping the loop in one transaction means a cancelSync()
+                        // during Parsing (which cancels activeSyncJob) rolls back the entire
+                        // batch atomically instead of leaving a partial set of readings written.
+                        appDatabase.withTransaction {
+                            for (vr in readingResults) {
+                                when (vr) {
+                                    is ValidationResult.Accepted -> {
+                                        routeReading(vr.item)
+                                        if (vr.item.metricType == MetricType.BATTERY) {
+                                            batteryReadings.add(vr.item)
+                                        }
+                                    }
+                                    is ValidationResult.Rejected ->
+                                        Timber.w("dispatchPostStreamParse: dropped %s — %s",
+                                            vr.item.metricType, vr.reason)
                                 }
                             }
-                            is ValidationResult.Rejected ->
-                                Timber.w("dispatchPostStreamParse: dropped %s — %s",
-                                    vr.item.metricType, vr.reason)
+                        }
+                        Timber.tag(TAG).d("parse-complete: readings=%d", result.readings.size)
+                    }
+                    is WasmParseResult.Empty ->
+                        Timber.tag(TAG).d("parse-session: empty — no readings produced")
+                    is WasmParseResult.WasmTrap ->
+                        Timber.tag(TAG).e("parse-session: wasm trap message=%s", result.message)
+                    is WasmParseResult.DeserialisationError ->
+                        Timber.tag(TAG).e("parse-session: deserialisation error message=%s", result.message)
+                    is WasmParseResult.EngineNotInitialised ->
+                        Timber.tag(TAG).e("parse-session: engine not initialised")
+                }
+
+                // 6. Clear cache regardless of parse result.
+                synchronized(sessionCache) { sessionCache.clear() }
+
+                // Drain affectedDates now; the actual worker enqueue is deferred to the
+                // finally block below so it always runs after syncProcessor.process() (and
+                // therefore sleepStagePromoter.promote()) has completed — matching triggerSync().
+                val datesToProcess = synchronized(affectedDates) {
+                    affectedDates.toSet().also { affectedDates.clear() }
+                }
+
+                // Finalise sync session row and transition UI state.
+                val syncResult = DriverSyncResult(
+                    deviceId        = address,
+                    driverId        = manifest.id,
+                    syncStartedAt   = syncStartedAt,
+                    syncEndedAt     = Instant.now(),
+                    metricReadings  = batteryReadings, // others already written by routeReading
+                    sleepSessions   = emptyList(), // sleep metrics arrive as MetricReading via parseSession
+                    activities      = emptyList(), // activity metrics arrive as MetricReading via parseSession
+                    rawPayloads     = emptyList(), // packets already persisted on arrival
+                    packetsReceived = capturedPacketCount,
+                )
+                try {
+                    val summary = syncProcessor.process(syncResult, preSyncSessionId = preSyncSessionId)
+                    withContext(Dispatchers.Main) {
+                        _connectionState.value = BleConnectionState.SyncComplete(summary, address)
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        _connectionState.value = BleConnectionState.Error(e.message ?: "Sync failed")
+                    }
+                } finally {
+                    datesToProcess.forEach { date ->
+                        Timber.tag(TAG).d("[STAGE-6 DB-WRITE] enqueuing DailySummaryWorker for date=%s stepsMode=%s",
+                            date, manifest.stepsMode)
+                        enqueueSummaryWorker(date, workManager, manifest.stepsMode)
+                    }
+                    metricStatsBackfillCoordinator.enqueueSpanRecompute(datesToProcess)
+                    postStreamDisconnecting = false
+                }
+            } catch (e: CancellationException) {
+                // cancelSync() cancelled activeSyncJob mid-Parsing. NonCancellable so this
+                // cleanup itself can't be interrupted by the same cancellation.
+                withContext(NonCancellable) {
+                    preSyncSessionId?.let { markSyncSessionCancelled(it) }
+                    synchronized(sessionCache) { sessionCache.clear() }
+                    synchronized(affectedDates) { affectedDates.clear() }
+                    postStreamDisconnecting = false
+                    withContext(Dispatchers.Main) {
+                        // activeGatt is always null here — this function closes it (see top of
+                        // dispatchPostStreamParse, before Parsing was ever entered), so this always
+                        // lands Idle for the EOS-driver path. Written generically for symmetry
+                        // with triggerSync()'s equivalent handler.
+                        val address2 = activeDeviceAddress
+                        val driverName2 = activeManifest?.displayName
+                        // Reset now that this cancel's own transition is landing — otherwise a
+                        // later, unrelated GATT error would hit scheduleRetry()'s cancelRequested
+                        // guard and be silently dropped to Idle instead of retrying.
+                        cancelRequested = false
+                        if (activeGatt != null && address2 != null && driverName2 != null) {
+                            _connectionState.value = BleConnectionState.Connected(address2, driverName2, 0, true)
+                        } else {
+                            activeManifest = null
+                            activeDeviceAddress = null
+                            activeDeviceId = null
+                            _connectionState.value = BleConnectionState.Idle
                         }
                     }
-                    Timber.tag(TAG).d("parse-complete: readings=%d", result.readings.size)
                 }
-                is WasmParseResult.Empty ->
-                    Timber.tag(TAG).d("parse-session: empty — no readings produced")
-                is WasmParseResult.WasmTrap ->
-                    Timber.tag(TAG).e("parse-session: wasm trap message=%s", result.message)
-                is WasmParseResult.DeserialisationError ->
-                    Timber.tag(TAG).e("parse-session: deserialisation error message=%s", result.message)
-                is WasmParseResult.EngineNotInitialised ->
-                    Timber.tag(TAG).e("parse-session: engine not initialised")
-            }
-
-            // 6. Clear cache regardless of parse result.
-            synchronized(sessionCache) { sessionCache.clear() }
-
-            // Drain affectedDates now; the actual worker enqueue is deferred to the
-            // finally block below so it always runs after syncProcessor.process() (and
-            // therefore sleepStagePromoter.promote()) has completed — matching triggerSync().
-            val datesToProcess = synchronized(affectedDates) {
-                affectedDates.toSet().also { affectedDates.clear() }
-            }
-
-            // Finalise sync session row and transition UI state.
-            val syncResult = DriverSyncResult(
-                deviceId        = address,
-                driverId        = manifest.id,
-                syncStartedAt   = syncStartedAt,
-                syncEndedAt     = Instant.now(),
-                metricReadings  = batteryReadings, // others already written by routeReading
-                sleepSessions   = emptyList(), // sleep metrics arrive as MetricReading via parseSession
-                activities      = emptyList(), // activity metrics arrive as MetricReading via parseSession
-                rawPayloads     = emptyList(), // packets already persisted on arrival
-                packetsReceived = capturedPacketCount,
-            )
-            try {
-                val summary = syncProcessor.process(syncResult, preSyncSessionId = preSyncSessionId)
-                withContext(Dispatchers.Main) {
-                    _connectionState.value = BleConnectionState.SyncComplete(summary, address)
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    _connectionState.value = BleConnectionState.Error(e.message ?: "Sync failed")
-                }
-            } finally {
-                datesToProcess.forEach { date ->
-                    Timber.tag(TAG).d("[STAGE-6 DB-WRITE] enqueuing DailySummaryWorker for date=%s stepsMode=%s",
-                        date, manifest.stepsMode)
-                    enqueueSummaryWorker(date, workManager, manifest.stepsMode)
-                }
-                metricStatsBackfillCoordinator.enqueueSpanRecompute(datesToProcess)
-                postStreamDisconnecting = false
             }
         }
     }

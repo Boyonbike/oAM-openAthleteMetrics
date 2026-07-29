@@ -333,6 +333,7 @@ fun DevicesScreen(
                     BleBanner(
                         state = connectionState,
                         onScanCancelled = viewModel::onScanCancelled,
+                        onCancelSync = viewModel::onCancelSync,
                         onSyncAcknowledged = viewModel::onSyncAcknowledged,
                         onAddDeviceTapped = viewModel::onAddDeviceTapped,
                         onDisconnectDismissed = viewModel::onDisconnectDismissed,
@@ -866,6 +867,7 @@ private fun SyncInterruptedBanner(onDismiss: () -> Unit) {
 private fun BleBanner(
     state: BleConnectionState,
     onScanCancelled: () -> Unit,
+    onCancelSync: () -> Unit,
     onSyncAcknowledged: () -> Unit,
     onAddDeviceTapped: () -> Unit,
     onDisconnectDismissed: () -> Unit,
@@ -898,20 +900,45 @@ private fun BleBanner(
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
                 is BleConnectionState.Connecting -> {
-                    Text("Connecting...", style = TypographyTitle)
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Connecting...", style = TypographyTitle, modifier = Modifier.weight(1f))
+                        Text(
+                            "Cancel",
+                            style = TypographyTitle,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable(onClick = onCancelSync),
+                        )
+                    }
                     Spacer(Modifier.height(space4))
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
                 is BleConnectionState.Syncing -> {
-                    Text(
-                        if (state.packetsReceived > 0) "Syncing... ${state.packetsReceived} packets" else "Syncing...",
-                        style = TypographyTitle,
-                    )
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (state.packetsReceived > 0) "Syncing... ${state.packetsReceived} packets" else "Syncing...",
+                            style = TypographyTitle,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            "Cancel",
+                            style = TypographyTitle,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable(onClick = onCancelSync),
+                        )
+                    }
                     Spacer(Modifier.height(space4))
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
                 is BleConnectionState.Parsing -> {
-                    Text("Parsing...", style = TypographyTitle)
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Parsing...", style = TypographyTitle, modifier = Modifier.weight(1f))
+                        Text(
+                            "Cancel",
+                            style = TypographyTitle,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable(onClick = onCancelSync),
+                        )
+                    }
                     Spacer(Modifier.height(space4))
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }

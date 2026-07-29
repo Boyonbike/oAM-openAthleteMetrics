@@ -151,7 +151,11 @@ class MultiDeviceSyncOrchestrator @Inject constructor(
         is BleConnectionState.Connected -> state.isQuiescent
         is BleConnectionState.Error,
         is BleConnectionState.GattCacheError,
-        is BleConnectionState.Disconnected -> true
+        is BleConnectionState.Disconnected,
+        // A cancelled sync/parse during an EOS driver's Parsing phase lands the engine
+        // directly on Idle (GATT already closed) — must be terminal or the orchestrator
+        // waits out the full DEVICE_SYNC_TIMEOUT_MS backstop before moving to the next device.
+        is BleConnectionState.Idle -> true
         else -> false
     }
 

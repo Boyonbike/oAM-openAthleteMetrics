@@ -9,4 +9,6 @@ enum class SyncStatus {
      *  (totalRejected > 0 && totalAccepted > 0). endedAt is always set. */
     PARTIAL,
     FAILED,
+    /** Sync/parse was aborted by the user's Cancel action. endedAt is always set. */
+    CANCELLED,
 }

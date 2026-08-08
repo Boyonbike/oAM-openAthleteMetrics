@@ -83,7 +83,12 @@ class SettingsViewModel @Inject constructor(
             _uiState.update { it.copy(isBusy = true) }
             try {
                 // Flush WAL so all committed data is in the main db file before copying.
-                appDatabase.openHelper.writableDatabase.execSQL("PRAGMA wal_checkpoint(TRUNCATE)")
+                // Must use query(), not execSQL(): wal_checkpoint returns a result row
+                // (busy/log/checkpointed counts), and execSQL throws on statements that
+                // return data.
+                appDatabase.openHelper.writableDatabase
+                    .query("PRAGMA wal_checkpoint(TRUNCATE)")
+                    .use { it.moveToFirst() }
                 val dbFile = context.getDatabasePath(AppDatabase.DATABASE_NAME)
                 context.contentResolver.openOutputStream(destinationUri)?.use { out ->
                     dbFile.inputStream().use { input -> input.copyTo(out) }

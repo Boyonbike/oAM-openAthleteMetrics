@@ -1579,6 +1579,12 @@ class BleEngine @Inject constructor(
         // 3–6. Parse on IO, route readings, enqueue workers, transition state.
         activeSyncJob = scope.launch(Dispatchers.IO) {
             try {
+                // Resolve the physical device (numeric devices.id) before routing any readings —
+                // routeReading() stamps every reading with activeDeviceId, and the (device_id,
+                // recorded_at) unique index used for sync-to-sync dedup treats a NULL device_id
+                // as distinct from every other value, so leaving this unset causes every reading
+                // to be re-inserted as a "new" row on each EOS-driver sync. Mirrors triggerSync().
+                activeDeviceId = deviceRepository.getDeviceByAddress(address)?.id
                 val result = driverRegistry.parseSession(manifest, frames)
                 val batteryReadings = mutableListOf<MetricReading>()
 

@@ -67,6 +67,17 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *       CompanionDeviceManager association was granted for this device at pairing time, so
  *       BackgroundSyncWorker/SyncCompanionDeviceService know which devices can be woken via
  *       CDM presence observation vs. rely solely on the periodic Worker.
+ *  26 — data-only cleanup on the 10 typed reading tables (hr, hrv, spo2, respiration,
+ *       skin_temp, steps, blood_pressure, glucose, active_cal, total_cal): collapses
+ *       duplicate device_id IS NULL rows sharing the same recorded_at (keeping the
+ *       highest id, i.e. last-write-wins, matching REPLACE semantics), drops any
+ *       remaining NULL row that duplicates an already-attributed row, then backfills
+ *       device_id on the rest using the same single-device-per-driver_id heuristic as
+ *       v22. Fixes historical duplicate rows left behind by a bug where the EOS device
+ *       sync path never set device_id before insert, so the (device_id, recorded_at)
+ *       unique index (added in v22/v23) never matched across syncs and REPLACE never
+ *       fired. No schema/index change — dedup-then-backfill only, so the constraint
+ *       introduced in v23 can't be violated by newly-attributed rows.
  */
 @Database(
     entities = [
@@ -96,7 +107,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BaselineWindowConfigEntity::class,
         MetricDailyStatsEntity::class,
     ],
-    version = 25,
+    version = 26,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -1344,6 +1355,300 @@ abstract class AppDatabase : RoomDatabase() {
                 // or the app requests one retroactively; this is a "not yet associated" default,
                 // not a claim that association was ever attempted.
                 db.execSQL("ALTER TABLE `devices` ADD COLUMN `cdm_associated` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_25_26 = object : Migration(25, 26) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // --- Historical duplicate cleanup for the 10 typed reading tables. ---
+                // A now-fixed bug (EOS device sync path never set device_id before insert)
+                // left behind duplicate device_id IS NULL rows for the same recorded_at,
+                // because the (device_id, recorded_at) UNIQUE index added in v22/v23 never
+                // matches two NULLs, so OnConflictStrategy.REPLACE never fired.
+                //
+                // Per table, in order:
+                //   1) Collapse duplicate NULL-device_id rows sharing a recorded_at, keeping
+                //      the highest id (last insert wins, matching REPLACE semantics).
+                //   2) Delete any remaining NULL-device_id row that duplicates a row already
+                //      correctly attributed to the single device its driver_id resolves to
+                //      (e.g. written via triggerSync(), which always set device_id).
+                //   3) Backfill device_id on the rows still NULL, using the same
+                //      single-device-per-driver_id heuristic as v22. Ambiguous (driver_id
+                //      shared by 2+ devices) or driver_id-less rows are deliberately left
+                //      NULL, same as v22's policy.
+                // Step 1 and 2 must run before step 3: introducing new non-NULL device_id
+                // values into a live UNIQUE index without dedup-ing first can collide with
+                // an existing row and abort the whole migration.
+
+                db.execSQL(
+                    "DELETE FROM `hr_readings` WHERE device_id IS NULL AND id NOT IN " +
+                        "(SELECT MAX(id) FROM `hr_readings` WHERE device_id IS NULL GROUP BY recorded_at)"
+                )
+                db.execSQL(
+                    """
+                    DELETE FROM `hr_readings`
+                    WHERE device_id IS NULL
+                      AND driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `hr_readings`.driver_id) = 1
+                      AND EXISTS (
+                        SELECT 1 FROM `hr_readings` t2
+                        WHERE t2.device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `hr_readings`.driver_id)
+                          AND t2.recorded_at = `hr_readings`.recorded_at
+                      )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `hr_readings`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `hr_readings`.driver_id)
+                    WHERE driver_id IS NOT NULL
+                      AND device_id IS NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `hr_readings`.driver_id) = 1
+                    """.trimIndent()
+                )
+
+                db.execSQL(
+                    "DELETE FROM `hrv_readings` WHERE device_id IS NULL AND id NOT IN " +
+                        "(SELECT MAX(id) FROM `hrv_readings` WHERE device_id IS NULL GROUP BY recorded_at)"
+                )
+                db.execSQL(
+                    """
+                    DELETE FROM `hrv_readings`
+                    WHERE device_id IS NULL
+                      AND driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `hrv_readings`.driver_id) = 1
+                      AND EXISTS (
+                        SELECT 1 FROM `hrv_readings` t2
+                        WHERE t2.device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `hrv_readings`.driver_id)
+                          AND t2.recorded_at = `hrv_readings`.recorded_at
+                      )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `hrv_readings`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `hrv_readings`.driver_id)
+                    WHERE driver_id IS NOT NULL
+                      AND device_id IS NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `hrv_readings`.driver_id) = 1
+                    """.trimIndent()
+                )
+
+                db.execSQL(
+                    "DELETE FROM `spo2_readings` WHERE device_id IS NULL AND id NOT IN " +
+                        "(SELECT MAX(id) FROM `spo2_readings` WHERE device_id IS NULL GROUP BY recorded_at)"
+                )
+                db.execSQL(
+                    """
+                    DELETE FROM `spo2_readings`
+                    WHERE device_id IS NULL
+                      AND driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `spo2_readings`.driver_id) = 1
+                      AND EXISTS (
+                        SELECT 1 FROM `spo2_readings` t2
+                        WHERE t2.device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `spo2_readings`.driver_id)
+                          AND t2.recorded_at = `spo2_readings`.recorded_at
+                      )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `spo2_readings`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `spo2_readings`.driver_id)
+                    WHERE driver_id IS NOT NULL
+                      AND device_id IS NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `spo2_readings`.driver_id) = 1
+                    """.trimIndent()
+                )
+
+                db.execSQL(
+                    "DELETE FROM `respiration_readings` WHERE device_id IS NULL AND id NOT IN " +
+                        "(SELECT MAX(id) FROM `respiration_readings` WHERE device_id IS NULL GROUP BY recorded_at)"
+                )
+                db.execSQL(
+                    """
+                    DELETE FROM `respiration_readings`
+                    WHERE device_id IS NULL
+                      AND driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `respiration_readings`.driver_id) = 1
+                      AND EXISTS (
+                        SELECT 1 FROM `respiration_readings` t2
+                        WHERE t2.device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `respiration_readings`.driver_id)
+                          AND t2.recorded_at = `respiration_readings`.recorded_at
+                      )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `respiration_readings`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `respiration_readings`.driver_id)
+                    WHERE driver_id IS NOT NULL
+                      AND device_id IS NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `respiration_readings`.driver_id) = 1
+                    """.trimIndent()
+                )
+
+                db.execSQL(
+                    "DELETE FROM `skin_temp_readings` WHERE device_id IS NULL AND id NOT IN " +
+                        "(SELECT MAX(id) FROM `skin_temp_readings` WHERE device_id IS NULL GROUP BY recorded_at)"
+                )
+                db.execSQL(
+                    """
+                    DELETE FROM `skin_temp_readings`
+                    WHERE device_id IS NULL
+                      AND driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `skin_temp_readings`.driver_id) = 1
+                      AND EXISTS (
+                        SELECT 1 FROM `skin_temp_readings` t2
+                        WHERE t2.device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `skin_temp_readings`.driver_id)
+                          AND t2.recorded_at = `skin_temp_readings`.recorded_at
+                      )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `skin_temp_readings`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `skin_temp_readings`.driver_id)
+                    WHERE driver_id IS NOT NULL
+                      AND device_id IS NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `skin_temp_readings`.driver_id) = 1
+                    """.trimIndent()
+                )
+
+                db.execSQL(
+                    "DELETE FROM `steps_readings` WHERE device_id IS NULL AND id NOT IN " +
+                        "(SELECT MAX(id) FROM `steps_readings` WHERE device_id IS NULL GROUP BY recorded_at)"
+                )
+                db.execSQL(
+                    """
+                    DELETE FROM `steps_readings`
+                    WHERE device_id IS NULL
+                      AND driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `steps_readings`.driver_id) = 1
+                      AND EXISTS (
+                        SELECT 1 FROM `steps_readings` t2
+                        WHERE t2.device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `steps_readings`.driver_id)
+                          AND t2.recorded_at = `steps_readings`.recorded_at
+                      )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `steps_readings`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `steps_readings`.driver_id)
+                    WHERE driver_id IS NOT NULL
+                      AND device_id IS NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `steps_readings`.driver_id) = 1
+                    """.trimIndent()
+                )
+
+                db.execSQL(
+                    "DELETE FROM `blood_pressure_readings` WHERE device_id IS NULL AND id NOT IN " +
+                        "(SELECT MAX(id) FROM `blood_pressure_readings` WHERE device_id IS NULL GROUP BY recorded_at)"
+                )
+                db.execSQL(
+                    """
+                    DELETE FROM `blood_pressure_readings`
+                    WHERE device_id IS NULL
+                      AND driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `blood_pressure_readings`.driver_id) = 1
+                      AND EXISTS (
+                        SELECT 1 FROM `blood_pressure_readings` t2
+                        WHERE t2.device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `blood_pressure_readings`.driver_id)
+                          AND t2.recorded_at = `blood_pressure_readings`.recorded_at
+                      )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `blood_pressure_readings`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `blood_pressure_readings`.driver_id)
+                    WHERE driver_id IS NOT NULL
+                      AND device_id IS NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `blood_pressure_readings`.driver_id) = 1
+                    """.trimIndent()
+                )
+
+                db.execSQL(
+                    "DELETE FROM `glucose_readings` WHERE device_id IS NULL AND id NOT IN " +
+                        "(SELECT MAX(id) FROM `glucose_readings` WHERE device_id IS NULL GROUP BY recorded_at)"
+                )
+                db.execSQL(
+                    """
+                    DELETE FROM `glucose_readings`
+                    WHERE device_id IS NULL
+                      AND driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `glucose_readings`.driver_id) = 1
+                      AND EXISTS (
+                        SELECT 1 FROM `glucose_readings` t2
+                        WHERE t2.device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `glucose_readings`.driver_id)
+                          AND t2.recorded_at = `glucose_readings`.recorded_at
+                      )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `glucose_readings`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `glucose_readings`.driver_id)
+                    WHERE driver_id IS NOT NULL
+                      AND device_id IS NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `glucose_readings`.driver_id) = 1
+                    """.trimIndent()
+                )
+
+                db.execSQL(
+                    "DELETE FROM `active_calorie_readings` WHERE device_id IS NULL AND id NOT IN " +
+                        "(SELECT MAX(id) FROM `active_calorie_readings` WHERE device_id IS NULL GROUP BY recorded_at)"
+                )
+                db.execSQL(
+                    """
+                    DELETE FROM `active_calorie_readings`
+                    WHERE device_id IS NULL
+                      AND driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `active_calorie_readings`.driver_id) = 1
+                      AND EXISTS (
+                        SELECT 1 FROM `active_calorie_readings` t2
+                        WHERE t2.device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `active_calorie_readings`.driver_id)
+                          AND t2.recorded_at = `active_calorie_readings`.recorded_at
+                      )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `active_calorie_readings`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `active_calorie_readings`.driver_id)
+                    WHERE driver_id IS NOT NULL
+                      AND device_id IS NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `active_calorie_readings`.driver_id) = 1
+                    """.trimIndent()
+                )
+
+                db.execSQL(
+                    "DELETE FROM `total_calorie_readings` WHERE device_id IS NULL AND id NOT IN " +
+                        "(SELECT MAX(id) FROM `total_calorie_readings` WHERE device_id IS NULL GROUP BY recorded_at)"
+                )
+                db.execSQL(
+                    """
+                    DELETE FROM `total_calorie_readings`
+                    WHERE device_id IS NULL
+                      AND driver_id IS NOT NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `total_calorie_readings`.driver_id) = 1
+                      AND EXISTS (
+                        SELECT 1 FROM `total_calorie_readings` t2
+                        WHERE t2.device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `total_calorie_readings`.driver_id)
+                          AND t2.recorded_at = `total_calorie_readings`.recorded_at
+                      )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `total_calorie_readings`
+                    SET device_id = (SELECT d.id FROM devices d WHERE d.driver_id = `total_calorie_readings`.driver_id)
+                    WHERE driver_id IS NOT NULL
+                      AND device_id IS NULL
+                      AND (SELECT COUNT(*) FROM devices d2 WHERE d2.driver_id = `total_calorie_readings`.driver_id) = 1
+                    """.trimIndent()
+                )
             }
         }
     }
